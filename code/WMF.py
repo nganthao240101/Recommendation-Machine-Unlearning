@@ -85,7 +85,7 @@ def get_lables(temp_set,k=0.9999):
 
     max_item = item_lenth[int(len(item_lenth) * k)-1]
 
-    print max_item
+    print(max_item)
     for i in temp_set:
         if len(temp_set[i]) > max_item:
             temp_set[i] = temp_set[i][0:max_item]
@@ -207,9 +207,9 @@ if __name__ == '__main__':
 
     uidW, iidW = sess.run([model.uidW, model.iidW])
 
-    with open(args.data_path + args.dataset + '/user_pretrain.pk', 'w') as f:
+    with open(args.data_path + args.dataset + '/user_pretrain.pk', 'wb') as f:
         pickle.dump(uidW, f)
-    with open(args.data_path + args.dataset + '/item_pretrain.pk', 'w') as f:
+    with open(args.data_path + args.dataset + '/item_pretrain.pk', 'wb') as f:
         pickle.dump(iidW, f)
 
 
