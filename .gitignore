@@ -35,23 +35,23 @@ data/*/test.txt
 data/*/*.pk
 
 # Test and experiment scripts (not part of core code)
-code/visualize_*.py
-code/viz_*.py
-code/fix_indent*.py
-code/chart_*.py
-code/compare_*.py
-code/analyze_*.py
-code/run_*.py
-code/unlearn_*.py
-code/quick_test*.py
-code/test_load.py
-code/rq2_*.py
-code/partition_*.py
-code/rec_unlearn_*.py
-code/final_*.py
-code/rq2_*.py
-code/rq3_*.py
-code/scale_*.py
-code/interaction_*.py
-code/unlearning_*.py
-code/rec_unlearn_*.py
+# code/visualize_*.py
+# code/viz_*.py
+# code/fix_indent*.py
+# code/chart_*.py
+# code/compare_*.py
+# code/analyze_*.py
+# code/run_*.py
+# code/unlearn_*.py
+# code/quick_test*.py
+# code/test_load.py
+# code/rq2_*.py
+# code/partition_*.py
+# code/rec_unlearn_*.py
+# code/final_*.py
+# code/rq2_*.py
+# code/rq3_*.py
+# code/scale_*.py
+# code/interaction_*.py
+# code/unlearning_*.py
+# code/rec_unlearn_*.py
