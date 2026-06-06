@@ -84,11 +84,11 @@ class Data(object):
 
         if self.part_type != 0:
             try:
-                with open(self.path + '/C_type-' +str(part_type)+'_num-'+ str(part_num)+'.pk', 'r') as f:
+                with open(self.path + '/C_type-' +str(part_type)+'_num-'+ str(part_num)+'.pk', 'rb') as f:
                     self.C = pickle.load(f)
-                with open(self.path + '/C_U_type-' +str(part_type)+'_num-'+ str(part_num)+'.pk', 'r') as f:
+                with open(self.path + '/C_U_type-' +str(part_type)+'_num-'+ str(part_num)+'.pk', 'rb') as f:
                     self.C_U = pickle.load(f)
-                with open(self.path + '/C_I_type-' +str(part_type)+'_num-'+ str(part_num)+'.pk', 'r') as f:
+                with open(self.path + '/C_I_type-' +str(part_type)+'_num-'+ str(part_num)+'.pk', 'rb') as f:
                     self.C_I = pickle.load(f)
             except Exception:
                 if part_type==1:
@@ -97,12 +97,14 @@ class Data(object):
                     self.C, self.C_U,self.C_I = data_partition_2(self.train_items,part_num,part_T)
                 if part_type==3:
                     self.C, self.C_U,self.C_I = data_partition_3(self.train_items,part_num)
+                if part_type==4:
+                    self.C, self.C_U,self.C_I = data_partition_4(self.train_items,part_num,part_T)
 
-                with open(self.path + '/C_type-' +str(part_type)+'_num-'+ str(part_num)+'.pk', 'w') as f:
+                with open(self.path + '/C_type-' +str(part_type)+'_num-'+ str(part_num)+'.pk', 'wb') as f:
                     pickle.dump(self.C,f)
-                with open(self.path + '/C_U_type-' +str(part_type)+'_num-'+ str(part_num)+'.pk', 'w') as f:
+                with open(self.path + '/C_U_type-' +str(part_type)+'_num-'+ str(part_num)+'.pk', 'wb') as f:
                     pickle.dump(self.C_U,f)
-                with open(self.path + '/C_I_type-' +str(part_type)+'_num-'+ str(part_num)+'.pk', 'w')as f:
+                with open(self.path + '/C_I_type-' +str(part_type)+'_num-'+ str(part_num)+'.pk', 'wb')as f:
                     pickle.dump(self.C_I, f)
 
             self.n_C=[]
@@ -355,7 +357,7 @@ class Data(object):
         print('n_train=%d, n_test=%d, sparsity=%.5f' % (self.n_train, self.n_test, (self.n_train + self.n_test)/(self.n_users * self.n_items)))
         if self.part_type != 0:
             print('training nums of each local data:')
-            print self.n_C
+            print(self.n_C)
 
 
     def get_sparsity_split(self):

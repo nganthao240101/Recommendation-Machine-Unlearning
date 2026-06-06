@@ -18,7 +18,7 @@ class RecEraser_BPR(object):
         self.lr = args.lr
 
         self.emb_dim = args.embed_size
-        self.attention_size = args.embed_size/2
+        self.attention_size = int(args.embed_size / 2)
         self.batch_size = args.batch_size
 
         self.weight_size = eval(args.layer_size)
@@ -52,7 +52,10 @@ class RecEraser_BPR(object):
             self.batch_ratings_local.append(line[4])
             
 
-        line = self.train_agg_model()
+        if args.agg_type == 'mean':
+            line = self.train_agg_model_mean()
+        else:
+            line = self.train_agg_model()
         self.opt_agg = line[0]
         self.loss_agg = line[1]
         self.mf_loss_agg = line[2]
@@ -60,6 +63,7 @@ class RecEraser_BPR(object):
         self.attention_loss = line[4]
         self.batch_ratings = line[5]
         self.u_w = line[6]
+        self.use_attention = (args.agg_type == 'attention')
 
     def _init_weights(self):
         all_weights = dict()
@@ -98,9 +102,13 @@ class RecEraser_BPR(object):
         regularizer = tf.nn.l2_loss(users) + tf.nn.l2_loss(pos_items) + tf.nn.l2_loss(neg_items)
         regularizer = regularizer/self.batch_size
 
-        maxi = tf.log(tf.nn.sigmoid(pos_scores - neg_scores))
+        # Clip difference to prevent numerical instability
+        diff = pos_scores - neg_scores
+        diff = tf.clip_by_value(diff, -50.0, 50.0)
 
-        mf_loss = tf.negative(tf.reduce_mean(maxi))
+        # Use softplus for numerical stability
+        mf_loss = tf.reduce_mean(tf.nn.softplus(-diff))
+
         reg_loss = self.decay * regularizer
         return mf_loss, reg_loss
 
@@ -132,14 +140,19 @@ class RecEraser_BPR(object):
                     tf.einsum('abc,ck->abk', embs, self.weights['WA']) + self.weights['BA']),
                           self.weights['HA']))
 
-            embs_w = tf.div(embs_w, tf.reduce_sum(embs_w, 1, keep_dims=True))
+            # Add epsilon to prevent division by zero
+            embs_w = tf.div(embs_w + 1e-8, tf.reduce_sum(embs_w, 1, keep_dims=True) + 1e-8)
         else:
             embs_w = tf.exp(
                 tf.einsum('abc,ck->abk', tf.nn.relu(
                     tf.einsum('abc,ck->abk', embs, self.weights['WB']) + self.weights['BB']),
                           self.weights['HB']))
 
-            embs_w = tf.div(embs_w, tf.reduce_sum(embs_w, 1, keep_dims=True))
+            # Add epsilon to prevent division by zero
+            embs_w = tf.div(embs_w + 1e-8, tf.reduce_sum(embs_w, 1, keep_dims=True) + 1e-8)
+
+        # Clip attention weights to prevent explosion
+        embs_w = tf.clip_by_value(embs_w, 1e-8, 1.0)
 
         agg_emb = tf.reduce_sum(tf.multiply(embs_w, embs), 1)
 
@@ -154,7 +167,11 @@ class RecEraser_BPR(object):
                 tf.einsum('abc,ck->abk', embs, self.weights['WA']) + self.weights['BA']),
                       self.weights['HA']))
 
-        embs_w = tf.div(embs_w, tf.reduce_sum(embs_w, 1, keep_dims=True))
+        # Add epsilon to prevent division by zero
+        embs_w = tf.div(embs_w + 1e-8, tf.reduce_sum(embs_w, 1, keep_dims=True) + 1e-8)
+
+        # Clip attention weights to prevent explosion
+        embs_w = tf.clip_by_value(embs_w, 1e-8, 1.0)
 
         agg_emb = tf.reduce_sum(tf.multiply(embs_w, embs), 1)
 
@@ -210,24 +227,59 @@ class RecEraser_BPR(object):
 
 
 
-        mf_loss, reg_loss = self.create_bpr_loss(u_e_drop, pos_i_e, neg_i_e)
+        mf_loss, _ = self.create_bpr_loss(u_e_drop, pos_i_e, neg_i_e)
 
-        l2_loss = self.regs[0]*(tf.nn.l2_loss(self.weights['WA']) + tf.nn.l2_loss(self.weights['BA']) + tf.nn.l2_loss(
+        # Stronger regularization for attention weights
+        attn_reg = 1e-3*(tf.nn.l2_loss(self.weights['WA']) + tf.nn.l2_loss(self.weights['BA']) + tf.nn.l2_loss(
             self.weights['HA']) + tf.nn.l2_loss(self.weights['WB']) + tf.nn.l2_loss(self.weights['BB']) + tf.nn.l2_loss(
             self.weights['HB']))
 
-        reg_loss = 1e-5*(tf.nn.l2_loss(self.weights['trans_W']) + tf.nn.l2_loss(self.weights['trans_B'])) 
+        trans_reg = 1e-4*(tf.nn.l2_loss(self.weights['trans_W']) + tf.nn.l2_loss(self.weights['trans_B']))
+
+        reg_loss = attn_reg + trans_reg
 
         batch_ratings = tf.matmul(u_e, pos_i_e, transpose_a=False, transpose_b=True)
 
-        loss = mf_loss + reg_loss # + l2_loss'''
+        loss = mf_loss + reg_loss
 
 
 
 
         opt = tf.train.AdagradOptimizer(learning_rate=self.lr, initial_accumulator_value=1e-8).minimize(loss)
 
-        return opt, loss, mf_loss, reg_loss, l2_loss, batch_ratings,u_w
+        return opt, loss, mf_loss, reg_loss, attn_reg, batch_ratings,u_w
+
+    def train_agg_model_mean(self):
+        # Mean aggregation: simple average of local embeddings
+        u_es = tf.stop_gradient(tf.nn.embedding_lookup(self.weights['user_embedding'], self.users))
+        pos_i_es = tf.stop_gradient(tf.nn.embedding_lookup(self.weights['item_embedding'], self.pos_items))
+        neg_i_es = tf.stop_gradient(tf.nn.embedding_lookup(self.weights['item_embedding'], self.neg_items))
+
+        # Apply transformation
+        u_es = tf.einsum('abc,bcd->abd', u_es, self.weights['trans_W']) + self.weights['trans_B']
+        pos_i_es = tf.einsum('abc,bcd->abd', pos_i_es, self.weights['trans_W']) + self.weights['trans_B']
+        neg_i_es = tf.einsum('abc,bcd->abd', neg_i_es, self.weights['trans_W']) + self.weights['trans_B']
+
+        # Mean aggregation across partitions
+        u_e = tf.reduce_mean(u_es, axis=1)
+        pos_i_e = tf.reduce_mean(pos_i_es, axis=1)
+        neg_i_e = tf.reduce_mean(neg_i_es, axis=1)
+
+        u_e_drop = tf.nn.dropout(u_e, self.dropout_keep_prob)
+
+        mf_loss, reg_loss = self.create_bpr_loss(u_e_drop, pos_i_e, neg_i_e)
+
+        # Only transformer regularization (no attention weights)
+        trans_reg = 1e-4 * (tf.nn.l2_loss(self.weights['trans_W']) + tf.nn.l2_loss(self.weights['trans_B']))
+
+        reg_loss = trans_reg
+        batch_ratings = tf.matmul(u_e, pos_i_e, transpose_a=False, transpose_b=True)
+        loss = mf_loss + reg_loss
+
+        opt = tf.train.AdagradOptimizer(learning_rate=self.lr, initial_accumulator_value=1e-8).minimize(loss)
+
+        # Return dummy attention loss and u_w for compatibility
+        return opt, loss, mf_loss, reg_loss, tf.constant(0.0), batch_ratings, tf.zeros([1, 1, 1])
 
 
 
@@ -264,7 +316,7 @@ if __name__ == '__main__':
                                                          '-'.join([str(r) for r in eval(args.regs)]))
 
         ckpt = tf.train.get_checkpoint_state(os.path.dirname(pretrain_path + '/checkpoint'))
-        print ckpt
+        print(ckpt)
         if ckpt and ckpt.model_checkpoint_path:
             sess.run(tf.global_variables_initializer())
             saver.restore(sess, ckpt.model_checkpoint_path)
@@ -348,7 +400,9 @@ if __name__ == '__main__':
             attention_loss += batch_attention_loss
             # print(time() - btime)
 
-        print u_w[0]
+        # Only print u_w if it's valid (not NaN)
+        if not np.any(np.isnan(u_w)):
+            print(u_w[0])
 
         if np.isnan(loss) == True:
             print('ERROR: loss is nan.')

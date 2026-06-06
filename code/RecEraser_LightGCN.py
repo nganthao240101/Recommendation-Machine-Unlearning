@@ -18,7 +18,7 @@ class RecEraser_LightGCN(object):
         self.lr = args.lr
         self.emb_dim = args.embed_size
 
-        self.attention_size = args.embed_size / 2
+        self.attention_size = int(args.embed_size / 2)
 
         self.batch_size = args.batch_size
         self.weight_size = eval(args.layer_size)
@@ -48,7 +48,7 @@ class RecEraser_LightGCN(object):
         self.batch_ratings_local = []
 
         for i in range(self.num_local):
-            print i
+            print(i)
             line = self.train_single_model(i)
             self.opt_local.append(line[0])
             self.loss_local.append(line[1])
@@ -360,7 +360,7 @@ if __name__ == '__main__':
             '-'.join([str(r) for r in eval(args.regs)]))
 
         ckpt = tf.train.get_checkpoint_state(os.path.dirname(pretrain_path + '/checkpoint'))
-        print ckpt
+        print(ckpt)
         if ckpt and ckpt.model_checkpoint_path:
             sess.run(tf.global_variables_initializer())
             saver.restore(sess, ckpt.model_checkpoint_path)
@@ -441,7 +441,7 @@ if __name__ == '__main__':
 
             # print(time() - btime)
 
-        print u_w[0]
+        print(u_w[0])
 
         if np.isnan(loss) == True:
             print('ERROR: loss is nan.')

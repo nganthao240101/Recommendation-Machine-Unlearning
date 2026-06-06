@@ -1,0 +1,34 @@
+# Core dependencies for RecEraser (Recommendation Unlearning)
+# Tested with Python 3.7
+
+# Deep learning framework
+tensorflow==1.15.0
+
+# Numerical computation
+numpy==1.16.6
+scipy==1.2.1
+
+# Sparse matrix operations
+scikit-learn==0.20.4
+
+# Data processing
+pandas==1.0.5
+
+# Visualization
+matplotlib==3.0.3
+
+# Cython for C++ evaluator
+cython==0.29.14
+
+# Progress bar
+tqdm==4.31.1
+
+# Pickle utilities
+# (built-in in Python)
+
+# Testing
+pytest==4.6.3
+
+# Jupyter notebook support
+jupyter==1.0.0
+ipython==7.13.0

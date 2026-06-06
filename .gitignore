@@ -1,0 +1,57 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+*.egg
+*.egg-info/
+dist/
+build/
+.pytest_cache/
+.ipynb_checkpoints/
+
+# Conda
+.conda/
+conda-meta/
+
+# IDEs
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Project specific
+weights/
+*.log
+*.tmp
+
+# Large data files (regenerate using WMF.py)
+data/*/train.txt
+data/*/test.txt
+data/*/*.pk
+
+# Test and experiment scripts (not part of core code)
+code/visualize_*.py
+code/viz_*.py
+code/fix_indent*.py
+code/chart_*.py
+code/compare_*.py
+code/analyze_*.py
+code/run_*.py
+code/unlearn_*.py
+code/quick_test*.py
+code/test_load.py
+code/rq2_*.py
+code/partition_*.py
+code/rec_unlearn_*.py
+code/final_*.py
+code/rq2_*.py
+code/rq3_*.py
+code/scale_*.py
+code/interaction_*.py
+code/unlearning_*.py
+code/rec_unlearn_*.py

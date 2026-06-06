@@ -76,14 +76,23 @@ def parse_args():
     parser.add_argument('--dropout', type=float, default=0.7, #WMF
                         help='dropout keep_prob')
 
-    parser.add_argument('--part_type', type=int, default=1,
-                        help='0: whole data, 1: interaction_based, 2: user_based, 3: random')
+    parser.add_argument('--part_type', type=int, default=0,
+                        help='0: whole data, 1: interaction_based, 2: user_based, 3: random, 4: item_based')
 
     parser.add_argument('--part_num', type=int, default=10,
                         help='partition number')
 
     parser.add_argument('--part_T', type=int, default=50,
                         help='iteration for partition')
+
+    parser.add_argument('--agg_type', type=str, default='attention',
+                        help='Aggregation method: mean or attention')
+
+    parser.add_argument('--unlearn_ratio', type=float, default=0.1,
+                        help='Ratio of data to unlearn (0.1, 0.2, 0.5)')
+
+    parser.add_argument('--unlearn_type', type=str, default='interaction',
+                        help='Type of unlearning: interaction or user')
 
 
     return parser.parse_args()

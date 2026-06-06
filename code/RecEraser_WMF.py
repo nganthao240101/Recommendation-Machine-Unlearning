@@ -12,7 +12,7 @@ class RecEraser_WMF(object):
         self.n_users = user_num
         self.n_items = item_num
         self.emb_dim = args.embed_size
-        self.attention_size = args.embed_size / 2
+        self.attention_size = int(args.embed_size / 2)
         self.weight1 = args.negative_weight
         self.lambda_bilinear = [0, 0]
         self.lr = args.lr
@@ -217,7 +217,7 @@ if __name__ == '__main__':
             '-'.join([str(r) for r in eval(args.regs)]))
 
         ckpt = tf.train.get_checkpoint_state(os.path.dirname(pretrain_path + '/checkpoint'))
-        print ckpt
+        print(ckpt)
         if ckpt and ckpt.model_checkpoint_path:
             sess.run(tf.global_variables_initializer())
             saver.restore(sess, ckpt.model_checkpoint_path)
@@ -310,7 +310,7 @@ if __name__ == '__main__':
                            })
             loss += batch_loss / n_batch
 
-        print u_w[0]
+        print(u_w[0])
         if (epoch + 1) % 1 != 0:
             if args.verbose > 0 and epoch % args.verbose == 0:
                 perf_str = 'Epoch %d [%.1fs]: train==[%.5f=%.5f ]' % (epoch, time() - t1, loss, mf_loss)

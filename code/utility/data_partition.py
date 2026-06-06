@@ -17,9 +17,9 @@ def E_score2(a,b):
 # Interaction-based Balanced Partition
 def data_partition_1(train_items,k,T):
 
-    with open(args.data_path + args.dataset + '/user_pretrain.pk', 'r') as f:
+    with open(args.data_path + args.dataset + '/user_pretrain.pk', 'rb') as f:
         uidW = pickle.load(f)
-    with open(args.data_path + args.dataset + '/item_pretrain.pk', 'r') as f:
+    with open(args.data_path + args.dataset + '/item_pretrain.pk', 'rb') as f:
         iidW = pickle.load(f)
 
     # get_data_interactions_1
@@ -75,7 +75,7 @@ def data_partition_1(train_items,k,T):
             temp_u = []
             temp_i = []
 
-            for j in C[i].keys():
+            for j in list(C[i].keys()):
                 for l in C[i][j]:
                     temp_u.append(uidW[j])
                     temp_i.append(iidW[l])
@@ -92,16 +92,16 @@ def data_partition_1(train_items,k,T):
 
         centroembs = centroembs_next
         for i in range(k):
-            print C_num[i]
+            print(C_num[i])
 
-        print _, loss
+        print(_, loss)
 
     users = [[] for i in range(k)]
     items = [[] for i in range(k)]
 
     for i in range(k):
-        users[i] = C[i].keys()
-        for j in C[i].keys():
+        users[i] = list(C[i].keys())
+        for j in list(C[i].keys()):
             for l in C[i][j]:
                 if l not in items[i]:
                     items[i].append(l)
@@ -114,7 +114,7 @@ def data_partition_1(train_items,k,T):
 def data_partition_2(train_items,k,T):
     data = train_items
 
-    with open(args.data_path + args.dataset + '/user_pretrain.pk', 'r') as f:
+    with open(args.data_path + args.dataset + '/user_pretrain.pk', 'rb') as f:
         uidW = pickle.load(f)
 
     # get_data_interactions_1
@@ -122,7 +122,7 @@ def data_partition_2(train_items,k,T):
     # Randomly select k centroids
     max_data = 1.2 * len(data) / k
     # print data
-    centroids = random.sample(data.keys(), k)
+    centroids = random.sample(list(data.keys()), k)
 
     # centro emb
     # print centroids
@@ -135,7 +135,7 @@ def data_partition_2(train_items,k,T):
     for _ in range(T):
         C = [{} for i in range(k)]
         Scores = {}
-        for i in data.keys():
+        for i in list(data.keys()):
             for j in range(k):
                 score_u = E_score2(uidW[i],centroembs[j])
 
@@ -153,27 +153,27 @@ def data_partition_2(train_items,k,T):
         centroembs_next = []
         for i in range(k):
             temp_u = []
-            for u in C[i].keys():
+            for u in list(C[i].keys()):
                 temp_u.append(uidW[u])
             centroembs_next.append(np.mean(temp_u))
 
         loss = 0.0
 
         for i in range(k):
-            print len(C[i])
+            print(len(C[i]))
 
         for i in range(k):
             score_u = E_score2(centroembs_next[i],centroembs[i])
             loss += score_u
 
         centroembs = centroembs_next
-        print _, loss
+        print(_, loss)
 
     users = [[] for i in range(k)]
     items = [[] for i in range(k)]
     for i in range(k):
-        users[i]=C[i].keys()
-        for j in C[i].keys():
+        users[i]=list(C[i].keys())
+        for j in list(C[i].keys()):
             for l in C[i][j]:
                 if l not in items[i]:
                     items[i].append(l)
@@ -191,9 +191,9 @@ def data_partition_3(train_items,k):
 
     index = list(range(len(data)))
 
-    random.shuffle(index) 
+    random.shuffle(index)
 
-    elem_num =len(data) / k
+    elem_num = int(len(data) / k)
 
     C = [{} for i in range(k)]
 
@@ -213,13 +213,103 @@ def data_partition_3(train_items,k):
     users = [[] for i in range(k)]
     items = [[] for i in range(k)]
     for i in range(k):
-        users[i]=C[i].keys()
-        for j in C[i].keys():
+        users[i]=list(C[i].keys())
+        for j in list(C[i].keys()):
             for l in C[i][j]:
                 if l not in items[i]:
                     items[i].append(l)
 
     return C,users,items
+
+
+# Item-based Balanced Partition
+def data_partition_4(train_items,k,T):
+    # Transpose: group by items instead of users
+    item_to_users = {}
+    for u in train_items:
+        for i in train_items[u]:
+            if i not in item_to_users:
+                item_to_users[i] = []
+            item_to_users[i].append(u)
+
+    with open(args.data_path + args.dataset + '/item_pretrain.pk', 'rb') as f:
+        iidW = pickle.load(f)
+
+    # get_data_interactions (by items)
+    data = list(item_to_users.keys())
+
+    # Randomly select k centroids
+    max_data = 1.2 * len(data) / k
+    centroids = random.sample(data, k)
+
+    # centro emb (item embeddings)
+    centroembs = []
+    for i in range(k):
+        centroembs.append(iidW[centroids[i]])
+
+    for _ in range(T):
+        C = [{} for i in range(k)]
+        Scores = {}
+        for i in data:
+            for j in range(k):
+                score_i = E_score2(iidW[i], centroembs[j])
+                Scores[i, j] = -score_i
+
+        Scores = sorted(Scores.items(), key=lambda x: x[1], reverse=True)
+
+        fl = set()
+        for i in range(len(Scores)):
+            if Scores[i][0][0] not in fl:
+                if len(C[Scores[i][0][1]]) < max_data:
+                    C[Scores[i][0][1]][Scores[i][0][0]] = item_to_users[Scores[i][0][0]]
+                    fl.add(Scores[i][0][0])
+
+        centroembs_next = []
+        for i in range(k):
+            temp_i = []
+            for item in list(C[i].keys()):
+                temp_i.append(iidW[item])
+            if len(temp_i) > 0:
+                centroembs_next.append(np.mean(temp_i))
+            else:
+                centroembs_next.append(centroids[i])
+
+        loss = 0.0
+        for i in range(k):
+            print(len(C[i]))
+
+        for i in range(k):
+            score_i = E_score2(centroembs_next[i], centroembs[i])
+            loss += score_i
+
+        centroembs = centroembs_next
+        print(_, loss)
+
+    # Build users and items lists for each partition
+    # Transpose: C is {item: [users]}, but training code expects {user: [items]}
+    C_t = [{} for i in range(k)]
+    users = [[] for i in range(k)]
+    items = [[] for i in range(k)]
+    for i in range(k):
+        items[i] = list(C[i].keys())
+        for item in list(C[i].keys()):
+            for u in C[i][item]:
+                if u not in C_t[i]:
+                    C_t[i][u] = []
+                if u in train_items:
+                    for it in train_items[u]:
+                        if it in C[i]:
+                            C_t[i][u].append(it)
+                if u not in users[i]:
+                    users[i].append(u)
+        # Ensure every user has at least one item in this partition
+        for u in list(C_t[i].keys()):
+            if len(C_t[i][u]) == 0:
+                # Find a random item from this partition
+                if items[i]:
+                    C_t[i][u] = [items[i][0]]
+
+    return C_t, users, items
 
 
 
