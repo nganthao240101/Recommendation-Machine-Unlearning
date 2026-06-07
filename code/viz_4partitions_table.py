@@ -66,8 +66,76 @@ def train_retrain_bpr(part_num=5, regs='0.01', epoch=30, batch_size=1024,
     from utility.parser import parse_args
     from utility.load_data import Data as _Data
     from utility.batch_test import test
-    from BPRMF import BPRMF
+    # Import BPRMF *before* its _init_weights resolves any tf.* initializer
+    # (so we can patch the class in place).
+    import BPRMF as _BPRMF_mod
     from time import time
+
+    # ------------------------------------------------------------------
+    # Robust BPRMF._init_weights: works on TF 1.x AND TF 2.x.
+    # Tries (in order):
+    #   1) tf.contrib.layers.xavier_initializer  (TF1)
+    #   2) tf.keras.initializers.GlorotUniform    (TF2 / keras path)
+    #   3) raw uniform xavier formula            (fallback, no keras)
+    # ------------------------------------------------------------------
+    def _make_xavier_compat():
+        # 1) TF1 path
+        try:
+            import tensorflow as _t
+            if hasattr(_t, 'contrib') and hasattr(_t.contrib, 'layers'):
+                init = _t.contrib.layers.xavier_initializer()
+                init([4, 4])  # probe
+                return init
+        except Exception:
+            pass
+        # 2) TF2 keras path
+        try:
+            import tensorflow as _t
+            if hasattr(_t.keras.initializers, 'GlorotUniform'):
+                return _t.keras.initializers.GlorotUniform()
+        except Exception:
+            pass
+        # 3) Pure-python fallback
+        import math as _m
+        def _xav(shape=None, dtype=None, **kw):
+            if shape is None:
+                shape = (4, 4)
+            fan_in, fan_out = int(shape[0]), int(shape[1])
+            limit = _m.sqrt(6.0 / (fan_in + fan_out))
+            return _tf_v1.random_uniform(shape, -limit, limit, dtype=_tf_v1.float32)
+        return _xav
+
+    def _patched_init_weights(self):
+        all_weights = dict()
+        initializer = _make_xavier_compat()
+        all_weights['user_embedding'] = _tf_v1.Variable(
+            initializer([self.n_users, self.emb_dim]),
+            name='user_embedding')
+        all_weights['item_embedding'] = _tf_v1.Variable(
+            initializer([self.n_items, self.emb_dim]),
+            name='item_embedding')
+        return all_weights
+
+    _BPRMF_mod.BPRMF._init_weights = _patched_init_weights
+
+    # Also patch _statistics_params for TF2 compatibility:
+    # In TF1, get_shape() returns a tuple of tf.Dimension with .value;
+    # in TF2 it returns a tuple of plain ints.
+    def _patched_statistics_params(self):
+        total_parameters = 0
+        for variable in self.weights.values():
+            shape = variable.shape  # returns TensorShape
+            variable_parameters = 1
+            for dim in shape:
+                # accept int or .value
+                d = dim.value if hasattr(dim, 'value') else int(dim)
+                variable_parameters *= d
+            total_parameters += variable_parameters
+        if self.verbose > 0:
+            print('#params: %d' % total_parameters)
+    _BPRMF_mod.BPRMF._statistics_params = _patched_statistics_params
+
+    BPRMF = _BPRMF_mod.BPRMF
 
     # Monkey-patch: Retrain baseline must use the post-unlearn training set
     # (train_unlearned.txt) so the comparison with RecEraser is fair.
