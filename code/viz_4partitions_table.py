@@ -135,6 +135,23 @@ def train_retrain_bpr(part_num=5, regs='0.01', epoch=30, batch_size=1024,
             print('#params: %d' % total_parameters)
     _BPRMF_mod.BPRMF._statistics_params = _patched_statistics_params
 
+    # If the BPRMF build does not declare a dropout_keep_prob placeholder
+    # (newer local edits), add one as a no-op attribute.  This lets the
+    # feed_dict in train_retrain_bpr run without AttributeError.
+    def _patched_init(self, data_config):
+        # Run the original BPRMF.__init__ first so weights/opt/embeddings
+        # are constructed normally.
+        _BPRMF_mod.BPRMF.__orig_init__(self, data_config)
+        # Add dropout placeholder if absent.
+        if not hasattr(self, 'dropout_keep_prob'):
+            self.dropout_keep_prob = _tf_v1.placeholder(
+                _tf_v1.float32, name='dropout_keep_prob')
+
+    # Save the original __init__ so we can call it from the wrapper.
+    if not hasattr(_BPRMF_mod.BPRMF, '__orig_init__'):
+        _BPRMF_mod.BPRMF.__orig_init__ = _BPRMF_mod.BPRMF.__init__
+    _BPRMF_mod.BPRMF.__init__ = _patched_init
+
     BPRMF = _BPRMF_mod.BPRMF
 
     # Monkey-patch: Retrain baseline must use the post-unlearn training set
@@ -262,6 +279,8 @@ METRICS = [
     ('precision10', 'Precision@10'),
     ('precision20', 'Precision@20'),
     ('precision50', 'Precision@50'),
+    ('retrain_time_s',     'Retrain Time (s)'),
+    ('shards_affected',    'Shards Affected'),
 ]
 
 # Display column order (matches the screenshot).
@@ -290,8 +309,14 @@ PARTITION_BG = {
 }
 
 
-def make_matrix(retrain, full, mean_paper=None, use_mean_paper=True):
-    """rows = metrics, cols = COL_ORDER (+ optional Mean-Paper) entries."""
+def make_matrix(retrain, full, mean_paper=None, use_mean_paper=True,
+                perf_eff=None, unlearn_type='interaction', unlearn_ratio=10):
+    """rows = metrics, cols = COL_ORDER (+ optional Mean-Paper) entries.
+
+    perf_eff: optional dict from perf_metrics.build_report(); supplies the
+              'retrain_time_s' and 'shards_affected' rows.
+    unlearn_type, unlearn_ratio: which unlearn scenario to read shards from.
+    """
     n_rows = len(METRICS)
     if use_mean_paper and mean_paper:
         cols = [MEAN_PAPER_COL] + COL_ORDER
@@ -308,12 +333,39 @@ def make_matrix(retrain, full, mean_paper=None, use_mean_paper=True):
             key = f'{part}-{agg}'
             src = (full or {}).get(key)
         for i, (mkey, _name) in enumerate(METRICS):
+            # 1) regular metrics from the source dict
             if src is not None and mkey in src:
                 matrix[i, j] = src[mkey]
+            # 2) retrain time: per partition
+            if mkey == 'retrain_time_s' and perf_eff:
+                v = (perf_eff.get('retrain_time_s') or {}).get(part)
+                if v is not None:
+                    matrix[i, j] = v
+            # 3) shards affected: per partition under current scenario
+            if mkey == 'shards_affected' and perf_eff:
+                sa = (perf_eff.get('shards_affected') or {}).get(
+                    part, {}).get(unlearn_type, {}).get(
+                    f'r{unlearn_ratio:02d}')
+                if sa:
+                    # display as "n/total" -> we use the count in the
+                    # matrix and let the formatter show "n/total"
+                    matrix[i, j] = sa.get('affected', np.nan)
     return matrix
 
 
-def draw_table(ax, matrix, title, show_partition_bands=True):
+def get_shards_total(perf_eff, part, unlearn_type='interaction',
+                     unlearn_ratio=10):
+    sa = ((perf_eff or {}).get('shards_affected') or {}
+          ).get(part, {}).get(unlearn_type, {}).get(
+              f'r{unlearn_ratio:02d}')
+    if sa:
+        return sa.get('total', 0)
+    return 0
+
+
+def draw_table(ax, matrix, title, show_partition_bands=True,
+               perf_eff=None, unlearn_type='interaction', unlearn_ratio=10,
+               cols_for_table=None):
     n_rows, n_cols = matrix.shape
     ax.set_xlim(0, n_cols)
     ax.set_ylim(0, n_rows)
@@ -322,23 +374,24 @@ def draw_table(ax, matrix, title, show_partition_bands=True):
 
     # Column group bands (one per partition, width = 2 for InP/UBP/IBP/Random,
     # width = 1 for Retrain)
+    table_cols = cols_for_table or COL_ORDER
     if show_partition_bands:
         x = 0
-        for part, agg, _ in COL_ORDER:
+        for part, agg, _ in table_cols:
             w = 1
             ax.add_patch(mpatches.Rectangle(
                 (x, -0.6), w, n_rows + 0.6,
-                facecolor=PARTITION_BG[part], alpha=0.08,
+                facecolor=PARTITION_BG.get(part, '#CCCCCC'), alpha=0.08,
                 edgecolor='none', zorder=0))
             # Group header (partition name) at top
             ax.text(x + w / 2, -0.45, part,
                     ha='center', va='bottom',
                     fontsize=11, fontweight='bold',
-                    color=PARTITION_BG[part])
+                    color=PARTITION_BG.get(part, '#666666'))
             x += w
 
     # Sub-headers (aggregation tag for partition columns; nothing for Retrain)
-    for j, (part, agg, _c) in enumerate(COL_ORDER):
+    for j, (part, agg, _c) in enumerate(table_cols):
         if part == 'Retrain':
             label = '—'
         else:
@@ -356,7 +409,8 @@ def draw_table(ax, matrix, title, show_partition_bands=True):
     norm = plt.Normalize(vmin=vmin, vmax=vmax)
 
     for i in range(n_rows):
-        ax.text(-0.05, i + 0.5, METRICS[i][1],
+        mkey, mname = METRICS[i]
+        ax.text(-0.05, i + 0.5, mname,
                 ha='right', va='center',
                 fontsize=10, fontweight='bold')
         row_vals = matrix[i]
@@ -370,16 +424,53 @@ def draw_table(ax, matrix, title, show_partition_bands=True):
                 ax.text(j + 0.5, i + 0.5, 'N/A',
                         ha='center', va='center',
                         fontsize=8, color='#999')
-            else:
-                color = cmap(norm(v))
+                continue
+
+            # Format the two special rows
+            if mkey == 'retrain_time_s':
+                if v == 0:
+                    txt = 'cached'
+                else:
+                    txt = f'{v:.1f}s'
                 ax.add_patch(mpatches.Rectangle(
-                    (j, i), 1, 1, facecolor=color,
+                    (j, i), 1, 1, facecolor='#F4F4F4',
                     edgecolor='white', zorder=1))
-                is_best = (row_max is not None and v == row_max)
-                ax.text(j + 0.5, i + 0.5, f'{v:.4f}',
-                        ha='center', va='center', fontsize=9,
-                        fontweight='bold' if is_best else 'normal',
+                ax.text(j + 0.5, i + 0.5, txt,
+                        ha='center', va='center', fontsize=8,
                         color='black')
+                continue
+            if mkey == 'shards_affected':
+                ax.add_patch(mpatches.Rectangle(
+                    (j, i), 1, 1, facecolor='#F4F4F4',
+                    edgecolor='white', zorder=1))
+                # Resolve the partition name for this column.
+                if j < len(table_cols):
+                    p_name = table_cols[j][0]
+                else:
+                    p_name = None
+                total = get_shards_total(perf_eff, p_name,
+                                         unlearn_type, unlearn_ratio)
+                if total:
+                    txt = f'{int(v)}/{total}'
+                else:
+                    txt = f'{int(v)}'
+                ax.text(j + 0.5, i + 0.5, txt,
+                        ha='center', va='center', fontsize=9,
+                        fontweight='bold' if (
+                            row_max is not None and v == row_max) else 'normal',
+                        color='black')
+                continue
+
+            # Regular metric: heatmap-colored
+            color = cmap(norm(v))
+            ax.add_patch(mpatches.Rectangle(
+                (j, i), 1, 1, facecolor=color,
+                edgecolor='white', zorder=1))
+            is_best = (row_max is not None and v == row_max)
+            ax.text(j + 0.5, i + 0.5, f'{v:.4f}',
+                    ha='center', va='center', fontsize=9,
+                    fontweight='bold' if is_best else 'normal',
+                    color='black')
 
     ax.set_title(title, fontsize=12, fontweight='bold', pad=60)
 
@@ -427,16 +518,30 @@ def main():
             use_mean_paper = True
             print(f'>>> Loaded Mean-Paper metrics: {mean_paper_json}')
 
+    # 2c) Optional perf + efficiency report
+    perf_eff_json = os.path.join(RESULTS, f'perf_eff_num{part_num}.json')
+    perf_eff = None
+    if os.path.exists(perf_eff_json):
+        with open(perf_eff_json) as f:
+            perf_eff = json.load(f)
+        print(f'>>> Loaded perf/eff: {perf_eff_json}')
+
     # 3) Build matrix and draw
     matrix = make_matrix(retrain, full, mean_paper=mean_paper,
-                         use_mean_paper=use_mean_paper)
+                         use_mean_paper=use_mean_paper, perf_eff=perf_eff)
     n_rows, n_cols = matrix.shape
-    fig, ax = plt.subplots(figsize=(15, 1.6 + n_rows * 0.55))
+    fig, ax = plt.subplots(figsize=(16, 1.6 + n_rows * 0.55))
     draw_table(ax, matrix,
                title=f'RecEraser BPR on ml-1m (part_num={part_num}): '
-                     f'Retrain vs 4 partition methods × 2 aggregations')
+                     f'Retrain vs 4 partition methods × 2 aggregations',
+               perf_eff=perf_eff,
+               unlearn_type='interaction', unlearn_ratio=10,
+               cols_for_table=([MEAN_PAPER_COL] if use_mean_paper
+                               and mean_paper else []) + COL_ORDER)
     fig.text(0.5, 0.01,
-             'Green = higher.  Bold = best in row (N/A if checkpoint missing).',
+             'Green = higher (top rows). '
+             'Retrain Time = wall-clock shard+agg training (s). '
+             'Shards Affected = "n/total" partitions touched by unlearn.',
              ha='center', fontsize=9, style='italic', color='#555')
     plt.tight_layout(rect=[0, 0.03, 1, 0.97])
     out1 = os.path.join(RESULTS, f'table_4partitions_num{part_num}.png')
