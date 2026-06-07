@@ -1,4 +1,37 @@
 import tensorflow as tf
+# ------------------------------------------------------------------
+# TF 1.x -> TF 2.x compat shim.
+# The model uses tf.placeholder, tf.Session, tf.global_variables_initializer,
+# tf.contrib.layers.xavier_initializer.  Re-bind these names to the
+# tensorflow.compat.v1 module and provide a tf.contrib stub so the
+# model code can run unmodified on TF 2.x.
+import types as _types
+_tf_v1 = tf.compat.v1
+_tf_v1.disable_eager_execution()
+import tensorflow.python.ops.init_ops as _init_ops
+_XAVIER = _init_ops.VarianceScaling(scale=1.0, mode='fan_avg',
+                                    distribution='uniform')
+def _xavier(*a, **k): return _XAVIER
+_tf_v1.contrib = _types.SimpleNamespace(
+    layers=_types.SimpleNamespace(xavier_initializer=_xavier))
+# Rebind common TF 1.x names that the rest of the file uses.
+tf = _tf_v1
+# Make sure tf.placeholder / tf.Session / tf.global_variables_initializer
+# resolve to the compat.v1 versions even if `import tensorflow as tf`
+# was already executed at module level.
+for _name in ('placeholder', 'Session', 'global_variables_initializer',
+              'train', 'Variable', 'constant', 'random_uniform',
+              'einsum', 'matmul', 'nn', 'math', 'reduce_sum', 'reduce_mean',
+              'clip_by_value', 'divide', 'multiply', 'truncated_normal',
+              'stop_gradient', 'add_to_collection', 'get_collection',
+              'GraphKeys', 'ConfigProto', 'reset_default_graph',
+              'initializers', 'logging', 'equal', 'cast', 'float32',
+              'int32', 'int64'):
+    if not hasattr(tf, _name):
+        setattr(tf, _name, getattr(_tf_v1, _name))
+if not hasattr(tf, 'logging'):
+    tf.logging = _tf_v1.logging
+# ------------------------------------------------------------------
 from utility.helper import *
 import numpy as np
 from scipy.sparse import csr_matrix
