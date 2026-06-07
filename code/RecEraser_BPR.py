@@ -54,6 +54,8 @@ class RecEraser_BPR(object):
 
         if args.agg_type == 'mean':
             line = self.train_agg_model_mean()
+        elif args.agg_type == 'mean_pred':
+            line = self.train_agg_model_mean_pred()
         else:
             line = self.train_agg_model()
         self.opt_agg = line[0]
@@ -281,6 +283,65 @@ class RecEraser_BPR(object):
         # Return dummy attention loss and u_w for compatibility
         return opt, loss, mf_loss, reg_loss, tf.constant(0.0), batch_ratings, tf.zeros([1, 1, 1])
 
+    def train_agg_model_mean_pred(self):
+        """Mean-Prediction aggregation: average the per-shard prediction
+        scores (dot products) instead of averaging the embeddings.
+
+        For a sampled (u, pos, neg) triplet:
+          pos_score(u, i) = (1 / n_local) * sum_k <p_u^(k), q_i^(k)>
+          neg_score(u, j) = (1 / n_local) * sum_k <p_u^(k), q_j^(k)>
+        BPR is then applied on these averaged scores.
+
+        No trans_W / trans_B / attention is used.
+        """
+        u_es = tf.stop_gradient(
+            tf.nn.embedding_lookup(self.weights['user_embedding'], self.users))
+        pos_i_es = tf.stop_gradient(
+            tf.nn.embedding_lookup(self.weights['item_embedding'], self.pos_items))
+        neg_i_es = tf.stop_gradient(
+            tf.nn.embedding_lookup(self.weights['item_embedding'], self.neg_items))
+        # shapes: (B, n_local, emb_dim)
+
+        # per-shard positive/negative scores: (B, n_local)
+        pos_scores = tf.reduce_sum(tf.multiply(u_es, pos_i_es), axis=2)
+        neg_scores = tf.reduce_sum(tf.multiply(u_es, neg_i_es), axis=2)
+        # mean across shards -> (B,)
+        pos_score = tf.reduce_mean(pos_scores, axis=1)
+        neg_score = tf.reduce_mean(neg_scores, axis=1)
+
+        # BPR on the averaged score
+        regularizer = (tf.nn.l2_loss(u_es) + tf.nn.l2_loss(pos_i_es)
+                       + tf.nn.l2_loss(neg_i_es)) / self.batch_size
+        diff = tf.clip_by_value(pos_score - neg_score, -50.0, 50.0)
+        mf_loss = tf.reduce_mean(tf.nn.softplus(-diff))
+        reg_loss = self.decay * regularizer
+        loss = mf_loss + reg_loss
+
+        # For evaluation (test phase), build the (B, N) rating matrix by
+        # averaging per-shard rating matrices.  batch_test.test() expects
+        # model.batch_ratings to be (B, N) and will feed
+        #   {model.users: user_batch, model.pos_items: item_batch}
+        # with pos_items being the full item range at test time.
+        with tf.variable_scope('mean_pred_eval'):
+            i_all = tf.nn.embedding_lookup(
+                self.weights['item_embedding'], self.pos_items)  # (N, n_local, D)
+            rs = []
+            for k in range(self.num_local):
+                u_k = tf.nn.embedding_lookup(
+                    self.weights['user_embedding'][:, k], self.users)
+                r_k = tf.matmul(u_k, i_all[:, k, :],
+                                transpose_a=False, transpose_b=True)  # (B, N)
+                rs.append(r_k)
+            stack = tf.stack(rs, axis=2)                          # (B, N, n_local)
+            batch_ratings = tf.reduce_mean(stack, axis=2)         # (B, N)
+
+        opt = tf.train.AdagradOptimizer(
+            learning_rate=self.lr, initial_accumulator_value=1e-8
+        ).minimize(loss)
+
+        # Return dummy attention loss / u_w for interface compat
+        return opt, loss, mf_loss, reg_loss, tf.constant(0.0), batch_ratings, tf.zeros([1, 1, 1])
+
 
 
 if __name__ == '__main__':
@@ -300,6 +361,13 @@ if __name__ == '__main__':
     if args.save_flag == 1:
         weights_save_path = '%sweights/%s/%s/num-%s_type-%s_r%s' % (args.proj_path, args.dataset, model.model_type, str(args.part_num),str(args.part_type),
                                                          '-'.join([str(r) for r in eval(args.regs)]))
+        # Append agg suffix so each aggregation has its own checkpoint
+        # folder (e.g. _mean, _mean_pred).  Attention is the default and
+        # uses no suffix.
+        if args.agg_type == 'mean':
+            weights_save_path = weights_save_path + '_mean'
+        elif args.agg_type == 'mean_pred':
+            weights_save_path = weights_save_path + '_mean_pred'
         ensureDir(weights_save_path)
         save_saver = tf.train.Saver(max_to_keep=1)
 
@@ -314,6 +382,10 @@ if __name__ == '__main__':
     if args.pretrain == 1:
         pretrain_path = '%sweights/%s/%s/num-%s_type-%s_r%s' % (args.proj_path, args.dataset, model.model_type, str(args.part_num),str(args.part_type),
                                                          '-'.join([str(r) for r in eval(args.regs)]))
+        if args.agg_type == 'mean':
+            pretrain_path = pretrain_path + '_mean'
+        elif args.agg_type == 'mean_pred':
+            pretrain_path = pretrain_path + '_mean_pred'
 
         ckpt = tf.train.get_checkpoint_state(os.path.dirname(pretrain_path + '/checkpoint'))
         print(ckpt)

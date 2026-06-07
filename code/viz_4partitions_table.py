@@ -283,7 +283,9 @@ METRICS = [
     ('shards_affected',    'Shards Affected'),
 ]
 
-# Display column order (matches the screenshot).
+# Display column order: Retrain | 4 partition × (Mean, Att)
+# Mean = RecEraser_BPR_MeanPred.py (avg of per-shard prediction scores)
+# Att  = RecEraser_BPR.py with --agg_type attention (softmax attention)
 COL_ORDER = [
     ('Retrain',  None,       '#555555'),
     ('InP',      'mean',     '#A23B72'),
@@ -296,10 +298,6 @@ COL_ORDER = [
     ('Random',   'attention','#888888'),
 ]
 
-# Optional Mean-Paper column, only shown if results/mean_paper_num{N}.json
-# is provided.  Inserted right after Retrain.
-MEAN_PAPER_COL = ('Mean-Paper', None, '#000000')
-
 PARTITION_BG = {
     'Retrain': '#EEEEEE',
     'InP':    '#A23B72',
@@ -309,26 +307,26 @@ PARTITION_BG = {
 }
 
 
-def make_matrix(retrain, full, mean_paper=None, use_mean_paper=True,
+def make_matrix(retrain, full, mean_results=None,
                 perf_eff=None, unlearn_type='interaction', unlearn_ratio=10):
-    """rows = metrics, cols = COL_ORDER (+ optional Mean-Paper) entries.
+    """rows = metrics, cols = COL_ORDER.
 
-    perf_eff: optional dict from perf_metrics.build_report(); supplies the
-              'retrain_time_s' and 'shards_affected' rows.
-    unlearn_type, unlearn_ratio: which unlearn scenario to read shards from.
+    Sources per column:
+      Retrain  -> retrain BPR baseline
+      InP-mean -> mean_results['InP']  (mean = avg of per-shard predictions)
+      InP-att  -> full['InP-attention']
+      UBP-mean -> mean_results['UBP']
+      UBP-att  -> full['UBP-attention']
+      ...etc.
     """
     n_rows = len(METRICS)
-    if use_mean_paper and mean_paper:
-        cols = [MEAN_PAPER_COL] + COL_ORDER
-    else:
-        cols = COL_ORDER
-    n_cols = len(cols)
+    n_cols = len(COL_ORDER)
     matrix = np.full((n_rows, n_cols), np.nan)
-    for j, (part, agg, _color) in enumerate(cols):
+    for j, (part, agg, _color) in enumerate(COL_ORDER):
         if part == 'Retrain':
             src = retrain
-        elif part == 'Mean-Paper':
-            src = mean_paper
+        elif agg == 'mean':
+            src = (mean_results or {}).get(part) if mean_results else None
         else:
             key = f'{part}-{agg}'
             src = (full or {}).get(key)
@@ -347,8 +345,6 @@ def make_matrix(retrain, full, mean_paper=None, use_mean_paper=True,
                     part, {}).get(unlearn_type, {}).get(
                     f'r{unlearn_ratio:02d}')
                 if sa:
-                    # display as "n/total" -> we use the count in the
-                    # matrix and let the formatter show "n/total"
                     matrix[i, j] = sa.get('affected', np.nan)
     return matrix
 
@@ -505,18 +501,19 @@ def main():
         print('then re-run this script.')
         full = None
 
-    # 2b) Optional Mean-Paper column — needs separate paper-faithful
-    #     checkpoints (RecEraser_BPR_MeanPaper.py).  If absent, the column
-    #     is dropped and the figure is the standard 9-col layout.
-    mean_paper_json = os.path.join(RESULTS, f'mean_paper_num{part_num}.json')
-    mean_paper = None
-    use_mean_paper = False
-    if os.path.exists(mean_paper_json):
-        with open(mean_paper_json) as f:
-            mean_paper = json.load(f)
-        if mean_paper:
-            use_mean_paper = True
-            print(f'>>> Loaded Mean-Paper metrics: {mean_paper_json}')
+    # 2b) Mean-Pred metrics: derived from full_eval_num{N}.json
+    #     which now contains both "*-attention" and "*-mean" keys
+    #     (mean = avg of per-shard prediction scores, trained with
+    #     `RecEraser_BPR.py --agg_type mean_pred`).
+    mean_results = {}
+    if full:
+        for key, val in full.items():
+            # Look for keys like "InP-mean" (mean_pred result)
+            if key.endswith('-mean') and 'attention' not in key:
+                partition = key[:-len('-mean')]
+                mean_results[partition] = val
+        if mean_results:
+            print(f'>>> Mean-Pred entries: {sorted(mean_results.keys())}')
 
     # 2c) Optional perf + efficiency report
     perf_eff_json = os.path.join(RESULTS, f'perf_eff_num{part_num}.json')
@@ -527,19 +524,21 @@ def main():
         print(f'>>> Loaded perf/eff: {perf_eff_json}')
 
     # 3) Build matrix and draw
-    matrix = make_matrix(retrain, full, mean_paper=mean_paper,
-                         use_mean_paper=use_mean_paper, perf_eff=perf_eff)
+    matrix = make_matrix(retrain, full, mean_results=mean_results,
+                         perf_eff=perf_eff)
     n_rows, n_cols = matrix.shape
     fig, ax = plt.subplots(figsize=(16, 1.6 + n_rows * 0.55))
     draw_table(ax, matrix,
                title=f'RecEraser BPR on ml-1m (part_num={part_num}): '
-                     f'Retrain vs 4 partition methods × 2 aggregations',
+                     f'Retrain + 4 partitions × (Mean = avg prediction, '
+                     f'Attention)',
                perf_eff=perf_eff,
                unlearn_type='interaction', unlearn_ratio=10,
-               cols_for_table=([MEAN_PAPER_COL] if use_mean_paper
-                               and mean_paper else []) + COL_ORDER)
+               cols_for_table=COL_ORDER)
     fig.text(0.5, 0.01,
              'Green = higher (top rows). '
+             'Each partition has 2 columns: Mean (avg prediction) vs '
+             'Attention (softmax). '
              'Retrain Time = wall-clock shard+agg training (s). '
              'Shards Affected = "n/total" partitions touched by unlearn.',
              ha='center', fontsize=9, style='italic', color='#555')
