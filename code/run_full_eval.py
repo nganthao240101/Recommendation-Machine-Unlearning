@@ -107,6 +107,11 @@ def evaluate_one(part_type, part_num, agg_type, regs='0.01'):
         PROJ, 'weights', args.dataset, 'RecEraser_BPR',
         f'num-{part_num}_type-{part_type}_r{regs}'
     )
+    # Append agg suffix if the caller passed a non-attention agg type
+    if agg_type == 'mean':
+        ckpt_root = ckpt_root + '_mean'
+    elif agg_type == 'mean_pred':
+        ckpt_root = ckpt_root + '_mean_pred'
     weights_path = os.path.join(ckpt_root, 'weights')
 
     sess = tf.Session()
@@ -166,22 +171,39 @@ def evaluate_one(part_type, part_num, agg_type, regs='0.01'):
 def main():
     part_num = _SELF_PART_NUM
     ckpt_root = os.path.join(PROJ, 'weights', 'ml-1m', 'RecEraser_BPR')
-    available = sorted(int(d.split('_')[1].split('-')[1])
-                        for d in os.listdir(ckpt_root)
-                        if d.startswith(f'num-{part_num}_type-') and 'type-' in d)
-    print(f'Available partition types for part_num={part_num}: {available}', flush=True)
+    # Detect (part_type, agg_type) from folder names.  Convention:
+    #   num-{N}_type-{T}_r{regs}                  -> attention (default)
+    #   num-{N}_type-{T}_r{regs}_mean             -> mean
+    #   num-{N}_type-{T}_r{regs}_mean_pred        -> mean_pred
+    available = []
+    for d in sorted(os.listdir(ckpt_root)):
+        if not d.startswith(f'num-{part_num}_type-') or 'type-' not in d:
+            continue
+        try:
+            pt = int(d.split('_type-')[1].split('_')[0].split('-')[0])
+        except Exception:
+            continue
+        if d.endswith('_mean_pred'):
+            agg = 'mean_pred'
+        elif d.endswith('_mean'):
+            agg = 'mean'
+        else:
+            agg = 'attention'
+        if os.path.isfile(os.path.join(ckpt_root, d, 'weights.index')):
+            available.append((pt, agg))
+    print(f'Available (part_type, agg) for part_num={part_num}: {available}',
+          flush=True)
 
     results = {}
-    for pt in available:
+    for pt, agg in available:
         name = METHOD_INFO[pt]
-        for agg in ['attention', 'mean']:
-            r = evaluate_one(pt, part_num, agg)
-            if r is not None:
-                key = f'{name}-{agg}'
-                results[key] = r
-                results[key]['partition'] = name
-                results[key]['agg'] = agg
-                results[key]['color'] = METHOD_COLOR[pt]
+        r = evaluate_one(pt, part_num, agg)
+        if r is not None:
+            key = f'{name}-{agg}'
+            results[key] = r
+            results[key]['partition'] = name
+            results[key]['agg'] = agg
+            results[key]['color'] = METHOD_COLOR[pt]
 
     if not results:
         print('No results collected.', flush=True)
