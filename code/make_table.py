@@ -123,7 +123,7 @@ def draw_table(ax, matrix, block, title):
                     edgecolor='#CCCCCC', hatch='//', zorder=1
                 ))
                 ax.text(j + 0.5, i + 0.5, 'N/A',
-                        ha='center', va='center', fontsize=8, color='#999')
+                        ha='center', va='center', fontsize=8, color='#999999')
             else:
                 color = cmap(norm(v))
                 ax.add_patch(mpatches.Rectangle(
@@ -175,7 +175,7 @@ def main():
     # Colorbar legend
     fig.text(0.5, 0.01,
              'Green = higher, Red = lower. Bold = best per row. / = N/A (no checkpoint).',
-             ha='center', fontsize=9, style='italic', color='#555')
+             ha='center', fontsize=9, style='italic', color='#555555')
 
     plt.tight_layout(rect=[0, 0.02, 1, 0.98])
     out = os.path.join('..', 'results', 'comparison_heatmap_table.png')
@@ -235,7 +235,7 @@ def main():
                         edgecolor='#CCCCCC', hatch='//', zorder=1
                     ))
                     ax.text(j + 0.5, i + 0.5, 'N/A',
-                            ha='center', va='center', fontsize=9, color='#999')
+                            ha='center', va='center', fontsize=9, color='#999999')
                 else:
                     color = cmap(norm(v))
                     ax.add_patch(mpatches.Rectangle(
