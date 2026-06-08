@@ -105,7 +105,7 @@ def evaluate_one(part_type, part_num, agg_type, regs='0.01'):
 
     ckpt_root = os.path.join(
         PROJ, 'weights', args.dataset, 'RecEraser_BPR',
-        f'num-{part_num}_type-{part_type}_r{regs}'
+        f'num-{part_num}_type-{part_type}_r' + (regs.strip('[]') if regs.startswith('[') else regs)
     )
     # Append agg suffix if the caller passed a non-attention agg type
     if agg_type == 'mean':
