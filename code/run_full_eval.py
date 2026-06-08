@@ -197,15 +197,23 @@ def main():
             agg = 'mean'
         else:
             agg = 'attention'
+        # Extract regs from folder name: num-N_type-T_r{regs}[_mean]
+        try:
+            regs_part = d.split('_r')[1]
+            if regs_part.endswith('_mean') or regs_part.endswith('_mean_pred'):
+                regs_part = regs_part.rsplit('_', 1)[0]
+            regs = regs_part
+        except Exception:
+            regs = '0.01'
         if os.path.isfile(os.path.join(ckpt_root, d, 'weights.index')):
-            available.append((pt, agg))
+            available.append((pt, agg, regs))
     print(f'Available (part_type, agg) for part_num={part_num}: {available}',
           flush=True)
 
     results = {}
-    for pt, agg in available:
+    for pt, agg, regs in available:
         name = METHOD_INFO[pt]
-        r = evaluate_one(pt, part_num, agg)
+        r = evaluate_one(pt, part_num, agg, regs=regs)
         if r is not None:
             key = f'{name}-{agg}'
             results[key] = r
