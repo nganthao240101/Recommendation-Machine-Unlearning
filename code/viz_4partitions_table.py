@@ -419,7 +419,7 @@ def draw_table(ax, matrix, title, show_partition_bands=True,
                     edgecolor='#CCCCCC', hatch='//', zorder=1))
                 ax.text(j + 0.5, i + 0.5, 'N/A',
                         ha='center', va='center',
-                        fontsize=8, color='#999')
+                        fontsize=8, color='#999999')
                 continue
 
             # Format the two special rows
@@ -541,7 +541,7 @@ def main():
              'Attention (softmax). '
              'Retrain Time = wall-clock shard+agg training (s). '
              'Shards Affected = "n/total" partitions touched by unlearn.',
-             ha='center', fontsize=9, style='italic', color='#555')
+             ha='center', fontsize=9, style='italic', color='#555555')
     plt.tight_layout(rect=[0, 0.03, 1, 0.97])
     out1 = os.path.join(RESULTS, f'table_4partitions_num{part_num}.png')
     plt.savefig(out1, dpi=140, bbox_inches='tight')
@@ -572,7 +572,7 @@ def main():
                      f'focused on Recall/NDCG @20 & @50')
     fig2.text(0.5, 0.01,
               'Focused view: top-line metrics only. Green = higher.',
-              ha='center', fontsize=9, style='italic', color='#555')
+              ha='center', fontsize=9, style='italic', color='#555555')
     plt.tight_layout(rect=[0, 0.03, 1, 0.97])
     out2 = os.path.join(RESULTS, f'table_4partitions_num{part_num}_focused.png')
     plt.savefig(out2, dpi=140, bbox_inches='tight')

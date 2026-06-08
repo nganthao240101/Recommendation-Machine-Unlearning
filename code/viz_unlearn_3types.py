@@ -126,7 +126,7 @@ def draw_table(ax, M, title):
                     (j, i), 1, 1, facecolor='#EEEEEE',
                     edgecolor='#CCCCCC', hatch='//', zorder=1))
                 ax.text(j + 0.5, i + 0.5, 'N/A',
-                        ha='center', va='center', fontsize=8, color='#999')
+                        ha='center', va='center', fontsize=8, color='#999999')
             else:
                 color = cmap(norm(v))
                 ax.add_patch(mpatches.Rectangle(
@@ -209,7 +209,7 @@ def main():
     fig.text(0.5, 0.01,
              'Green = higher.  Bold = best in row.  / = N/A '
              '(no checkpoint for this scenario).',
-             ha='center', fontsize=9, style='italic', color='#555')
+             ha='center', fontsize=9, style='italic', color='#555555')
     plt.tight_layout(rect=[0, 0.02, 1, 0.97])
     out = os.path.join(RESULTS, f'table_unlearn_3types_num{part_num}.png')
     plt.savefig(out, dpi=130, bbox_inches='tight')

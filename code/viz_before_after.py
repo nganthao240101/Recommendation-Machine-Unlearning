@@ -104,7 +104,7 @@ def draw_panel(ax, baseline, after, title, focus_metric='recall20'):
             all_after.append(v)
     if not all_after:
         ax.text(0.5, 0.5, 'no data', ha='center', va='center',
-                transform=ax.transAxes, fontsize=14, color='#999')
+                transform=ax.transAxes, fontsize=14, color='#999999')
         ax.set_title(title, fontsize=11, fontweight='bold', pad=40)
         return
     vmin, vmax = min(all_after), max(all_after)
@@ -127,7 +127,7 @@ def draw_panel(ax, baseline, after, title, focus_metric='recall20'):
                     (j, i), 1, 1, facecolor='#EEEEEE',
                     edgecolor='#CCCCCC', hatch='//', zorder=1))
                 ax.text(j + 0.5, i + 0.5, 'N/A',
-                        ha='center', va='center', fontsize=7, color='#999')
+                        ha='center', va='center', fontsize=7, color='#999999')
                 continue
             # Color by AFTER value
             color = cmap(norm(a)) if a is not None else '#EEEEEE'
@@ -216,7 +216,7 @@ def main():
     fig.text(0.5, 0.01,
              'Green = higher after-unlearn.  Bold = best after-value in row.  '
              '/ = N/A.',
-             ha='center', fontsize=9, style='italic', color='#555')
+             ha='center', fontsize=9, style='italic', color='#555555')
     plt.tight_layout(rect=[0, 0.02, 1, 0.97])
     out = os.path.join(RESULTS, f'before_after_unlearn_num{part_num}.png')
     plt.savefig(out, dpi=130, bbox_inches='tight')
