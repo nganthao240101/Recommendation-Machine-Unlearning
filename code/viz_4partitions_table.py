@@ -393,7 +393,7 @@ def draw_table(ax, matrix, title, show_partition_bands=True,
         else:
             label = (agg or '')[:3]
         ax.text(j + 0.5, -0.05, label, ha='center', va='top',
-                fontsize=8, color='#444')
+                fontsize=8, color='#444444')
 
     # Heatmap cells
     finite = matrix[~np.isnan(matrix)]

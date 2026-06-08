@@ -94,7 +94,7 @@ def draw_panel(ax, baseline, after, title, focus_metric='recall20'):
 
     for j, col in enumerate(COL_ORDER):
         ax.text(j + 0.5, -0.05, col.split('-')[1][:3],
-                ha='center', va='top', fontsize=8, color='#444')
+                ha='center', va='top', fontsize=8, color='#444444')
 
     # Color map based on AFTER value across this panel
     all_after = []

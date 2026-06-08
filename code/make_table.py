@@ -101,7 +101,7 @@ def draw_table(ax, matrix, block, title):
     for j, col in enumerate(COL_ORDER):
         agg = col.split('-')[1]
         ax.text(j + 0.5, -0.05, agg[:3],
-                ha='center', va='top', fontsize=8, color='#444')
+                ha='center', va='top', fontsize=8, color='#444444')
 
     # Cells with heatmap background
     # Compute vmin/vmax for colormap
