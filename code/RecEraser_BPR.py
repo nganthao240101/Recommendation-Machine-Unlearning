@@ -45,7 +45,7 @@ class RecEraser_BPR(object):
         self.weight_size = eval(args.layer_size)
         self.n_layers = len(self.weight_size)
 
-        self.regs = eval(args.regs)
+        self.regs = eval(args.regs) if args.regs.startswith('[') else [float(args.regs)]
         self.decay = self.regs[0]
 
         self.verbose = args.verbose
@@ -350,7 +350,7 @@ if __name__ == '__main__':
     # save the model parameters.
     if args.save_flag == 1:
         weights_save_path = '%sweights/%s/%s/num-%s_type-%s_r%s' % (args.proj_path, args.dataset, model.model_type, str(args.part_num),str(args.part_type),
-                                                         '-'.join([str(r) for r in eval(args.regs)]))
+                                                         args.regs if not args.regs.startswith('[') else '-'.join([str(r) for r in eval(args.regs)]))
         # Append agg suffix so each aggregation has its own checkpoint
         # folder.  Attention is the default (no suffix).  Mean
         # (mean = average of per-shard prediction scores) uses _mean.
@@ -369,7 +369,7 @@ if __name__ == '__main__':
     # reload the pretrained model parameters.
     if args.pretrain == 1:
         pretrain_path = '%sweights/%s/%s/num-%s_type-%s_r%s' % (args.proj_path, args.dataset, model.model_type, str(args.part_num),str(args.part_type),
-                                                         '-'.join([str(r) for r in eval(args.regs)]))
+                                                         args.regs if not args.regs.startswith('[') else '-'.join([str(r) for r in eval(args.regs)]))
         if args.agg_type == 'mean':
             pretrain_path = pretrain_path + '_mean'
 
