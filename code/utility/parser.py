@@ -86,8 +86,8 @@ def parse_args():
                         help='iteration for partition')
 
     parser.add_argument('--agg_type', type=str, default='attention',
-                        help='Aggregation method: attention, mean, '
-                             'or mean_pred (average of per-shard scores)')
+                        help='Aggregation method: attention or mean '
+                             '(mean = average of per-shard prediction scores)')
 
     parser.add_argument('--unlearn_ratio', type=float, default=0.1,
                         help='Ratio of data to unlearn (0.1, 0.2, 0.5)')

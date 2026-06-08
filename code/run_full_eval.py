@@ -109,9 +109,15 @@ def evaluate_one(part_type, part_num, agg_type, regs='0.01'):
     )
     # Append agg suffix if the caller passed a non-attention agg type
     if agg_type == 'mean':
-        ckpt_root = ckpt_root + '_mean'
-    elif agg_type == 'mean_pred':
-        ckpt_root = ckpt_root + '_mean_pred'
+        # Try _mean first (newer convention), fall back to _mean_pred
+        ckpt_path_new = ckpt_root + '_mean'
+        ckpt_path_old = ckpt_root + '_mean_pred'
+        if os.path.isfile(os.path.join(ckpt_path_new, 'weights.index')):
+            ckpt_root = ckpt_path_new
+        elif os.path.isfile(os.path.join(ckpt_path_old, 'weights.index')):
+            ckpt_root = ckpt_path_old
+        else:
+            ckpt_root = ckpt_path_new  # default to new; will fail later
     weights_path = os.path.join(ckpt_root, 'weights')
 
     sess = tf.Session()
@@ -184,7 +190,9 @@ def main():
         except Exception:
             continue
         if d.endswith('_mean_pred'):
-            agg = 'mean_pred'
+            # Legacy: old convention.  Treat as 'mean' since the only
+            # mean-style aggregation is now "mean = avg prediction".
+            agg = 'mean'
         elif d.endswith('_mean'):
             agg = 'mean'
         else:
