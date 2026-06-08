@@ -87,8 +87,6 @@ class RecEraser_BPR(object):
 
         if args.agg_type == 'mean':
             line = self.train_agg_model_mean()
-        elif args.agg_type == 'mean_pred':
-            line = self.train_agg_model_mean_pred()
         else:
             line = self.train_agg_model()
         self.opt_agg = line[0]
@@ -285,40 +283,8 @@ class RecEraser_BPR(object):
         return opt, loss, mf_loss, reg_loss, attn_reg, batch_ratings,u_w
 
     def train_agg_model_mean(self):
-        # Mean aggregation: simple average of local embeddings
-        u_es = tf.stop_gradient(tf.nn.embedding_lookup(self.weights['user_embedding'], self.users))
-        pos_i_es = tf.stop_gradient(tf.nn.embedding_lookup(self.weights['item_embedding'], self.pos_items))
-        neg_i_es = tf.stop_gradient(tf.nn.embedding_lookup(self.weights['item_embedding'], self.neg_items))
-
-        # Apply transformation
-        u_es = tf.einsum('abc,bcd->abd', u_es, self.weights['trans_W']) + self.weights['trans_B']
-        pos_i_es = tf.einsum('abc,bcd->abd', pos_i_es, self.weights['trans_W']) + self.weights['trans_B']
-        neg_i_es = tf.einsum('abc,bcd->abd', neg_i_es, self.weights['trans_W']) + self.weights['trans_B']
-
-        # Mean aggregation across partitions
-        u_e = tf.reduce_mean(u_es, axis=1)
-        pos_i_e = tf.reduce_mean(pos_i_es, axis=1)
-        neg_i_e = tf.reduce_mean(neg_i_es, axis=1)
-
-        u_e_drop = tf.nn.dropout(u_e, self.dropout_keep_prob)
-
-        mf_loss, reg_loss = self.create_bpr_loss(u_e_drop, pos_i_e, neg_i_e)
-
-        # Only transformer regularization (no attention weights)
-        trans_reg = 1e-4 * (tf.nn.l2_loss(self.weights['trans_W']) + tf.nn.l2_loss(self.weights['trans_B']))
-
-        reg_loss = trans_reg
-        batch_ratings = tf.matmul(u_e, pos_i_e, transpose_a=False, transpose_b=True)
-        loss = mf_loss + reg_loss
-
-        opt = tf.train.AdagradOptimizer(learning_rate=self.lr, initial_accumulator_value=1e-8).minimize(loss)
-
-        # Return dummy attention loss and u_w for compatibility
-        return opt, loss, mf_loss, reg_loss, tf.constant(0.0), batch_ratings, tf.zeros([1, 1, 1])
-
-    def train_agg_model_mean_pred(self):
-        """Mean-Prediction aggregation: average the per-shard prediction
-        scores (dot products) instead of averaging the embeddings.
+        """Mean aggregation: average the per-shard prediction scores (dot
+        products) instead of averaging the embeddings.
 
         For a sampled (u, pos, neg) triplet:
           pos_score(u, i) = (1 / n_local) * sum_k <p_u^(k), q_i^(k)>
@@ -395,12 +361,10 @@ if __name__ == '__main__':
         weights_save_path = '%sweights/%s/%s/num-%s_type-%s_r%s' % (args.proj_path, args.dataset, model.model_type, str(args.part_num),str(args.part_type),
                                                          '-'.join([str(r) for r in eval(args.regs)]))
         # Append agg suffix so each aggregation has its own checkpoint
-        # folder (e.g. _mean, _mean_pred).  Attention is the default and
-        # uses no suffix.
+        # folder.  Attention is the default (no suffix).  Mean
+        # (mean = average of per-shard prediction scores) uses _mean.
         if args.agg_type == 'mean':
             weights_save_path = weights_save_path + '_mean'
-        elif args.agg_type == 'mean_pred':
-            weights_save_path = weights_save_path + '_mean_pred'
         ensureDir(weights_save_path)
         save_saver = tf.train.Saver(max_to_keep=1)
 
@@ -417,8 +381,6 @@ if __name__ == '__main__':
                                                          '-'.join([str(r) for r in eval(args.regs)]))
         if args.agg_type == 'mean':
             pretrain_path = pretrain_path + '_mean'
-        elif args.agg_type == 'mean_pred':
-            pretrain_path = pretrain_path + '_mean_pred'
 
         ckpt = tf.train.get_checkpoint_state(os.path.dirname(pretrain_path + '/checkpoint'))
         print(ckpt)
