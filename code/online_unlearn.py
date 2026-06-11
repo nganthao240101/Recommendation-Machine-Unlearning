@@ -208,22 +208,24 @@ def load_model_and_pretrain(args, ckpt_path):
         saver = tf.train.Saver()
         saver.restore(sess, ckpt_path)
     except Exception:
+        # Fallback: strip optimizer slots AND shape-mismatched vars
         reader = tf.train.NewCheckpointReader(ckpt_path)
-        ckpt_vars = [k for k in reader.get_variable_to_shape_map()
-                     if not any(s in k for s in ('/Adagrad', '/Adam',
-                                                 '/Momentum', '/RMSProp',
-                                                 '/ExponentialMovingAverage'))]
+        OPT_SLOTS = ('Adagrad', 'Adam', 'Momentum', 'RMSProp', 'ExponentialMovingAverage')
+        ckpt_vars_all = {k: v for k, v in reader.get_variable_to_shape_map().items()
+                         if not any(s in k for s in OPT_SLOTS)}
         gvars = {v.op.name: v for v in tf.global_variables()}
         var_list, used = {}, set()
-        for c in ckpt_vars:
+        for c, cshape in ckpt_vars_all.items():
             short = c.split('/')[-1]
             for gn, gv in gvars.items():
                 if gn in used:
                     continue
-                if gn == short or gn.endswith('/' + short):
+                # Match by name AND shape
+                if (gn == short or gn.endswith('/' + short)) and tuple(gv.shape) == tuple(cshape):
                     var_list[c] = gv
                     used.add(gn)
                     break
+        print(f'   [info] matched {len(var_list)} / {len(ckpt_vars_all)} vars by name+shape', flush=True)
         saver2 = tf.train.Saver(var_list=var_list)
         saver2.restore(sess, ckpt_path)
     return sess, model, data_generator
