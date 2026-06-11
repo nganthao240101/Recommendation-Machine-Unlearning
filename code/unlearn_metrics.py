@@ -113,6 +113,11 @@ def evaluate_one(part_type, part_num, agg_type, regs='0.01',
         ckpt_root = os.path.join(ckpt_root, unlearn_tag)
     weights_path = os.path.join(ckpt_root, 'weights')
 
+    # Skip if checkpoint doesn't exist - check both .index and .data files
+    if not (os.path.isfile(weights_path + '.index') and os.path.isfile(weights_path + '.data-00000-of-00001')):
+        print(f'   [SKIP] no checkpoint at {weights_path}', flush=True)
+        return None
+
     sess = tf.Session()
     sess.run(tf.global_variables_initializer())
     try:
