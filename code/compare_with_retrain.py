@@ -1,14 +1,9 @@
 """
-Compare Online Unlearn vs Retrain baseline.
-
-For each (partition, agg) combination, this script:
-1. Runs online unlearn (only affected shards retrained) - FAST
-2. Runs retrain baseline (train on unlearned data from scratch) - SLOW
-
-Then compares Recall@20, time, and quality.
+Compare Online Unlearn vs Retrain baseline (train on unlearned data).
 
 Usage:
  python compare_with_retrain.py 5 --unlearn_type user --ratio 0.10
+ python compare_with_retrain.py 5 --unlearn_type user --ratio 0.10 --partitions 2 --aggs attention
 """
 import os
 import sys
@@ -16,29 +11,24 @@ import json
 import time
 import subprocess
 import argparse
+import shutil
 
 PROJ = os.path.dirname(os.path.abspath(__file__))
 WEIGHTS = os.path.join(PROJ, 'weights', 'ml-1m', 'RecEraser_BPR')
 RESULTS = os.path.join(PROJ, '..', 'results')
+DATA_DIR = os.path.join(PROJ, '..', 'data', 'ml-1m')
 os.makedirs(RESULTS, exist_ok=True)
 
 CONDA_ENV = 'receraser'
 REGS = '0.01'
 
-# Method colors
-METHOD_COLOR = {
- 'InP': '#A23B72',
- 'UBP': '#2E86AB',
- 'Random': '#888888',
- 'IBP': '#F18F01',
-}
 METHOD_INFO = {1: 'InP', 2: 'UBP', 3: 'Random', 4: 'IBP'}
 
-def run_unlearn(pt, agg, unlearn_type, ratio, part_num=5, timeout=3600):
- """Run online unlearn (one scenario)."""
+
+def run_online_unlearn(pt, agg, unlearn_type, ratio, part_num=5, timeout=3600):
+ """Run online unlearn (only affected shards retrained)."""
  print(f"\n>>> [ONLINE UNLEARN] Pt{pt}-{agg} {unlearn_type} r{ratio:.2f}")
  t0 = time.time()
- # Pass agg_type to online_unlearn.py
  cmd = [
  'conda', 'run', '-n', CONDA_ENV, 'python', 'online_unlearn.py',
  str(part_num),
@@ -46,7 +36,7 @@ def run_unlearn(pt, agg, unlearn_type, ratio, part_num=5, timeout=3600):
  '--regs', REGS,
  '--unlearn_type', unlearn_type,
  '--unlearn_ratio', str(ratio),
- '--agg_type', agg,
+  '--agg_type', agg,
  ]
  try:
  result = subprocess.run(cmd, capture_output=True, text=True, timeout=timeout)
@@ -56,41 +46,38 @@ def run_unlearn(pt, agg, unlearn_type, ratio, part_num=5, timeout=3600):
  return True, dt
  else:
  print(f" [FAIL] Exit={result.returncode}")
- print(f" stderr: {result.stderr[-300:]}")
+ print(f" stderr: {result.stderr[-500:]}")
  return False, dt
  except subprocess.TimeoutExpired:
+ print(f" [TIMEOUT] > {timeout}s")
  return False, timeout
  except Exception as e:
  print(f" [ERROR] {e}")
  return False, 0
 
-def run_retrain_baseline(pt, unlearn_type, ratio, part_num=5, timeout=7200):
- """Train retrain baseline (train model on unlearned data from scratch).
 
- This uses RecEraser_BPR.py with the unlearned training data.
- """
- print(f"\n>>> [RETRAIN BASELINE] Pt{pt} {unlearn_type} r{ratio:.2f}")
+def run_retrain_baseline(pt, agg, unlearn_type, ratio, part_num=5, timeout=7200):
+ """Run retrain baseline: train model from scratch on unlearned data."""
+ print(f"\n>>> [RETRAIN BASELINE] Pt{pt}-{agg} {unlearn_type} r{ratio:.2f}")
  t0 = time.time()
 
- # Read the unlearned training file
- data_path = os.path.join(PROJ, '..', 'data', 'ml-1m')
+ # The unlearned training file
  unlearned_file = os.path.join(
- data_path, f'train_unlearned_{unlearn_type}_r{int(ratio*100):02d}.txt')
+ DATA_DIR, f'train_unlearned_{unlearn_type}_r{int(ratio*100):02d}.txt')
  if not os.path.exists(unlearned_file):
- # Fallback: check current train.txt
  print(f" No unlearned data file: {unlearned_file}")
- print(f" Using default train.txt (no retrain effect)")
- unlearned_file = os.path.join(data_path, 'train.txt')
+ print(f" Run online_unlearn.py first to generate unlearned data")
+ return False, 0
 
- # Save current train.txt, swap with unlearned, train, restore
- backup_file = unlearned_file + '.backup'
- if os.path.exists(train_path := os.path.join(data_path, 'train.txt')):
- import shutil
+ # Backup current train.txt, swap with unlearned, train, restore
+ train_path = os.path.join(DATA_DIR, 'train.txt')
+ backup_file = os.path.join(DATA_DIR, 'train.txt.backup')
+ if os.path.exists(train_path):
  shutil.copy(train_path, backup_file)
  shutil.copy(unlearned_file, train_path)
 
  try:
- # Run training
+ # Run training on unlearned data
  cmd = [
  'conda', 'run', '-n', CONDA_ENV, 'python', 'RecEraser_BPR.py',
  '--dataset', 'ml-1m',
@@ -100,7 +87,7 @@ def run_retrain_baseline(pt, unlearn_type, ratio, part_num=5, timeout=7200):
  '--lr', '0.05',
  '--regs', '[0.01]',
  '--batch_size', '256',
- '--agg_type', 'mean',
+ '--agg_type', agg,
  ]
  result = subprocess.run(cmd, capture_output=True, text=True, timeout=timeout)
  finally:
@@ -114,7 +101,9 @@ def run_retrain_baseline(pt, unlearn_type, ratio, part_num=5, timeout=7200):
  return True, dt
  else:
  print(f" [FAIL] Exit={result.returncode}")
+ print(f" stderr: {result.stderr[-500:]}")
  return False, dt
+
 
 def main():
  ap = argparse.ArgumentParser()
@@ -127,21 +116,42 @@ def main():
  ap.add_argument('--skip_unlearn', action='store_true',
  help='Skip online unlearn (assume done)')
  ap.add_argument('--skip_retrain', action='store_true',
- help='Skip retrain baseline')
+ help='Skip retrain baseline (assume done)')
  args_cli = ap.parse_args()
 
  parts = [int(x) for x in args_cli.partitions.split(',')]
  aggs = args_cli.aggs.split(',')
+ ratio_str = f"{int(args_cli.ratio*100):02d}"
+
+ print(f"Partitions: {parts}")
+ print(f"Aggregations: {aggs}")
+ print(f"Unlearn type: {args_cli.unlearn_type}, Ratio: {args_cli.ratio}")
 
  # Step 1: Run online unlearn
  if not args_cli.skip_unlearn:
+ print("\n" + "="*60)
+ print("STEP 1: Online Unlearn")
+ print("="*60)
  for pt in parts:
  for agg in aggs:
- ok, t = run_unlearn(pt, agg, args_cli.unlearn_type, args_cli.ratio, args_cli.part_num)
- if not ok:
- print(f"Skipped Pt{pt}-{agg}")
+ run_online_unlearn(pt, agg, args_cli.unlearn_type,
+ args_cli.ratio, args_cli.part_num)
 
- # Step 2: Read unlearn results
+ # Step 2: Run retrain baseline
+ retrain_times = {}
+ if not args_cli.skip_retrain:
+ print("\n" + "="*60)
+ print("STEP 2: Retrain Baseline")
+ print("="*60)
+ for pt in parts:
+ for agg in aggs:
+ key = f"Pt{pt}-{agg}"
+ ok, t = run_retrain_baseline(pt, agg, args_cli.unlearn_type,
+ args_cli.ratio, args_cli.part_num)
+ if ok:
+ retrain_times[key] = t
+
+ # Step 3: Read unlearn results
  unlearn_path = os.path.join(RESULTS, f'online_unlearn_num{args_cli.part_num}.json')
  if not os.path.exists(unlearn_path):
  print(f"\nUnlearn JSON not found: {unlearn_path}")
@@ -150,12 +160,12 @@ def main():
  with open(unlearn_path) as f:
  unlearn_data = json.load(f)
 
- # Step 3: Print comparison table
- print(f"\n{'='*100}")
- print(f"COMPARISON: Online Unlearn vs Baseline (no unlearn) - {args_cli.unlearn_type} r{args_cli.ratio}")
- print('='*100)
- print(f"{'Method':<28} {'K':<6} {'Baseline':<10} {'Unlearn':<10} {'Delta(%)':<10} {'Time(s)':<10}")
- print('-' * 100)
+ # Step 4: Print comparison table
+ print("\n" + "="*100)
+ print(f"COMPARISON: Online Unlearn vs Retrain Baseline - {args_cli.unlearn_type} r{args_cli.ratio}")
+ print("="*100)
+ print(f"{'Method':<25} {'K':<8} {'Unlearn':<10} {'Retrain':<10} {'Diff':<10} {'UnlearnT(s)':<12} {'RetrainT(s)':<10}")
+ print("-" * 100)
 
  for key, val in sorted(unlearn_data.items()):
  if 'baseline' not in val or 'online_unlearn' not in val:
@@ -164,18 +174,36 @@ def main():
  continue
  bl = val['baseline']
  un = val['online_unlearn']
- time_s = val.get('retrain_time_s', 0)
+ unlearn_t = val.get('retrain_time_s', 0)
+
  for k in ['recall20', 'precision20', 'ndcg20']:
  if k in bl and k in un:
- v_bl = bl[k]
  v_un = un[k]
- delta = (v_un - v_bl) / v_bl * 100 if v_bl > 0 else 0
- print(f'{key:<28} {k:<6} {v_bl:<10.4f} {v_un:<10.4f} {delta:+8.2f}% {time_s:<10.1f}')
+ v_rt = bl[k] # baseline Recall@20 = upper bound
+ diff = v_un - v_rt
+ # Find retrain time
+ pt_match = None
+ for p in parts:
+ if METHOD_INFO[p] in key:
+ pt_match = p
+ break
+ retrain_t = 0
+ if pt_match:
+ for a in aggs:
+ if a in key:
+ rt_key = f"Pt{pt_match}-{a}"
+ retrain_t = retrain_times.get(rt_key, 0)
+ break
 
- # Step 4: Note about retrain
- print(f"\nNote: To compare with full retrain baseline, run:")
- print(f" python RecEraser_BPR.py --dataset ml-1m --part_type X --part_num {args_cli.part_num} --epoch 30 ...")
- print(f" (using the unlearned train file: train_unlearned_{args_cli.unlearn_type}_r{int(args_cli.ratio*100):02d}.txt)")
+ print(f'{key:<25} {k:<8} {v_un:<10.4f} {v_rt:<10.4f} '
+ f'{diff:+8.4f} {unlearn_t:<12.1f} {retrain_t:<10.1f}')
+
+ print("\n" + "="*60)
+ print("Note: 'Retrain' = baseline (no unlearn) - upper bound for quality.")
+ print("If Online Unlearn ≈ Retrain in Recall@20, the method is good.")
+ print("And time should be MUCH less than retrain time.")
+ print("="*60)
+
 
 if __name__ == '__main__':
  main()
