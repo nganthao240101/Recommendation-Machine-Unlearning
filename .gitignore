@@ -29,10 +29,10 @@ weights/
 *.log
 *.tmp
 
-# Large data files (regenerate using WMF.py)
-data/*/train.txt
-data/*/test.txt
-data/*/*.pk
+# Large data files - INCLUDED for reproducibility
+# data/*/train.txt
+# data/*/test.txt
+# data/*/*.pk
 
 # Test and experiment scripts (not part of core code)
 # code/visualize_*.py
