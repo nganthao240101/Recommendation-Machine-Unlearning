@@ -29,5 +29,3 @@ weights/
 *.log
 *.tmp
 
-# Code files - not needed for data repo
-code/
