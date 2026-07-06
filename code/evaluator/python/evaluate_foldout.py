@@ -9,17 +9,17 @@ from concurrent.futures import ThreadPoolExecutor
 
 def argmax_top_k(a, top_k=50):
     ele_idx = heapq.nlargest(top_k, zip(a, itertools.count()))
-    return np.array([idx for ele, idx in ele_idx], dtype=np.intc)
+    return np.array([idx for ele, idx in ele_idx], dtype=np.intp)
 
 def precision(rank, ground_truth):
     hits = [1 if item in ground_truth else 0 for item in rank]
-    result = np.cumsum(hits, dtype=np.float)/np.arange(1, len(rank)+1)
+    result = np.cumsum(hits, dtype=np.float64)/np.arange(1, len(rank)+1)
     return result
 
 
 def recall(rank, ground_truth):
     hits = [1 if item in ground_truth else 0 for item in rank]
-    result = np.cumsum(hits, dtype=np.float) / len(ground_truth)
+    result = np.cumsum(hits, dtype=np.float64) / len(ground_truth)
     return result
 
 
