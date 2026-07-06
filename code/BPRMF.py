@@ -118,7 +118,7 @@ if __name__ == '__main__':
     sess = tf.compat.v1.Session(config=config)
 
 
-    sess.run(tf.global_variables_initializer())
+    sess.run(tf.compat.v1.global_variables_initializer())
     cur_best_pre_0 = 0.
     print('without pretraining.')
 

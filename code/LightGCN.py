@@ -212,7 +212,7 @@ if __name__ == '__main__':
     config.gpu_options.allow_growth = True
     sess = tf.compat.v1.Session(config=config)
 
-    sess.run(tf.global_variables_initializer())
+    sess.run(tf.compat.v1.global_variables_initializer())
     cur_best_pre_0 = 0.
     loss_loger, pre_loger, rec_loger, ndcg_loger, hit_loger = [], [], [], [], []
     stopping_step = 0

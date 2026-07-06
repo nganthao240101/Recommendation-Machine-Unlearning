@@ -376,12 +376,12 @@ if __name__ == '__main__':
         ckpt = tf.compat.v1.train.get_checkpoint_state(os.path.dirname(pretrain_path + '/checkpoint'))
         print(ckpt)
         if ckpt and ckpt.model_checkpoint_path:
-            sess.run(tf.global_variables_initializer())
+            sess.run(tf.compat.v1.global_variables_initializer())
             saver.restore(sess, ckpt.model_checkpoint_path)
             print('load the pretrained model parameters from: ', pretrain_path)
 
     else:
-        sess.run(tf.global_variables_initializer())
+        sess.run(tf.compat.v1.global_variables_initializer())
         #train single model
 
         for i in range(args.part_num):
