@@ -1,4 +1,5 @@
 import tensorflow as tf
+tf.compat.v1.disable_eager_execution()
 from utility.helper import *
 from utility.batch_test import *
 import os
@@ -20,12 +21,12 @@ class RecEraser_WMF(object):
         self.num_local = args.part_num
         self.C_I = C_I
 
-        self.input_ur = tf.placeholder(tf.int32, [None, None], name="input_ur")
-        self.dropout_keep_prob_local = tf.placeholder(tf.float32, name="dropout_keep_prob")
-        self.dropout_keep_prob = tf.placeholder(tf.float32, name="dropout_keep")
+        self.input_ur = tf.compat.v1.placeholder(tf.int32, [None, None], name="input_ur")
+        self.dropout_keep_prob_local = tf.compat.v1.placeholder(tf.float32, name="dropout_keep_prob")
+        self.dropout_keep_prob = tf.compat.v1.placeholder(tf.float32, name="dropout_keep")
 
-        self.users = tf.placeholder(tf.int32, shape=(None,))
-        self.pos_items = tf.placeholder(tf.int32, shape=(None,))
+        self.users = tf.compat.v1.placeholder(tf.int32, shape=(None,))
+        self.pos_items = tf.compat.v1.placeholder(tf.int32, shape=(None,))
         self.weights = self._init_weights()
 
         self.opt_local = []
@@ -54,15 +55,15 @@ class RecEraser_WMF(object):
                                                     name='item_embedding')
         # user attention
         all_weights['WA'] = tf.Variable(
-            tf.truncated_normal(shape=[self.emb_dim, self.attention_size], mean=0.0, stddev=tf.sqrt(
-                tf.div(2.0, self.attention_size + self.emb_dim))), dtype=tf.float32, name='WA')
+            tf.compat.v1.random.truncated_normal(shape=[self.emb_dim, self.attention_size], mean=0.0, stddev=tf.sqrt(
+                tf.math.divide(2.0, self.attention_size + self.emb_dim))), dtype=tf.float32, name='WA')
         all_weights['BA'] = tf.Variable(tf.constant(0.00, shape=[self.attention_size]), name="BA")
         all_weights['HA'] = tf.Variable(tf.constant(0.01, shape=[self.attention_size, 1]), name="HA")
 
         # item attention
         all_weights['WB'] = tf.Variable(
-            tf.truncated_normal(shape=[self.emb_dim, self.attention_size], mean=0.0, stddev=tf.sqrt(
-                tf.div(2.0, self.attention_size + self.emb_dim))), dtype=tf.float32, name='WB')
+            tf.compat.v1.random.truncated_normal(shape=[self.emb_dim, self.attention_size], mean=0.0, stddev=tf.sqrt(
+                tf.math.divide(2.0, self.attention_size + self.emb_dim))), dtype=tf.float32, name='WB')
         all_weights['BB'] = tf.Variable(tf.constant(0.00, shape=[self.attention_size]), name="BB")
         all_weights['HB'] = tf.Variable(tf.constant(0.01, shape=[self.attention_size, 1]), name="HB")
 
@@ -104,14 +105,14 @@ class RecEraser_WMF(object):
                     tf.einsum('abc,ck->abk', embs, self.weights['WA']) + self.weights['BA']),
                           self.weights['HA']))
 
-            embs_w = tf.div(embs_w, tf.reduce_sum(embs_w, 1, keep_dims=True))
+            embs_w = tf.math.divide(embs_w, tf.reduce_sum(embs_w, 1, keepdims=True))
         else:
             embs_w = tf.exp(
                 tf.einsum('abc,ck->abk', tf.nn.relu(
                     tf.einsum('abc,ck->abk', embs, self.weights['WB']) + self.weights['BB']),
                           self.weights['HB']))
 
-            embs_w = tf.div(embs_w, tf.reduce_sum(embs_w, 1, keep_dims=True))
+            embs_w = tf.math.divide(embs_w, tf.reduce_sum(embs_w, 1, keepdims=True))
 
         agg_emb = tf.reduce_sum(tf.multiply(embs_w, embs), 1)
 

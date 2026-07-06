@@ -162,7 +162,7 @@ class RecEraser_BPR(object):
                           self.weights['HA']))
 
             # Add epsilon to prevent division by zero
-            embs_w = tf.math.divide(embs_w + 1e-8, tf.reduce_sum(embs_w, 1, keep_dims=True) + 1e-8)
+            embs_w = tf.math.divide(embs_w + 1e-8, tf.reduce_sum(embs_w, 1, keepdims=True) + 1e-8)
         else:
             embs_w = tf.exp(
                 tf.einsum('abc,ck->abk', tf.nn.relu(
@@ -170,7 +170,7 @@ class RecEraser_BPR(object):
                           self.weights['HB']))
 
             # Add epsilon to prevent division by zero
-            embs_w = tf.math.divide(embs_w + 1e-8, tf.reduce_sum(embs_w, 1, keep_dims=True) + 1e-8)
+            embs_w = tf.math.divide(embs_w + 1e-8, tf.reduce_sum(embs_w, 1, keepdims=True) + 1e-8)
 
         # Clip attention weights to prevent explosion
         embs_w = tf.clip_by_value(embs_w, 1e-8, 1.0)
@@ -189,7 +189,7 @@ class RecEraser_BPR(object):
                       self.weights['HA']))
 
         # Add epsilon to prevent division by zero
-        embs_w = tf.math.divide(embs_w + 1e-8, tf.reduce_sum(embs_w, 1, keep_dims=True) + 1e-8)
+        embs_w = tf.math.divide(embs_w + 1e-8, tf.reduce_sum(embs_w, 1, keepdims=True) + 1e-8)
 
         # Clip attention weights to prevent explosion
         embs_w = tf.clip_by_value(embs_w, 1e-8, 1.0)
@@ -224,7 +224,7 @@ class RecEraser_BPR(object):
                 tf.einsum('aybc,ck->aybk', embs, self.weights['WA']) + self.weights['BA']),
                       self.weights['HA']))
 
-        embs_w = tf.math.divide(embs_w, tf.reduce_sum(embs_w, 2, keep_dims=True))
+        embs_w = tf.math.divide(embs_w, tf.reduce_sum(embs_w, 2, keepdims=True))
 
         agg_emb = tf.reduce_sum(tf.multiply(embs_w, embs), 2)
         batch_ratings = tf.reduce_sum(agg_emb,2)'''

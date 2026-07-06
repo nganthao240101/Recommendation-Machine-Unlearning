@@ -101,14 +101,14 @@ class RecEraser_LightGCN(object):
                     tf.einsum('abc,ck->abk', embs, self.weights['WA']) + self.weights['BA']),
                           self.weights['HA']))
 
-            embs_w = tf.math.divide(embs_w, tf.reduce_sum(embs_w, 1, keep_dims=True))
+            embs_w = tf.math.divide(embs_w, tf.reduce_sum(embs_w, 1, keepdims=True))
         else:
             embs_w = tf.exp(
                 tf.einsum('abc,ck->abk', tf.nn.relu(
                     tf.einsum('abc,ck->abk', embs, self.weights['WB']) + self.weights['BB']),
                           self.weights['HB']))
 
-            embs_w = tf.math.divide(embs_w, tf.reduce_sum(embs_w, 1, keep_dims=True))
+            embs_w = tf.math.divide(embs_w, tf.reduce_sum(embs_w, 1, keepdims=True))
 
         agg_emb = tf.reduce_sum(tf.multiply(embs_w, embs), 1)
 
