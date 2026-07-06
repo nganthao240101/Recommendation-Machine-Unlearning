@@ -361,7 +361,7 @@ if __name__ == '__main__':
 
 
 
-    config = tf.ConfigProto()
+    config = tf.compat.v1.ConfigProto()
     config.gpu_options.allow_growth = True
     sess = tf.Session(config=config)
 

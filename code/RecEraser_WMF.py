@@ -206,7 +206,7 @@ if __name__ == '__main__':
         ensureDir(weights_save_path)
         save_saver = tf.compat.v1.train.Saver(max_to_keep=1)
 
-    config = tf.ConfigProto()
+    config = tf.compat.v1.ConfigProto()
     config.gpu_options.allow_growth = True
     sess = tf.Session(config=config)
 

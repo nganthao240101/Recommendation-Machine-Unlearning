@@ -5,6 +5,7 @@ Wang Xiang et al. Neural Graph Collaborative Filtering. In SIGIR 2019.
 @author: Xiang Wang (xiangwang@u.nus.edu)
 '''
 import tensorflow as tf
+tf.compat.v1.disable_eager_execution()
 from utility.helper import *
 import numpy as np
 from scipy.sparse import csr_matrix
@@ -112,7 +113,7 @@ if __name__ == '__main__':
     model = BPRMF(data_config=config)
 
 
-    config = tf.ConfigProto()
+    config = tf.compat.v1.ConfigProto()
     config.gpu_options.allow_growth = True
     sess = tf.Session(config=config)
 

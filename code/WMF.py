@@ -1,5 +1,6 @@
 
 import tensorflow as tf
+tf.compat.v1.disable_eager_execution()
 from utility.helper import *
 import numpy as np
 from scipy.sparse import csr_matrix
@@ -120,7 +121,7 @@ if __name__ == '__main__':
 
 
 
-    config = tf.ConfigProto()
+    config = tf.compat.v1.ConfigProto()
     config.gpu_options.allow_growth = True
     sess = tf.Session(config=config)
     sess.run(tf.global_variables_initializer())

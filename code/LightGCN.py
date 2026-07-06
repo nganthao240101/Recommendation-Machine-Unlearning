@@ -2,6 +2,7 @@ import os
 import sys
 import threading
 import tensorflow as tf
+tf.compat.v1.disable_eager_execution()
 from tensorflow.python.client import device_lib
 from utility.helper import *
 from utility.batch_test import *
@@ -207,7 +208,7 @@ if __name__ == '__main__':
 
     model = LightGCN(data_config=config)
 
-    config = tf.ConfigProto()
+    config = tf.compat.v1.ConfigProto()
     config.gpu_options.allow_growth = True
     sess = tf.Session(config=config)
 
