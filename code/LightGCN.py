@@ -210,7 +210,7 @@ if __name__ == '__main__':
 
     config = tf.compat.v1.ConfigProto()
     config.gpu_options.allow_growth = True
-    sess = tf.Session(config=config)
+    sess = tf.compat.v1.Session(config=config)
 
     sess.run(tf.global_variables_initializer())
     cur_best_pre_0 = 0.
