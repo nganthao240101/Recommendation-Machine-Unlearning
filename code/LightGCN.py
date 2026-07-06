@@ -180,7 +180,7 @@ class LightGCN(object):
 
     def _convert_sp_mat_to_sp_tensor(self, X):
         coo = X.tocoo().astype(np.float32)
-        indices = np.mat([coo.row, coo.col]).transpose()
+        indices = np.asmatrix([coo.row, coo.col]).transpose()
         return tf.SparseTensor(indices, coo.data, coo.shape)
 
     def _dropout_sparse(self, X, keep_prob, n_nonzero_elems):
