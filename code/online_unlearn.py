@@ -201,11 +201,11 @@ def load_model_and_pretrain(args, ckpt_path):
            'n_items': data_generator.n_items}
     model = RecEraser_BPR(data_config=cfg)
     sess = tf.Session()
-    sess.run(tf.global_variables_initializer())
+    sess.run(tf.compat.v1.global_variables_initializer())
 
     # Try plain restore
     try:
-        saver = tf.train.Saver()
+        saver = tf.compat.v1.train.Saver()
         saver.restore(sess, ckpt_path)
     except Exception:
         # Fallback: strip optimizer slots AND shape-mismatched vars
@@ -213,7 +213,7 @@ def load_model_and_pretrain(args, ckpt_path):
         OPT_SLOTS = ('Adagrad', 'Adam', 'Momentum', 'RMSProp', 'ExponentialMovingAverage')
         ckpt_vars_all = {k: v for k, v in reader.get_variable_to_shape_map().items()
                          if not any(s in k for s in OPT_SLOTS)}
-        gvars = {v.op.name: v for v in tf.global_variables()}
+        gvars = {v.op.name: v for v in tf.compat.v1.global_variables()}
         var_list, used = {}, set()
         for c, cshape in ckpt_vars_all.items():
             short = c.split('/')[-1]
@@ -226,7 +226,7 @@ def load_model_and_pretrain(args, ckpt_path):
                     used.add(gn)
                     break
         print(f'   [info] matched {len(var_list)} / {len(ckpt_vars_all)} vars by name+shape', flush=True)
-        saver2 = tf.train.Saver(var_list=var_list)
+        saver2 = tf.compat.v1.train.Saver(var_list=var_list)
         saver2.restore(sess, ckpt_path)
     return sess, model, data_generator
 

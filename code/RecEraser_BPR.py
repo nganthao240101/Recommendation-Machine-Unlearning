@@ -344,7 +344,7 @@ if __name__ == '__main__':
 
     model = RecEraser_BPR(data_config=config)
 
-    saver = tf.train.Saver()
+    saver = tf.compat.v1.train.Saver()
 
     # *********************************************************
     # save the model parameters.
@@ -357,7 +357,7 @@ if __name__ == '__main__':
         if args.agg_type == 'mean':
             weights_save_path = weights_save_path + '_mean'
         ensureDir(weights_save_path)
-        save_saver = tf.train.Saver(max_to_keep=1)
+        save_saver = tf.compat.v1.train.Saver(max_to_keep=1)
 
 
 
@@ -373,7 +373,7 @@ if __name__ == '__main__':
         if args.agg_type == 'mean':
             pretrain_path = pretrain_path + '_mean'
 
-        ckpt = tf.train.get_checkpoint_state(os.path.dirname(pretrain_path + '/checkpoint'))
+        ckpt = tf.compat.v1.train.get_checkpoint_state(os.path.dirname(pretrain_path + '/checkpoint'))
         print(ckpt)
         if ckpt and ckpt.model_checkpoint_path:
             sess.run(tf.global_variables_initializer())
