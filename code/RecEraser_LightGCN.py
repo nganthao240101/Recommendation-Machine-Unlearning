@@ -1,5 +1,6 @@
 import sys
 import tensorflow as tf
+tf.compat.v1.disable_eager_execution()
 from utility.helper import *
 from utility.batch_test import *
 
