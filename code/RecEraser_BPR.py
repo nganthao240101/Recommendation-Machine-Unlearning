@@ -147,7 +147,7 @@ class RecEraser_BPR(object):
 
         batch_ratings = tf.matmul(u_e, pos_i_e, transpose_a=False, transpose_b=True)
 
-        opt = tf.train.AdagradOptimizer(learning_rate=self.lr, initial_accumulator_value=1e-8).minimize(loss)
+        opt = tf.compat.v1.train.AdagradOptimizer(learning_rate=self.lr, initial_accumulator_value=1e-8).minimize(loss)
 
         return opt, loss, mf_loss, reg_loss, batch_ratings
 
@@ -266,7 +266,7 @@ class RecEraser_BPR(object):
 
 
 
-        opt = tf.train.AdagradOptimizer(learning_rate=self.lr, initial_accumulator_value=1e-8).minimize(loss)
+        opt = tf.compat.v1.train.AdagradOptimizer(learning_rate=self.lr, initial_accumulator_value=1e-8).minimize(loss)
 
         return opt, loss, mf_loss, reg_loss, attn_reg, batch_ratings,u_w
 
@@ -325,7 +325,7 @@ class RecEraser_BPR(object):
             stack = tf.stack(rs, axis=2)                          # (B, N, n_local)
             batch_ratings = tf.reduce_mean(stack, axis=2)         # (B, N)
 
-        opt = tf.train.AdagradOptimizer(
+        opt = tf.compat.v1.train.AdagradOptimizer(
             learning_rate=self.lr, initial_accumulator_value=1e-8
         ).minimize(loss)
 

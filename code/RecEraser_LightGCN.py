@@ -90,7 +90,7 @@ class RecEraser_LightGCN(object):
         batch_ratings = tf.matmul(u_g_embeddings, pos_i_g_embeddings, transpose_a=False,
                                   transpose_b=True)
 
-        opt = tf.train.AdamOptimizer(learning_rate=self.lr).minimize(loss)
+        opt = tf.compat.v1.train.AdamOptimizer(learning_rate=self.lr).minimize(loss)
 
         return opt, loss, mf_loss, emb_loss, batch_ratings
 
@@ -149,7 +149,7 @@ class RecEraser_LightGCN(object):
 
         batch_ratings = tf.matmul(u_e, pos_i_e, transpose_a=False, transpose_b=True)
 
-        opt = tf.train.AdamOptimizer(learning_rate=self.lr).minimize(loss)
+        opt = tf.compat.v1.train.AdamOptimizer(learning_rate=self.lr).minimize(loss)
         
 
         return opt, loss, mf_loss, batch_ratings, u_w
@@ -204,7 +204,7 @@ class RecEraser_LightGCN(object):
 
         batch_ratings = tf.matmul(u_g_embeddings, pos_i_g_embeddings, transpose_a=False, transpose_b=True)
 
-        opt = tf.train.AdamOptimizer(learning_rate=self.lr).minimize(loss)
+        opt = tf.compat.v1.train.AdamOptimizer(learning_rate=self.lr).minimize(loss)
         
 
         return opt, loss, mf_loss, batch_ratings, u_w
