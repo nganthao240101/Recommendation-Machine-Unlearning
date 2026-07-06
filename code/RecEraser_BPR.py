@@ -89,22 +89,22 @@ class RecEraser_BPR(object):
     def _init_weights(self):
         all_weights = dict()
 
-        initializer = tf.contrib.layers.xavier_initializer()
+        initializer = tf.keras.initializers.GlorotUniform()
 
         all_weights['user_embedding'] = tf.Variable(initializer([self.n_users, self.num_local, self.emb_dim]), name='user_embedding')
         all_weights['item_embedding'] = tf.Variable(initializer([self.n_items, self.num_local, self.emb_dim]), name='item_embedding')
 
         # user attention
         all_weights['WA'] = tf.Variable(
-            tf.truncated_normal(shape=[self.emb_dim, self.attention_size], mean=0.0, stddev=tf.sqrt(
-                tf.div(2.0, self.attention_size + self.emb_dim))), dtype=tf.float32, name='WA')
+            tf.random.truncated_normal(shape=[self.emb_dim, self.attention_size], mean=0.0, stddev=tf.sqrt(
+                2.0 / (self.attention_size + self.emb_dim))), dtype=tf.float32, name='WA')
         all_weights['BA'] = tf.Variable(tf.constant(0.00, shape=[self.attention_size]), name="BA")
         all_weights['HA'] = tf.Variable(tf.constant(0.01, shape=[self.attention_size, 1]), name="HA")
 
         # item attention
         all_weights['WB'] = tf.Variable(
-            tf.truncated_normal(shape=[self.emb_dim, self.attention_size], mean=0.0, stddev=tf.sqrt(
-                tf.div(2.0, self.attention_size + self.emb_dim))), dtype=tf.float32, name='WB')
+            tf.random.truncated_normal(shape=[self.emb_dim, self.attention_size], mean=0.0, stddev=tf.sqrt(
+                2.0 / (self.attention_size + self.emb_dim))), dtype=tf.float32, name='WB')
         all_weights['BB'] = tf.Variable(tf.constant(0.00, shape=[self.attention_size]), name="BB")
         all_weights['HB'] = tf.Variable(tf.constant(0.01, shape=[self.attention_size, 1]), name="HB")
 
@@ -162,7 +162,7 @@ class RecEraser_BPR(object):
                           self.weights['HA']))
 
             # Add epsilon to prevent division by zero
-            embs_w = tf.div(embs_w + 1e-8, tf.reduce_sum(embs_w, 1, keep_dims=True) + 1e-8)
+            embs_w = tf.math.divide(embs_w + 1e-8, tf.reduce_sum(embs_w, 1, keep_dims=True) + 1e-8)
         else:
             embs_w = tf.exp(
                 tf.einsum('abc,ck->abk', tf.nn.relu(
@@ -170,7 +170,7 @@ class RecEraser_BPR(object):
                           self.weights['HB']))
 
             # Add epsilon to prevent division by zero
-            embs_w = tf.div(embs_w + 1e-8, tf.reduce_sum(embs_w, 1, keep_dims=True) + 1e-8)
+            embs_w = tf.math.divide(embs_w + 1e-8, tf.reduce_sum(embs_w, 1, keep_dims=True) + 1e-8)
 
         # Clip attention weights to prevent explosion
         embs_w = tf.clip_by_value(embs_w, 1e-8, 1.0)
@@ -189,7 +189,7 @@ class RecEraser_BPR(object):
                       self.weights['HA']))
 
         # Add epsilon to prevent division by zero
-        embs_w = tf.div(embs_w + 1e-8, tf.reduce_sum(embs_w, 1, keep_dims=True) + 1e-8)
+        embs_w = tf.math.divide(embs_w + 1e-8, tf.reduce_sum(embs_w, 1, keep_dims=True) + 1e-8)
 
         # Clip attention weights to prevent explosion
         embs_w = tf.clip_by_value(embs_w, 1e-8, 1.0)
@@ -224,7 +224,7 @@ class RecEraser_BPR(object):
                 tf.einsum('aybc,ck->aybk', embs, self.weights['WA']) + self.weights['BA']),
                       self.weights['HA']))
 
-        embs_w = tf.div(embs_w, tf.reduce_sum(embs_w, 2, keep_dims=True))
+        embs_w = tf.math.divide(embs_w, tf.reduce_sum(embs_w, 2, keep_dims=True))
 
         agg_emb = tf.reduce_sum(tf.multiply(embs_w, embs), 2)
         batch_ratings = tf.reduce_sum(agg_emb,2)'''
