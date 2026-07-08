@@ -280,16 +280,15 @@ class RecEraser_BPR(object):
         BPR is then applied on these averaged scores.
 
         No trans_W / trans_B / attention is used.
-        Per-shard embeddings are frozen during aggregation phase (stop_gradient)
-        to be fair with attention aggregation.
+        Mean has NO aggregation weights to train, so embeddings are updated
+        continuously (no stop_gradient) - this is expected behavior.
         """
-        # Stop gradient: embeddings are frozen after phase 1
-        u_es = tf.stop_gradient(tf.nn.embedding_lookup(
-            self.weights['user_embedding'], self.users))
-        pos_i_es = tf.stop_gradient(tf.nn.embedding_lookup(
-            self.weights['item_embedding'], self.pos_items))
-        neg_i_es = tf.stop_gradient(tf.nn.embedding_lookup(
-            self.weights['item_embedding'], self.neg_items))
+        u_es = tf.nn.embedding_lookup(
+            self.weights['user_embedding'], self.users)
+        pos_i_es = tf.nn.embedding_lookup(
+            self.weights['item_embedding'], self.pos_items)
+        neg_i_es = tf.nn.embedding_lookup(
+            self.weights['item_embedding'], self.neg_items)
         # shapes: (B, n_local, emb_dim)
 
         # per-shard positive/negative scores: (B, n_local)
