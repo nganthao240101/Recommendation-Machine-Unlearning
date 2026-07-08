@@ -94,19 +94,19 @@ class RecEraser_BPR(object):
         all_weights['user_embedding'] = tf.Variable(initializer([self.n_users, self.num_local, self.emb_dim]), name='user_embedding')
         all_weights['item_embedding'] = tf.Variable(initializer([self.n_items, self.num_local, self.emb_dim]), name='item_embedding')
 
-        # user attention
+        # user attention - improved initialization
         all_weights['WA'] = tf.Variable(
             tf.random.truncated_normal(shape=[self.emb_dim, self.attention_size], mean=0.0, stddev=tf.sqrt(
                 2.0 / (self.attention_size + self.emb_dim))), dtype=tf.float32, name='WA')
-        all_weights['BA'] = tf.Variable(tf.constant(0.00, shape=[self.attention_size]), name="BA")
-        all_weights['HA'] = tf.Variable(tf.constant(0.01, shape=[self.attention_size, 1]), name="HA")
+        all_weights['BA'] = tf.Variable(tf.zeros([self.attention_size]), name="BA")
+        all_weights['HA'] = tf.Variable(tf.ones([self.attention_size, 1]) * 0.1, name="HA")  # Start with small but non-zero
 
-        # item attention
+        # item attention - improved initialization
         all_weights['WB'] = tf.Variable(
             tf.random.truncated_normal(shape=[self.emb_dim, self.attention_size], mean=0.0, stddev=tf.sqrt(
                 2.0 / (self.attention_size + self.emb_dim))), dtype=tf.float32, name='WB')
-        all_weights['BB'] = tf.Variable(tf.constant(0.00, shape=[self.attention_size]), name="BB")
-        all_weights['HB'] = tf.Variable(tf.constant(0.01, shape=[self.attention_size, 1]), name="HB")
+        all_weights['BB'] = tf.Variable(tf.zeros([self.attention_size]), name="BB")
+        all_weights['HB'] = tf.Variable(tf.ones([self.attention_size, 1]) * 0.1, name="HB")  # Start with small but non-zero
 
         # trans weights
 
@@ -156,27 +156,21 @@ class RecEraser_BPR(object):
     def attention_based_agg(self,embs,flag):
 
         if flag == 0:
-            embs_w = tf.exp(
-                tf.einsum('abc,ck->abk', tf.nn.relu(
-                    tf.einsum('abc,ck->abk', embs, self.weights['WA']) + self.weights['BA']),
-                          self.weights['HA']))
-
-            # Add epsilon to prevent division by zero
-            embs_w = tf.math.divide(embs_w + 1e-8, tf.reduce_sum(embs_w, 1, keepdims=True) + 1e-8)
+            # Attention: score = v^T * ReLU(WA * emb + BA)
+            attention_score = tf.einsum('abc,ck->abk', tf.nn.relu(
+                tf.einsum('abc,ck->abk', embs, self.weights['WA']) + self.weights['BA']),
+                      self.weights['HA'])
+            # Softmax-like normalization
+            embs_w = tf.nn.softmax(attention_score, axis=1)
         else:
-            embs_w = tf.exp(
-                tf.einsum('abc,ck->abk', tf.nn.relu(
-                    tf.einsum('abc,ck->abk', embs, self.weights['WB']) + self.weights['BB']),
-                          self.weights['HB']))
+            attention_score = tf.einsum('abc,ck->abk', tf.nn.relu(
+                tf.einsum('abc,ck->abk', embs, self.weights['WB']) + self.weights['BB']),
+                      self.weights['HB'])
+            # Softmax-like normalization
+            embs_w = tf.nn.softmax(attention_score, axis=1)
 
-            # Add epsilon to prevent division by zero
-            embs_w = tf.math.divide(embs_w + 1e-8, tf.reduce_sum(embs_w, 1, keepdims=True) + 1e-8)
-
-        # Clip attention weights to prevent explosion
-        embs_w = tf.clip_by_value(embs_w, 1e-8, 1.0)
-
+        # Weighted sum of embeddings
         agg_emb = tf.reduce_sum(tf.multiply(embs_w, embs), 1)
-
 
         return agg_emb, embs_w
 
@@ -250,11 +244,8 @@ class RecEraser_BPR(object):
 
         mf_loss, _ = self.create_bpr_loss(u_e_drop, pos_i_e, neg_i_e)
 
-        # Light regularization for attention weights (reduced from 1e-3 to 1e-5)
-        attn_reg = 1e-5*(tf.nn.l2_loss(self.weights['WA']) + tf.nn.l2_loss(self.weights['BA']) + tf.nn.l2_loss(
-            self.weights['HA']) + tf.nn.l2_loss(self.weights['WB']) + tf.nn.l2_loss(self.weights['BB']) + tf.nn.l2_loss(
-            self.weights['HB']))
-
+        # Very light regularization - only HA and HB are key attention parameters
+        attn_reg = 1e-6*(tf.nn.l2_loss(self.weights['HA']) + tf.nn.l2_loss(self.weights['HB']))
         trans_reg = 1e-6*(tf.nn.l2_loss(self.weights['trans_W']) + tf.nn.l2_loss(self.weights['trans_B']))
 
         reg_loss = attn_reg + trans_reg
