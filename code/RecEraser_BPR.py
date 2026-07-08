@@ -280,16 +280,16 @@ class RecEraser_BPR(object):
         BPR is then applied on these averaged scores.
 
         No trans_W / trans_B / attention is used.
-        Unlike the attention aggregator, the mean aggregator DOES update
-        the per-shard embeddings through BPR, so we do NOT use
-        tf.stop_gradient here.
+        Per-shard embeddings are frozen during aggregation phase (stop_gradient)
+        to be fair with attention aggregation.
         """
-        u_es = tf.nn.embedding_lookup(
-            self.weights['user_embedding'], self.users)
-        pos_i_es = tf.nn.embedding_lookup(
-            self.weights['item_embedding'], self.pos_items)
-        neg_i_es = tf.nn.embedding_lookup(
-            self.weights['item_embedding'], self.neg_items)
+        # Stop gradient: embeddings are frozen after phase 1
+        u_es = tf.stop_gradient(tf.nn.embedding_lookup(
+            self.weights['user_embedding'], self.users))
+        pos_i_es = tf.stop_gradient(tf.nn.embedding_lookup(
+            self.weights['item_embedding'], self.pos_items))
+        neg_i_es = tf.stop_gradient(tf.nn.embedding_lookup(
+            self.weights['item_embedding'], self.neg_items))
         # shapes: (B, n_local, emb_dim)
 
         # per-shard positive/negative scores: (B, n_local)
