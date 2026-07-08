@@ -4,13 +4,9 @@ Usage: python show_results.py
 """
 import os
 import sys
-import json
 import glob
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-from utility.parser import parse_args
-from utility.load_data import Data
-from utility.batch_test import test
 
 def find_weights(model_type, part_type, agg_type):
     """Find weights folder for given configuration."""
