@@ -17,14 +17,26 @@ def find_weights(model_type, part_type, agg_type):
     """Find weights folder for given configuration."""
     base_path = 'weights/ml-1m/{}'.format(model_type)
 
-    agg_suffix = '' if agg_type == 'attention' else '_mean'
-    pattern = '{}/*type-{}{}*/'.format(base_path, part_type, agg_suffix)
+    # Try multiple patterns to find the weights folder
+    patterns = []
 
-    matches = glob.glob(pattern)
-    if matches:
-        checkpoint_file = os.path.join(matches[0], 'checkpoint')
-        if os.path.exists(checkpoint_file):
-            return matches[0]
+    if agg_type == 'attention':
+        # Attention: try both with and without _mean suffix
+        patterns.append('{}/*type-{}_r*/'.format(base_path, part_type))
+        patterns.append('{}/*type-{}_r*_mean*/'.format(base_path, part_type))
+    else:  # mean
+        # MEAN: try with _mean suffix first, then without
+        patterns.append('{}/*type-{}_r*_mean*/'.format(base_path, part_type))
+        patterns.append('{}/*type-{}_r*/'.format(base_path, part_type))
+
+    for pattern in patterns:
+        matches = glob.glob(pattern)
+        if matches:
+            for match in matches:
+                checkpoint_file = os.path.join(match, 'checkpoint')
+                if os.path.exists(checkpoint_file):
+                    return match
+
     return None
 
 def get_checkpoint_path(weights_path):
