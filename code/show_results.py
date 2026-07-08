@@ -50,9 +50,6 @@ def load_train_test_data():
     all_users = set()
     n_items = 0
 
-    print(f"Loading train data from: {train_file}")
-    print(f"Loading test data from: {test_file}")
-
     with open(train_file, 'r') as f:
         for line in f:
             parts = line.strip().split()
@@ -91,25 +88,16 @@ def ndcg_at_k(rank, ground_truth, k):
 
 def evaluate_model(weights_path, n_users, n_items, train_data, test_data, Ks=[10, 20, 50]):
     """Evaluate model using saved weights."""
-    # Load checkpoint
-    saver = tf.compat.v1.train.Saver()
-    ckpt_path = get_checkpoint_path(weights_path)
-
+    # Create a new session
     sess = tf.compat.v1.Session()
-    saver.restore(sess, ckpt_path)
 
-    # Get all variables
-    all_vars = tf.compat.v1.global_variables()
+    # Restore checkpoint directly
+    saver = tf.compat.v1.train.import_meta_graph(weights_path + '.meta')
+    saver.restore(sess, tf.train.latest_checkpoint(weights_path))
 
-    # Find user and item embeddings
-    user_emb = None
-    item_emb = None
-
-    for var in all_vars:
-        if 'user_embedding' in var.name and 'trans' not in var.name:
-            user_emb = sess.run(var)
-        elif 'item_embedding' in var.name and 'trans' not in var.name:
-            item_emb = sess.run(var)
+    # Get embeddings from the saved graph
+    user_emb = sess.run(tf.compat.v1.get_collection('user_embedding')[0])
+    item_emb = sess.run(tf.compat.v1.get_collection('item_embedding')[0])
 
     sess.close()
 
@@ -121,8 +109,6 @@ def evaluate_model(weights_path, n_users, n_items, train_data, test_data, Ks=[10
         user_emb = np.mean(user_emb, axis=1)
     if len(item_emb.shape) == 3:
         item_emb = np.mean(item_emb, axis=1)
-
-    print(f"  User emb shape: {user_emb.shape}, Item emb shape: {item_emb.shape}")
 
     # Evaluate
     results = {}
@@ -170,8 +156,6 @@ def main():
     n_users = max(train_data.keys(), default=0) + 1
 
     print(f"\nLoaded: {n_users} users, {n_items} items")
-    print(f"Train interactions: {sum(len(v) for v in train_data.values())}")
-    print(f"Test users: {len(test_data)}")
 
     models = [
         ('RecEraser_BPR', 'BPR'),
@@ -221,8 +205,6 @@ def main():
                             model_results[f'{part_name}_{agg_display}'] = None
                     except Exception as e:
                         print(f"  ERROR: {e}")
-                        import traceback
-                        traceback.print_exc()
                         model_results[f'{part_name}_{agg_display}'] = None
                 else:
                     print(f"\n{part_name} | {agg_display}: NOT TRAINED")
@@ -231,9 +213,9 @@ def main():
         all_results[model_display] = model_results
 
     # Summary table
-    print("\n" + "=" * 80)
+    print("\n" + "=" * 90)
     print("SUMMARY TABLE")
-    print("=" * 80)
+    print("=" * 90)
 
     for model_display in ['BPR', 'LightGCN']:
         if model_display in all_results:
