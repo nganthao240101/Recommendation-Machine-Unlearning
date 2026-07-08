@@ -250,12 +250,12 @@ class RecEraser_BPR(object):
 
         mf_loss, _ = self.create_bpr_loss(u_e_drop, pos_i_e, neg_i_e)
 
-        # Stronger regularization for attention weights
-        attn_reg = 1e-3*(tf.nn.l2_loss(self.weights['WA']) + tf.nn.l2_loss(self.weights['BA']) + tf.nn.l2_loss(
+        # Light regularization for attention weights (reduced from 1e-3 to 1e-5)
+        attn_reg = 1e-5*(tf.nn.l2_loss(self.weights['WA']) + tf.nn.l2_loss(self.weights['BA']) + tf.nn.l2_loss(
             self.weights['HA']) + tf.nn.l2_loss(self.weights['WB']) + tf.nn.l2_loss(self.weights['BB']) + tf.nn.l2_loss(
             self.weights['HB']))
 
-        trans_reg = 1e-4*(tf.nn.l2_loss(self.weights['trans_W']) + tf.nn.l2_loss(self.weights['trans_B']))
+        trans_reg = 1e-6*(tf.nn.l2_loss(self.weights['trans_W']) + tf.nn.l2_loss(self.weights['trans_B']))
 
         reg_loss = attn_reg + trans_reg
 
