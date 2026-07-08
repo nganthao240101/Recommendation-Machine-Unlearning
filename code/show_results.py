@@ -95,23 +95,33 @@ def evaluate_bpr_embeddings(weights_path, n_users, n_items, train_data, test_dat
 
     print(f"  Found {len(var_shape_map)} variables in checkpoint")
 
-    # Find embeddings
+    # Print all variable names for debugging
+    print("  Variables:")
+    for name in sorted(var_shape_map.keys()):
+        print(f"    - {name}: {var_shape_map[name]}")
+
+    # Find embeddings (search with flexible matching)
     user_emb = None
     item_emb = None
     trans_W = None
     trans_B = None
 
     for name in var_shape_map.keys():
-        if 'user_embedding:0' in name and 'trans' not in name:
+        name_lower = name.lower()
+        # Match user_embedding variations
+        if 'user' in name_lower and 'embedding' in name_lower and 'trans' not in name_lower:
             user_emb = checkpoint.get_tensor(name)
             print(f"  User emb: {name} -> {user_emb.shape}")
-        elif 'item_embedding:0' in name and 'trans' not in name:
+        # Match item_embedding variations
+        elif 'item' in name_lower and 'embedding' in name_lower and 'trans' not in name_lower:
             item_emb = checkpoint.get_tensor(name)
             print(f"  Item emb: {name} -> {item_emb.shape}")
-        elif 'trans_W:0' in name:
+        # Match trans_W variations
+        elif 'trans_w' in name_lower:
             trans_W = checkpoint.get_tensor(name)
             print(f"  Trans W: {name} -> {trans_W.shape}")
-        elif 'trans_B:0' in name:
+        # Match trans_B variations
+        elif 'trans_b' in name_lower:
             trans_B = checkpoint.get_tensor(name)
             print(f"  Trans B: {name} -> {trans_B.shape}")
 
