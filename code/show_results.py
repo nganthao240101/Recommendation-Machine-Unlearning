@@ -17,7 +17,10 @@ def find_weights(model_type, part_type, agg_type):
 
     matches = glob.glob(pattern)
     if matches:
-        return matches[0]
+        # Check if checkpoint exists
+        checkpoint_file = os.path.join(matches[0], 'checkpoint')
+        if os.path.exists(checkpoint_file):
+            return matches[0]
     return None
 
 def main():
@@ -55,33 +58,45 @@ def main():
             for agg_type, agg_display in agg_types:
                 weights_path = find_weights(model_name, part_type, agg_type)
 
-                if weights_path and os.path.exists(weights_path):
-                    print(f"\n{part_name} | {agg_display}: {weights_path}")
-                    print(f"  Weights found: YES ✓")
-                    model_results[agg_type][part_name] = "Found"
+                if weights_path:
+                    checkpoint_file = os.path.join(weights_path, 'checkpoint')
+                    with open(checkpoint_file, 'r') as f:
+                        content = f.read()
+                        # Extract step number
+                        if 'model_checkpoint_path:' in content:
+                            for line in content.split('\n'):
+                                if 'model_checkpoint_path:' in line:
+                                    step = line.split('model_checkpoint_path:')[1].strip().split('-')[-1]
+                                    break
+                        else:
+                            step = "unknown"
+
+                    print(f"{part_name:10} | {agg_display:10} | Step: {step}")
+                    model_results[agg_type][part_name] = weights_path
                 else:
-                    print(f"\n{part_name} | {agg_display}: Not found")
-                    print(f"  Weights found: NO ✗")
-                    model_results[agg_type][part_name] = "N/A"
+                    print(f"{part_name:10} | {agg_display:10} | NOT TRAINED")
+                    model_results[agg_type][part_name] = None
 
         results[model_display] = model_results
 
     print("\n" + "=" * 70)
-    print("SUMMARY")
+    print("WEIGHTS PATHS")
     print("=" * 70)
 
     for model_name, model_display in models:
         print(f"\n{model_display}:")
-        print("-" * 50)
         for agg_type in ['attention', 'mean']:
             agg_display = 'Attention' if agg_type == 'attention' else 'MEAN'
-            print(f"  {agg_display}:")
+            print(f"\n  {agg_display}:")
             for part_type, part_name in partitions:
-                status = results[model_display][agg_type].get(part_name, 'N/A')
-                print(f"    {part_name}: {status}")
+                wp = results[model_display][agg_type].get(part_name)
+                if wp:
+                    print(f"    {part_name}: {wp}")
+                else:
+                    print(f"    {part_name}: (not trained)")
 
     print("\n" + "=" * 70)
-    print("To run evaluation, use --test_flag full with training scripts")
+    print("Run with --test_flag full to get R@K and NDCG@K metrics")
     print("=" * 70)
 
 if __name__ == '__main__':
