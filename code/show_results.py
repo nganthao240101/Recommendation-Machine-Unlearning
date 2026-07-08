@@ -88,21 +88,37 @@ def ndcg_at_k(rank, ground_truth, k):
 
 def evaluate_model(weights_path, n_users, n_items, train_data, test_data, Ks=[10, 20, 50]):
     """Evaluate model using saved weights."""
-    # Create a new session
-    sess = tf.compat.v1.Session()
+    # List all variables in checkpoint
+    checkpoint = tf.train.load_checkpoint(weights_path)
+    var_shape_map = checkpoint.get_variable_to_shape_map()
 
-    # Restore checkpoint directly
-    meta_file = os.path.join(weights_path, 'weights.meta')
-    saver = tf.compat.v1.train.import_meta_graph(meta_file)
-    saver.restore(sess, tf.train.latest_checkpoint(weights_path))
+    print(f"  Found {len(var_shape_map)} variables in checkpoint")
 
-    # Get embeddings from the saved graph
-    user_emb = sess.run(tf.compat.v1.get_collection('user_embedding')[0])
-    item_emb = sess.run(tf.compat.v1.get_collection('item_embedding')[0])
+    # Filter only model variables (exclude optimizer states)
+    model_vars = {}
+    for name in var_shape_map.keys():
+        # Only keep embedding and weight variables
+        if 'user_embedding' in name or 'item_embedding' in name or 'trans_' in name:
+            model_vars[name] = checkpoint.get_tensor(name)
 
-    sess.close()
+    if not model_vars:
+        print("  ERROR: No model variables found")
+        return None
+
+    # Get embeddings
+    user_emb = None
+    item_emb = None
+
+    for name, tensor in model_vars.items():
+        if 'user_embedding' in name and 'trans' not in name:
+            user_emb = tensor
+            print(f"  User emb: {name} -> {tensor.shape}")
+        elif 'item_embedding' in name and 'trans' not in name:
+            item_emb = tensor
+            print(f"  Item emb: {name} -> {tensor.shape}")
 
     if user_emb is None or item_emb is None:
+        print("  ERROR: Could not find embeddings")
         return None
 
     # Average across local models if multi-dimensional
@@ -148,9 +164,9 @@ def evaluate_model(weights_path, n_users, n_items, train_data, test_data, Ks=[10
     return avg_results
 
 def main():
-    print("=" * 80)
+    print("=" * 90)
     print("NUM-10 ORACLE RESULTS - EVALUATION FROM WEIGHTS")
-    print("=" * 80)
+    print("=" * 90)
 
     # Load data
     train_data, test_data, n_items = load_train_test_data()
@@ -178,9 +194,9 @@ def main():
     all_results = {}
 
     for model_name, model_display in models:
-        print(f"\n{'=' * 80}")
+        print(f"\n{'=' * 90}")
         print(f"MODEL: {model_display}")
-        print("=" * 80)
+        print("=" * 90)
 
         model_results = {}
 
@@ -190,6 +206,7 @@ def main():
 
                 if weights_path:
                     print(f"\nEvaluating {part_name} | {agg_display}...")
+                    print(f"  Path: {weights_path}")
 
                     try:
                         results = evaluate_model(weights_path, n_users, n_items, train_data, test_data)
