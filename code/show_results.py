@@ -92,7 +92,8 @@ def evaluate_model(weights_path, n_users, n_items, train_data, test_data, Ks=[10
     sess = tf.compat.v1.Session()
 
     # Restore checkpoint directly
-    saver = tf.compat.v1.train.import_meta_graph(weights_path + '.meta')
+    meta_file = os.path.join(weights_path, 'weights.meta')
+    saver = tf.compat.v1.train.import_meta_graph(meta_file)
     saver.restore(sess, tf.train.latest_checkpoint(weights_path))
 
     # Get embeddings from the saved graph
