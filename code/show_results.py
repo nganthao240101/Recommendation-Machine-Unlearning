@@ -97,8 +97,13 @@ def evaluate_weights(users, items, train_data, test_data, Ks=[10, 20, 50]):
 
 def load_data_for_eval():
     """Load data for evaluation."""
-    train_file = './data/ml-1m/train.txt'
-    test_file = './data/ml-1m/test.txt'
+    # Get project root (parent of 'code' folder)
+    script_dir = os.path.dirname(os.path.abspath(__file__))
+    project_root = os.path.dirname(script_dir)
+    data_path = os.path.join(project_root, 'data', 'ml-1m')
+
+    train_file = os.path.join(data_path, 'train.txt')
+    test_file = os.path.join(data_path, 'test.txt')
 
     train_data = {}
     test_data = {}
