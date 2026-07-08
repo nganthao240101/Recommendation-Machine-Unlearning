@@ -21,11 +21,9 @@ def find_weights(model_type, part_type, agg_type):
     patterns = []
 
     if agg_type == 'attention':
-        # Attention: try both with and without _mean suffix
         patterns.append('{}/*type-{}_r*/'.format(base_path, part_type))
         patterns.append('{}/*type-{}_r*_mean*/'.format(base_path, part_type))
     else:  # mean
-        # MEAN: try with _mean suffix first, then without
         patterns.append('{}/*type-{}_r*_mean*/'.format(base_path, part_type))
         patterns.append('{}/*type-{}_r*/'.format(base_path, part_type))
 
@@ -37,15 +35,6 @@ def find_weights(model_type, part_type, agg_type):
                 if os.path.exists(checkpoint_file):
                     return match
 
-    return None
-
-def get_checkpoint_path(weights_path):
-    """Get the full checkpoint path."""
-    checkpoint_file = os.path.join(weights_path, 'checkpoint')
-    with open(checkpoint_file, 'r') as f:
-        for line in f:
-            if 'model_checkpoint_path:' in line:
-                return os.path.join(weights_path, line.split('model_checkpoint_path:')[1].strip().strip('"'))
     return None
 
 def load_train_test_data():
@@ -98,46 +87,58 @@ def ndcg_at_k(rank, ground_truth, k):
     idcg = sum(1.0 / np.log2(i + 2) for i in range(min(len(ground_truth), k)))
     return dcg / idcg if idcg > 0 else 0
 
-def evaluate_model(weights_path, n_users, n_items, train_data, test_data, Ks=[10, 20, 50]):
-    """Evaluate model using saved weights."""
-    # List all variables in checkpoint
+def evaluate_bpr_embeddings(weights_path, n_users, n_items, train_data, test_data, is_attention=False, Ks=[10, 20, 50]):
+    """Evaluate BPR model by loading embeddings directly."""
+    # Load checkpoint
     checkpoint = tf.train.load_checkpoint(weights_path)
     var_shape_map = checkpoint.get_variable_to_shape_map()
 
     print(f"  Found {len(var_shape_map)} variables in checkpoint")
 
-    # Filter only model variables (exclude optimizer states)
-    model_vars = {}
-    for name in var_shape_map.keys():
-        # Only keep embedding and weight variables
-        if 'user_embedding' in name or 'item_embedding' in name or 'trans_' in name:
-            model_vars[name] = checkpoint.get_tensor(name)
-
-    if not model_vars:
-        print("  ERROR: No model variables found")
-        return None
-
-    # Get embeddings
+    # Find embeddings
     user_emb = None
     item_emb = None
+    trans_W = None
+    trans_B = None
 
-    for name, tensor in model_vars.items():
-        if 'user_embedding' in name and 'trans' not in name:
-            user_emb = tensor
-            print(f"  User emb: {name} -> {tensor.shape}")
-        elif 'item_embedding' in name and 'trans' not in name:
-            item_emb = tensor
-            print(f"  Item emb: {name} -> {tensor.shape}")
+    for name in var_shape_map.keys():
+        if 'user_embedding:0' in name and 'trans' not in name:
+            user_emb = checkpoint.get_tensor(name)
+            print(f"  User emb: {name} -> {user_emb.shape}")
+        elif 'item_embedding:0' in name and 'trans' not in name:
+            item_emb = checkpoint.get_tensor(name)
+            print(f"  Item emb: {name} -> {item_emb.shape}")
+        elif 'trans_W:0' in name:
+            trans_W = checkpoint.get_tensor(name)
+            print(f"  Trans W: {name} -> {trans_W.shape}")
+        elif 'trans_B:0' in name:
+            trans_B = checkpoint.get_tensor(name)
+            print(f"  Trans B: {name} -> {trans_B.shape}")
 
     if user_emb is None or item_emb is None:
         print("  ERROR: Could not find embeddings")
         return None
 
-    # Average across local models if multi-dimensional
-    if len(user_emb.shape) == 3:
+    # For ATTENTION model: transform embeddings with trans_W, trans_B
+    if is_attention and trans_W is not None and trans_B is not None:
+        print("  Applying attention transformation (trans_W, trans_B)...")
+
+        # Transform: emb_transformed = emb @ trans_W + trans_B
+        # user_emb: (n_users, num_local, emb_dim) -> (n_users, num_local, emb_dim)
+        # trans_W: (num_local, emb_dim, emb_dim)
+        user_emb = np.einsum('ijk,jkl->ijl', user_emb, trans_W) + trans_B
+        item_emb = np.einsum('ijk,jkl->ijl', item_emb, trans_W) + trans_B
+
+        # Then average across shards
+        user_emb = np.mean(user_emb, axis=1)  # (n_users, emb_dim)
+        item_emb = np.mean(item_emb, axis=1)   # (n_items, emb_dim)
+    else:
+        # Simple mean aggregation
+        print("  Using simple mean aggregation")
         user_emb = np.mean(user_emb, axis=1)
-    if len(item_emb.shape) == 3:
         item_emb = np.mean(item_emb, axis=1)
+
+    print(f"  Final user emb shape: {user_emb.shape}, Item emb shape: {item_emb.shape}")
 
     # Evaluate
     results = {}
@@ -188,7 +189,6 @@ def main():
 
     models = [
         ('RecEraser_BPR', 'BPR'),
-        ('RecEraser_LightGCN', 'LightGCN')
     ]
 
     partitions = [
@@ -220,8 +220,13 @@ def main():
                     print(f"\nEvaluating {part_name} | {agg_display}...")
                     print(f"  Path: {weights_path}")
 
+                    is_attention = (agg_type == 'attention')
+
                     try:
-                        results = evaluate_model(weights_path, n_users, n_items, train_data, test_data)
+                        results = evaluate_bpr_embeddings(
+                            weights_path, n_users, n_items, train_data, test_data,
+                            is_attention=is_attention
+                        )
                         if results:
                             print(f"  Recall@10: {results['Recall@10']:.6f}")
                             print(f"  Recall@20: {results['Recall@20']:.6f}")
@@ -235,6 +240,8 @@ def main():
                             model_results[f'{part_name}_{agg_display}'] = None
                     except Exception as e:
                         print(f"  ERROR: {e}")
+                        import traceback
+                        traceback.print_exc()
                         model_results[f'{part_name}_{agg_display}'] = None
                 else:
                     print(f"\n{part_name} | {agg_display}: NOT TRAINED")
