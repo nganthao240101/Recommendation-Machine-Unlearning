@@ -186,6 +186,21 @@ def evaluate_bpr_embeddings(weights_path, n_users, n_items, train_data, test_dat
 
     return avg_results
 
+def get_epochs_from_checkpoint(weights_path):
+    """Get number of epochs from checkpoint file."""
+    checkpoint_file = os.path.join(weights_path, 'checkpoint')
+    try:
+        with open(checkpoint_file, 'r') as f:
+            content = f.read()
+            # Look for step number in checkpoint path
+            import re
+            match = re.search(r'model_checkpoint_path:\s*"[^"]*-(\d+)"', content)
+            if match:
+                return int(match.group(1))
+    except:
+        pass
+    return None
+
 def main():
     print("=" * 90)
     print("NUM-10 ORACLE RESULTS - EVALUATION FROM WEIGHTS")
@@ -227,7 +242,9 @@ def main():
                 weights_path = find_weights(model_name, part_type, agg_type)
 
                 if weights_path:
-                    print(f"\nEvaluating {part_name} | {agg_display}...")
+                    epochs = get_epochs_from_checkpoint(weights_path)
+                    epochs_str = f"({epochs} epochs)" if epochs else ""
+                    print(f"\nEvaluating {part_name} | {agg_display} {epochs_str}...")
                     print(f"  Path: {weights_path}")
 
                     is_attention = (agg_type == 'attention')
