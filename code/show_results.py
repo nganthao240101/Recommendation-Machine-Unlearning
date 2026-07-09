@@ -96,7 +96,7 @@ def evaluate_bpr_embeddings(weights_path, n_users, n_items, train_data, test_dat
     print(f"  Found {len(var_shape_map)} variables in checkpoint")
 
     # Print all variable names for debugging
-    print("  Variables:")
+    print("  All variables in checkpoint:")
     for name in sorted(var_shape_map.keys()):
         print(f"    - {name}: {var_shape_map[name]}")
 
