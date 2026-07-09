@@ -34,12 +34,12 @@ def parse_args():
                         help='Embedding size.')
     parser.add_argument('--layer_size', nargs='?', default='[64, 64, 64]',
                         help='Output sizes of every layer')
-    parser.add_argument('--batch_size', type=int, default=1024,
+    parser.add_argument('--batch_size', type=int, default=512,
                         help='Batch size.')
 
     parser.add_argument('--regs', nargs='?', default='[1e-3]',
                         help='Regularizations.')
-    parser.add_argument('--lr', type=float, default=0.001,
+    parser.add_argument('--lr', type=float, default=0.05,
                         help='Learning rate.')
 
     parser.add_argument('--model_type', nargs='?', default='',
