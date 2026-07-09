@@ -173,10 +173,11 @@ def setup_args(part_num, part_type, regs, agg_type, dataset='ml-1m'):
     args.pretrain = 0
     args.save_flag = 0
     args.verbose = 0
-    args.epoch = 1
-    args.epoch_agg = 1
-    args.batch_size = 1024
-    args.embed_size = 64
+    args.epoch = 1           # Retrain 1 epoch per shard for unlearning
+    args.epoch_agg = 1      # Retrain aggregation 1 epoch
+    args.batch_size = 512    # Paper: batch_size = 512
+    args.embed_size = 64     # Paper: d = 64
+    args.lr = 0.05          # Paper: lr = 0.05
     args.layer_size = '[64]'
     args.Ks = '[10, 20, 50]'
     args.dropout = 1.0
