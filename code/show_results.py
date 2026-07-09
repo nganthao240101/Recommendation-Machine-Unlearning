@@ -107,21 +107,24 @@ def evaluate_bpr_embeddings(weights_path, n_users, n_items, train_data, test_dat
     trans_B = None
 
     for name in var_shape_map.keys():
-        name_lower = name.lower()
-        # Match user_embedding variations
-        if 'user' in name_lower and 'embedding' in name_lower and 'trans' not in name_lower:
+        # Skip optimizer states
+        if '/Adagrad' in name or '/Adam' in name:
+            continue
+
+        # Main user_embedding
+        if name == 'user_embedding':
             user_emb = checkpoint.get_tensor(name)
             print(f"  User emb: {name} -> {user_emb.shape}")
-        # Match item_embedding variations
-        elif 'item' in name_lower and 'embedding' in name_lower and 'trans' not in name_lower:
+        # Main item_embedding
+        elif name == 'item_embedding':
             item_emb = checkpoint.get_tensor(name)
             print(f"  Item emb: {name} -> {item_emb.shape}")
-        # Match trans_W variations
-        elif 'trans_w' in name_lower:
+        # trans_W = user_embedding_1
+        elif name == 'user_embedding_1':
             trans_W = checkpoint.get_tensor(name)
             print(f"  Trans W: {name} -> {trans_W.shape}")
-        # Match trans_B variations
-        elif 'trans_b' in name_lower:
+        # trans_B = user_embedding_2
+        elif name == 'user_embedding_2':
             trans_B = checkpoint.get_tensor(name)
             print(f"  Trans B: {name} -> {trans_B.shape}")
 
