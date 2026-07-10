@@ -100,53 +100,101 @@ def evaluate_bpr_embeddings(weights_path, n_users, n_items, train_data, test_dat
     for name in sorted(var_shape_map.keys()):
         print(f"    - {name}: {var_shape_map[name]}")
 
-    # Find embeddings (search with flexible matching)
+    # Find all model variables
     user_emb = None
     item_emb = None
     trans_W = None
     trans_B = None
+    WA = None
+    BA = None
+    HA = None
+    WB = None
+    BB = None
+    HB = None
 
     for name in var_shape_map.keys():
         # Skip optimizer states
         if '/Adagrad' in name or '/Adam' in name:
             continue
 
-        # Main user_embedding
+        # Main embeddings
         if name == 'user_embedding':
             user_emb = checkpoint.get_tensor(name)
             print(f"  User emb: {name} -> {user_emb.shape}")
-        # Main item_embedding
         elif name == 'item_embedding':
             item_emb = checkpoint.get_tensor(name)
             print(f"  Item emb: {name} -> {item_emb.shape}")
-        # trans_W = user_embedding_1
+        # trans weights
         elif name == 'user_embedding_1':
             trans_W = checkpoint.get_tensor(name)
             print(f"  Trans W: {name} -> {trans_W.shape}")
-        # trans_B = user_embedding_2
         elif name == 'user_embedding_2':
             trans_B = checkpoint.get_tensor(name)
             print(f"  Trans B: {name} -> {trans_B.shape}")
+        # attention weights
+        elif name == 'WA':
+            WA = checkpoint.get_tensor(name)
+            print(f"  WA: {name} -> {WA.shape}")
+        elif name == 'WB':
+            WB = checkpoint.get_tensor(name)
+            print(f"  WB: {name} -> {WB.shape}")
+        elif name == 'BA':
+            BA = checkpoint.get_tensor(name)
+            print(f"  BA: {name} -> {BA.shape}")
+        elif name == 'BB':
+            BB = checkpoint.get_tensor(name)
+            print(f"  BB: {name} -> {BB.shape}")
+        elif name == 'HA':
+            HA = checkpoint.get_tensor(name)
+            print(f"  HA: {name} -> {HA.shape}")
+        elif name == 'HB':
+            HB = checkpoint.get_tensor(name)
+            print(f"  HB: {name} -> {HB.shape}")
 
     if user_emb is None or item_emb is None:
         print("  ERROR: Could not find embeddings")
         return None
 
-    # For ATTENTION model: transform embeddings with trans_W, trans_B
+    # For ATTENTION model: apply full attention mechanism
     if is_attention and trans_W is not None and trans_B is not None:
-        print("  Applying attention transformation (trans_W, trans_B)...")
+        print("  Applying attention mechanism...")
 
         # Transform: emb_transformed = emb @ trans_W + trans_B
-        # user_emb: (n_users, num_local, emb_dim) -> (n_users, num_local, emb_dim)
-        # trans_W: (num_local, emb_dim, emb_dim)
-        user_emb = np.einsum('ijk,jkl->ijl', user_emb, trans_W) + trans_B
-        item_emb = np.einsum('ijk,jkl->ijl', item_emb, trans_W) + trans_B
+        user_emb_t = np.einsum('ijk,jkl->ijl', user_emb, trans_W) + trans_B  # (n_users, num_local, emb_dim)
+        item_emb_t = np.einsum('ijk,jkl->ijl', item_emb, trans_W) + trans_B  # (n_items, num_local, emb_dim)
 
-        # Then average across shards
-        user_emb = np.mean(user_emb, axis=1)  # (n_users, emb_dim)
-        item_emb = np.mean(item_emb, axis=1)   # (n_items, emb_dim)
+        # Calculate attention weights for users: score = HA^T * ReLU(WA * emb + BA)
+        if WA is not None and BA is not None and HA is not None:
+            # user attention: (n_users, num_local, emb_dim) @ (emb_dim, attn_size) -> (n_users, num_local, attn_size)
+            user_proj = np.einsum('ijk,kl->ijl', user_emb_t, WA) + BA
+            user_proj = np.maximum(user_proj, 0)  # ReLU
+            user_score = np.einsum('ijk,kl->ij', user_proj, HA)  # (n_users, num_local)
+            # Softmax
+            user_score_exp = np.exp(user_score - np.max(user_score, axis=1, keepdims=True))
+            user_attn = user_score_exp / (np.sum(user_score_exp, axis=1, keepdims=True) + 1e-8)
+        else:
+            # Fallback to mean if attention weights not found
+            print("  WARNING: Attention weights not found, using mean")
+            user_attn = np.ones((user_emb_t.shape[0], user_emb_t.shape[1])) / user_emb_t.shape[1]
+
+        # Calculate attention weights for items
+        if WB is not None and BB is not None and HB is not None:
+            item_proj = np.einsum('ijk,kl->ijl', item_emb_t, WB) + BB
+            item_proj = np.maximum(item_proj, 0)  # ReLU
+            item_score = np.einsum('ijk,kl->ij', item_proj, HB)  # (n_items, num_local)
+            # Softmax
+            item_score_exp = np.exp(item_score - np.max(item_score, axis=1, keepdims=True))
+            item_attn = item_score_exp / (np.sum(item_score_exp, axis=1, keepdims=True) + 1e-8)
+        else:
+            print("  WARNING: Attention weights not found, using mean")
+            item_attn = np.ones((item_emb_t.shape[0], item_emb_t.shape[1])) / item_emb_t.shape[1]
+
+        # Weighted sum: output = sum(attn_weight * emb)
+        user_emb = np.einsum('ij,ijk->ik', user_attn, user_emb_t)  # (n_users, emb_dim)
+        item_emb = np.einsum('ij,ijk->ik', item_attn, item_emb_t)  # (n_items, emb_dim)
+
     else:
-        # Simple mean aggregation
+        # Simple mean aggregation for MEAN model
         print("  Using simple mean aggregation")
         user_emb = np.mean(user_emb, axis=1)
         item_emb = np.mean(item_emb, axis=1)
