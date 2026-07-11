@@ -17,39 +17,48 @@ def find_weights(model_type, part_type, agg_type):
     """Find weights folder for given configuration."""
     base_path = 'weights/ml-1m/{}'.format(model_type)
 
-    # Find all matching folders
-    all_pattern = '{}/*type-{}_r*/'.format(base_path, part_type)
-    all_matches = glob.glob(all_pattern)
+    print(f"  DEBUG: Looking for type-{part_type}, agg-{agg_type}")
 
-    # Separate into attention (no _mean suffix) and mean (_mean suffix) folders
-    attention_folders = []
-    mean_folders = []
+    # List all directories in base_path
+    if not os.path.exists(base_path):
+        print(f"    Base path does not exist: {base_path}")
+        return None
 
-    for match in all_matches:
-        if match.endswith('_mean'):
-            mean_folders.append(match)
-        else:
-            attention_folders.append(match)
+    all_dirs = os.listdir(base_path)
+    print(f"    All dirs in {base_path}: {all_dirs}")
 
-    print(f"  DEBUG: type-{part_type}, agg-{agg_type}")
-    print(f"    All matches: {all_matches}")
-    print(f"    Attention folders: {attention_folders}")
-    print(f"    Mean folders: {mean_folders}")
+    # Filter by part_type
+    matching_dirs = [d for d in all_dirs if f'type-{part_type}' in d and '_r0.' in d]
+    print(f"    Matching dirs (type-{part_type}): {matching_dirs}")
+
+    # Separate attention vs mean folders
+    attention_folder = None
+    mean_folder = None
+
+    for d in matching_dirs:
+        full_path = os.path.join(base_path, d)
+        if not os.path.isdir(full_path):
+            continue
+
+        # Check if this is a mean folder (ends with _mean)
+        is_mean = d.endswith('_mean')
+
+        # Check if checkpoint exists
+        checkpoint_file = os.path.join(full_path, 'checkpoint')
+        index_file = os.path.join(full_path, 'weights.index')
+
+        if os.path.exists(checkpoint_file) or os.path.exists(index_file):
+            if is_mean:
+                mean_folder = full_path
+                print(f"    Found MEAN folder: {full_path}")
+            else:
+                attention_folder = full_path
+                print(f"    Found ATTENTION folder: {full_path}")
 
     if agg_type == 'attention':
-        # Return first attention folder that has checkpoint
-        for folder in attention_folders:
-            checkpoint_file = os.path.join(folder, 'checkpoint')
-            if os.path.exists(checkpoint_file):
-                return folder
-    else:  # mean
-        # Return first mean folder that has checkpoint
-        for folder in mean_folders:
-            checkpoint_file = os.path.join(folder, 'checkpoint')
-            if os.path.exists(checkpoint_file):
-                return folder
-
-    return None
+        return attention_folder
+    else:
+        return mean_folder
 
 def load_train_test_data():
     """Load train and test data."""
