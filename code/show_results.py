@@ -17,23 +17,32 @@ def find_weights(model_type, part_type, agg_type):
     """Find weights folder for given configuration."""
     base_path = 'weights/ml-1m/{}'.format(model_type)
 
-    # Try multiple patterns to find the weights folder
-    patterns = []
+    # Find all matching folders
+    all_pattern = '{}/*type-{}_r*/'.format(base_path, part_type)
+    all_matches = glob.glob(all_pattern)
+
+    # Separate into attention (no _mean suffix) and mean (_mean suffix) folders
+    attention_folders = []
+    mean_folders = []
+
+    for match in all_matches:
+        if match.endswith('_mean'):
+            mean_folders.append(match)
+        else:
+            attention_folders.append(match)
 
     if agg_type == 'attention':
-        patterns.append('{}/*type-{}_r*/'.format(base_path, part_type))
-        patterns.append('{}/*type-{}_r*_mean*/'.format(base_path, part_type))
+        # Return first attention folder that has checkpoint
+        for folder in attention_folders:
+            checkpoint_file = os.path.join(folder, 'checkpoint')
+            if os.path.exists(checkpoint_file):
+                return folder
     else:  # mean
-        patterns.append('{}/*type-{}_r*_mean*/'.format(base_path, part_type))
-        patterns.append('{}/*type-{}_r*/'.format(base_path, part_type))
-
-    for pattern in patterns:
-        matches = glob.glob(pattern)
-        if matches:
-            for match in matches:
-                checkpoint_file = os.path.join(match, 'checkpoint')
-                if os.path.exists(checkpoint_file):
-                    return match
+        # Return first mean folder that has checkpoint
+        for folder in mean_folders:
+            checkpoint_file = os.path.join(folder, 'checkpoint')
+            if os.path.exists(checkpoint_file):
+                return folder
 
     return None
 
