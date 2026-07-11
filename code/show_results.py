@@ -210,6 +210,14 @@ def evaluate_bpr_embeddings(weights_path, n_users, n_items, train_data, test_dat
 
     print(f"  Final user emb shape: {user_emb.shape}, Item emb shape: {item_emb.shape}")
 
+    # Check for NaN/Inf in embeddings
+    if np.any(np.isnan(user_emb)) or np.any(np.isinf(user_emb)):
+        print("  WARNING: user_emb contains NaN or Inf!")
+        user_emb = np.nan_to_num(user_emb, nan=0.0, posinf=1.0, neginf=-1.0)
+    if np.any(np.isnan(item_emb)) or np.any(np.isinf(item_emb)):
+        print("  WARNING: item_emb contains NaN or Inf!")
+        item_emb = np.nan_to_num(item_emb, nan=0.0, posinf=1.0, neginf=-1.0)
+
     # Evaluate
     results = {}
     for k in Ks:
