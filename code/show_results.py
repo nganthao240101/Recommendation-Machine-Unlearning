@@ -31,6 +31,11 @@ def find_weights(model_type, part_type, agg_type):
         else:
             attention_folders.append(match)
 
+    print(f"  DEBUG: type-{part_type}, agg-{agg_type}")
+    print(f"    All matches: {all_matches}")
+    print(f"    Attention folders: {attention_folders}")
+    print(f"    Mean folders: {mean_folders}")
+
     if agg_type == 'attention':
         # Return first attention folder that has checkpoint
         for folder in attention_folders:
