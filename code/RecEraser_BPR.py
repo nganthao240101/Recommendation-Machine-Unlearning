@@ -99,14 +99,18 @@ class RecEraser_BPR(object):
             tf.random.truncated_normal(shape=[self.emb_dim, self.attention_size], mean=0.0, stddev=tf.sqrt(
                 2.0 / (self.attention_size + self.emb_dim))), dtype=tf.float32, name='WA')
         all_weights['BA'] = tf.Variable(tf.constant(0.00, shape=[self.attention_size]), name="BA")
-        all_weights['HA'] = tf.Variable(tf.constant(0.01, shape=[self.attention_size, 1]), name="HA")
+        all_weights['HA'] = tf.Variable(
+            tf.random.truncated_normal(shape=[self.attention_size, 1], mean=0.0, stddev=0.01),
+            dtype=tf.float32, name="HA")
 
         # item attention
         all_weights['WB'] = tf.Variable(
             tf.random.truncated_normal(shape=[self.emb_dim, self.attention_size], mean=0.0, stddev=tf.sqrt(
                 2.0 / (self.attention_size + self.emb_dim))), dtype=tf.float32, name='WB')
         all_weights['BB'] = tf.Variable(tf.constant(0.00, shape=[self.attention_size]), name="BB")
-        all_weights['HB'] = tf.Variable(tf.constant(0.01, shape=[self.attention_size, 1]), name="HB")
+        all_weights['HB'] = tf.Variable(
+            tf.random.truncated_normal(shape=[self.attention_size, 1], mean=0.0, stddev=0.01),
+            dtype=tf.float32, name="HB")
 
         # trans weights
 
