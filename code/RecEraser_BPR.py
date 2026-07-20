@@ -435,8 +435,10 @@ if __name__ == '__main__':
                 if should_stop == True:
                     break
 
-        save_saver.save(sess, weights_save_path + '/weights')
-        print('save the weights in path: ', weights_save_path)
+        # Only save weights if save_flag is set
+        if args.save_flag == 1:
+            save_saver.save(sess, weights_save_path + '/weights')
+            print('save the weights in path: ', weights_save_path)
 
 
 
