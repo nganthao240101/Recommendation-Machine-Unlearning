@@ -339,13 +339,11 @@ if __name__ == '__main__':
     # *********************************************************
     # save the model parameters.
     if args.save_flag == 1:
-        weights_save_path = '%sweights/%s/%s/num-%s_type-%s_r%s' % (args.proj_path, args.dataset, model.model_type, str(args.part_num),str(args.part_type),
-                                                         args.regs if not args.regs.startswith('[') else '-'.join([str(r) for r in eval(args.regs)]))
-        # Append agg suffix so each aggregation has its own checkpoint
-        # folder.  Attention is the default (no suffix).  Mean
-        # (mean = average of per-shard prediction scores) uses _mean.
-        if args.agg_type == 'mean':
-            weights_save_path = weights_save_path + '_mean'
+        # Path: p{part_num}-t{part_type}-e{epoch}-lr{lr}-agg{agg_type}
+        weights_save_path = '%sweights/%s/%s/p%s-t%s-e%s-lr%s-agg-%s' % (
+            args.proj_path, args.dataset, model.model_type,
+            str(args.part_num), str(args.part_type),
+            str(args.epoch), str(args.lr), args.agg_type)
         ensureDir(weights_save_path)
         save_saver = tf.compat.v1.train.Saver(max_to_keep=1)
 
@@ -358,10 +356,10 @@ if __name__ == '__main__':
 
     # reload the pretrained model parameters.
     if args.pretrain == 1:
-        pretrain_path = '%sweights/%s/%s/num-%s_type-%s_r%s' % (args.proj_path, args.dataset, model.model_type, str(args.part_num),str(args.part_type),
-                                                         args.regs if not args.regs.startswith('[') else '-'.join([str(r) for r in eval(args.regs)]))
-        if args.agg_type == 'mean':
-            pretrain_path = pretrain_path + '_mean'
+        pretrain_path = '%sweights/%s/%s/p%s-t%s-e%s-lr%s-agg-%s' % (
+            args.proj_path, args.dataset, model.model_type,
+            str(args.part_num), str(args.part_type),
+            str(args.epoch), str(args.lr), args.agg_type)
 
         ckpt = tf.compat.v1.train.get_checkpoint_state(os.path.dirname(pretrain_path + '/checkpoint'))
         print(ckpt)
@@ -481,6 +479,18 @@ if __name__ == '__main__':
                                                                     stopping_step, expected_order='acc', flag_step=10)
         if should_stop == True:
             break
+
+    # Print clean final result
+    print('')
+    print('=' * 70)
+    print(f'[AGGREGATION FINAL] {args.agg_type.upper()}')
+    print(f'  recall@10: {ret["recall"][0]:.4f}')
+    print(f'  recall@20: {ret["recall"][1]:.4f}')
+    print(f'  recall@50: {ret["recall"][2]:.4f}')
+    print(f'  ndcg@10:   {ret["ndcg"][0]:.4f}')
+    print(f'  ndcg@20:   {ret["ndcg"][1]:.4f}')
+    print(f'  ndcg@50:   {ret["ndcg"][2]:.4f}')
+    print('=' * 70)
 
 
 

@@ -8,6 +8,11 @@ echo "============================================"
 echo "Running all experiments with $EPOCHS epochs"
 echo "============================================"
 
+# Clean old weights
+rm -rf weights/ml-1m/RecEraser_BPR/p10-t*
+echo "Cleaned old weights"
+echo ""
+
 declare -A RESULTS
 
 # Function to extract final recall and ndcg
