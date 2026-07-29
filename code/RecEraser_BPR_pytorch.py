@@ -373,7 +373,7 @@ def _train_one_local_model(model: RecEraserBPR, shard: int,
         if (epoch + 1) % 5 != 0:
             if args.verbose > 0 and epoch % args.verbose == 0:
                 print(f'[local_model {shard}] Epoch {epoch} '
-                      f'[{_timer() - t1:.1fs}]: '
+                      f'[{_timer() - t1:.1f}s]: '
                       f'train==[{loss_sum:.5f}={mf_sum:.5f} + {reg_sum:.5f}]')
             continue
 
@@ -382,7 +382,7 @@ def _train_one_local_model(model: RecEraserBPR, shard: int,
                          local_flag=True, device=device)
         if args.verbose > 0:
             print(f'[local_model {shard}] Epoch {epoch} '
-                  f'[{_timer() - t1:.1fs}]: '
+                  f'[{_timer() - t1:.1f}s]: '
                   f'train==[{loss_sum:.5f}={mf_sum:.5f} + {reg_sum:.5f}], '
                   f'recall=[{ret["recall"][0]:.5f}, {ret["recall"][1]:.5f}], '
                   f'precision=[{ret["precision"][0]:.5f}, '
@@ -437,7 +437,7 @@ def _train_aggregator(model: RecEraserBPR,
         users_to_test = list(data_generator.test_set.keys())
         ret = test_torch(model, users_to_test, device=device)
         if args.verbose > 0:
-            print(f'Epoch {epoch} [{_timer() - t1:.1fs}]: '
+            print(f'Epoch {epoch} [{_timer() - t1:.1f}s]: '
                   f'train==[{loss_sum:.5f}={mf_sum:.5f} + {reg_sum:.5f}'
                   f'+{attn_sum:.5f}], '
                   f'recall=[{ret["recall"][0]:.5f}, {ret["recall"][1]:.5f}, '
