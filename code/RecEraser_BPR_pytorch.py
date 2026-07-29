@@ -110,12 +110,20 @@ class RecEraserBPR(nn.Module):
     # -----------------------------------------------------------------
     def _user_emb_for_shard(self, users: torch.Tensor,
                             shard: int) -> torch.Tensor:
-        """Look up the embedding of `users` for a single shard."""
-        return self.user_embedding(users)[..., shard, :]
+        """Look up the embedding of `users` for a single shard.
+
+        Storage is [n_users, num_local*emb_dim]; reshape to
+        [batch, num_local, emb_dim] then select the requested shard.
+        """
+        emb = self.user_embedding(users)  # [batch, num_local*emb_dim]
+        emb = emb.view(-1, self.num_local, self.emb_dim)
+        return emb[:, shard, :]
 
     def _item_emb_for_shard(self, items: torch.Tensor,
                             shard: int) -> torch.Tensor:
-        return self.item_embedding(items)[..., shard, :]
+        emb = self.item_embedding(items)
+        emb = emb.view(-1, self.num_local, self.emb_dim)
+        return emb[:, shard, :]
 
     def _per_shard_user_emb(self, users: torch.Tensor) -> torch.Tensor:
         """Return per-shard user embeddings -> [B, num_local, D]."""
