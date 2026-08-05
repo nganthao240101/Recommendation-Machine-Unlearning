@@ -505,6 +505,7 @@ def main():
             _train_one_local_model(model, shard, local_optimizer, device)
 
         if args.save_flag == 1:
+            os.makedirs(weights_save_path, exist_ok=True)
             torch.save({'state_dict': model.state_dict(),
                         'args': vars(args)},
                        os.path.join(weights_save_path, 'weights.pt'))
