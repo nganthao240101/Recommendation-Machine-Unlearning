@@ -20,6 +20,7 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 from torch.optim import Adagrad
+import torch.nn.init as init
 
 # Reuse the existing data loader, partition routines, parser and evaluation
 # helpers so the partition logic stays exactly as in the TF implementation.
@@ -81,23 +82,24 @@ class RecEraserBPR(nn.Module):
         self.user_embedding = nn.Embedding(n_users, num_local * emb_dim)
         self.item_embedding = nn.Embedding(n_items, num_local * emb_dim)
 
-        init_std = math.sqrt(2.0 / (emb_dim + emb_dim))
-        nn.init.normal_(self.user_embedding.weight, mean=0.0, std=init_std)
-        nn.init.normal_(self.item_embedding.weight, mean=0.0, std=init_std)
+        # Use GlorotUniform like TF (aka Xavier)
+        for emb in (self.user_embedding, self.item_embedding):
+            init.xavier_uniform_(emb.weight)
 
         # Attention parameters (only used when agg_type == 'attention').
+        # Match TF: truncated_normal for WA/WB, zeros for BA/BB, ones*0.1 for HA/HB
         self.WA = nn.Parameter(torch.empty(emb_dim, self.attention_size))
         self.BA = nn.Parameter(torch.zeros(self.attention_size))
-        self.HA = nn.Parameter(torch.full((self.attention_size, 1), 0.1))
+        self.HA = nn.Parameter(torch.ones(self.attention_size, 1) * 0.1)
 
         self.WB = nn.Parameter(torch.empty(emb_dim, self.attention_size))
         self.BB = nn.Parameter(torch.zeros(self.attention_size))
-        self.HB = nn.Parameter(torch.full((self.attention_size, 1), 0.1))
+        self.HB = nn.Parameter(torch.ones(self.attention_size, 1) * 0.1)
 
-        nn.init.normal_(self.WA, mean=0.0,
-                        std=math.sqrt(2.0 / (emb_dim + self.attention_size)))
-        nn.init.normal_(self.WB, mean=0.0,
-                        std=math.sqrt(2.0 / (emb_dim + self.attention_size)))
+        # Truncated normal init (like TF)
+        std_w = math.sqrt(2.0 / (emb_dim + self.attention_size))
+        nn.init.trunc_normal_(self.WA, mean=0.0, std=std_w, a=-2*std_w, b=2*std_w)
+        nn.init.trunc_normal_(self.WB, mean=0.0, std=std_w, a=-2*std_w, b=2*std_w)
 
         # Per-shard transformation matrices used by the attention aggregator.
         self.trans_W = nn.Parameter(torch.empty(num_local, emb_dim, emb_dim))
@@ -186,8 +188,16 @@ class RecEraserBPR(nn.Module):
         hidden = torch.einsum('bkd,dc->bkc', embs, W) + B  # [B, K, A]
         hidden = F.relu(hidden)
         score = torch.einsum('bkc,ca->bka', hidden, H)       # [B, K, 1]
+
+        # Clip scores to prevent overflow before softmax
+        score = torch.clamp(score, -50.0, 50.0)
+
         # Softmax over shards (axis=1 in TF).
         attn = F.softmax(score, dim=1)
+
+        # Clip attention weights to prevent NaN
+        attn = torch.clamp(attn, min=1e-8)
+
         agg = (attn * embs).sum(dim=1)                        # [B, D]
         return agg, attn
 
@@ -211,7 +221,13 @@ class RecEraserBPR(nn.Module):
         u_agg = F.dropout(u_agg, p=1.0 - DROPOUT_KEEP_PROB,
                           training=self.training)
 
-        mf, _, _ = self._bpr_loss(u_agg, pos_agg, neg_agg, 0.0)
+        # BPR loss with regularization - match TF behavior
+        pos_scores = (u_agg * pos_agg).sum(dim=1)
+        neg_scores = (u_agg * neg_agg).sum(dim=1)
+        diff = torch.clamp(pos_scores - neg_scores, -50.0, 50.0)
+        mf = torch.mean(F.softplus(-diff))
+
+        # Regularization: match TF - only HA/HB and trans_W/trans_B
         attn_reg = 1e-6 * (self.HA.pow(2).sum() + self.HB.pow(2).sum())
         trans_reg = 1e-6 * (self.trans_W.pow(2).sum() +
                             self.trans_B.pow(2).sum())
