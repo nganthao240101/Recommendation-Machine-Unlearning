@@ -189,14 +189,8 @@ class RecEraserBPR(nn.Module):
         hidden = F.relu(hidden)
         score = torch.einsum('bkc,ca->bka', hidden, H)       # [B, K, 1]
 
-        # Clip scores to prevent overflow before softmax
-        score = torch.clamp(score, -50.0, 50.0)
-
-        # Softmax over shards (axis=1 in TF).
+        # Softmax over shards (axis=1 in TF) - match TF exactly
         attn = F.softmax(score, dim=1)
-
-        # Clip attention weights to prevent NaN
-        attn = torch.clamp(attn, min=1e-8)
 
         agg = (attn * embs).sum(dim=1)                        # [B, D]
         return agg, attn
