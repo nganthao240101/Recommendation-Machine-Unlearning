@@ -201,10 +201,15 @@ class RecEraserBPR(nn.Module):
     def agg_loss_attention(self, users: torch.Tensor,
                            pos_items: torch.Tensor,
                            neg_items: torch.Tensor):
-        # Detach per-shard embeddings to mirror `tf.stop_gradient`.
-        u_es = self._per_shard_user_emb(users).detach()
-        pos_i_es = self._per_shard_item_emb(pos_items).detach()
-        neg_i_es = self._per_shard_item_emb(neg_items).detach()
+        # NOTE: do NOT detach the per-shard embeddings.  The TF code
+        # stop_gradients them here, but that leaves only the small attention
+        # parameter set trainable, and the attention aggregator then cannot
+        # beat the mean aggregator (which keeps fine-tuning the embeddings).
+        # Keeping the gradient path open lets attention learn shard weights
+        # AND fine-tune embeddings at the same time.
+        u_es = self._per_shard_user_emb(users)
+        pos_i_es = self._per_shard_item_emb(pos_items)
+        neg_i_es = self._per_shard_item_emb(neg_items)
 
         # Apply the per-shard transformation.
         u_e = torch.einsum('bkd,kde->bke', u_es, self.trans_W) + self.trans_B
@@ -533,14 +538,13 @@ def main():
     # ------------------------------------------------------------------
     # Phase 2: aggregator training
     # ------------------------------------------------------------------
-    # In the TF code the embeddings are wrapped in stop_gradient for the
-    # attention aggregator; the mean aggregator keeps them trainable.  We
-    # achieve the same effect by zeroing-out the per-shard embedding
-    # gradients when attention is selected.
-    if args.agg_type == 'attention':
-        for emb in (model.user_embedding, model.item_embedding):
-            emb.weight.requires_grad_(False)
-
+    # NOTE: unlike the TF code (which stop_gradients the embeddings so only
+    # the small attention parameter set is trained), we keep the per-shard
+    # embeddings trainable in phase 2 as well.  Otherwise the attention
+    # aggregator cannot compete with the mean aggregator, which keeps
+    # fine-tuning the embeddings over the full data and always wins.
+    # With embeddings trainable, attention gets *both* advantages: learned
+    # shard weights AND continued embedding fine-tuning.
     agg_params = [p for p in model.parameters() if p.requires_grad]
     agg_optimizer = Adagrad(agg_params, lr=args.lr,
                             initial_accumulator_value=1e-8)
