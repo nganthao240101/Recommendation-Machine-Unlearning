@@ -450,6 +450,12 @@ def _train_aggregator(model: RecEraserBPR,
         if last_u_w is not None and not np.any(np.isnan(last_u_w)):
             print(last_u_w[0])
 
+        # Debug: print attention params every 5 epochs
+        if epoch % 5 == 0 and args.agg_type == 'attention':
+            ha_norm = model.HA.data.norm().item()
+            hb_norm = model.HB.data.norm().item()
+            print(f'[DEBUG epoch {epoch}] HA_norm={ha_norm:.6f}, HB_norm={hb_norm:.6f}, loss={loss_sum:.5f}')
+
         users_to_test = list(data_generator.test_set.keys())
         ret = test_torch(model, users_to_test, device=device)
         if args.verbose > 0:
@@ -543,6 +549,8 @@ def main():
                             initial_accumulator_value=1e-8)
 
     print('\n===== Training aggregator =====')
+    print(f'[DEBUG] Initial HA values: {model.HA.data.cpu().numpy().flatten()[:5]}...')
+    print(f'[DEBUG] Initial HB values: {model.HB.data.cpu().numpy().flatten()[:5]}...')
     ret = _train_aggregator(model, agg_optimizer, device)
 
     # ------------------------------------------------------------------
