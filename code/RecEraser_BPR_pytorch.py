@@ -69,7 +69,7 @@ class RecEraserBPR(nn.Module):
         self.n_users = n_users
         self.n_items = n_items
         self.emb_dim = emb_dim
-        self.attention_size = emb_dim // 2
+        self.attention_size = emb_dim  # Larger attention for better capacity
         self.num_local = num_local
         self.batch_size = args.batch_size
         self.lr = lr
@@ -96,10 +96,9 @@ class RecEraserBPR(nn.Module):
         self.BB = nn.Parameter(torch.zeros(self.attention_size))
         self.HB = nn.Parameter(torch.ones(self.attention_size, 1) * 0.1)
 
-        # Truncated normal init (like TF)
-        std_w = math.sqrt(2.0 / (emb_dim + self.attention_size))
-        nn.init.trunc_normal_(self.WA, mean=0.0, std=std_w, a=-2*std_w, b=2*std_w)
-        nn.init.trunc_normal_(self.WB, mean=0.0, std=std_w, a=-2*std_w, b=2*std_w)
+        # Xavier uniform init for more stable training
+        nn.init.xavier_uniform_(self.WA)
+        nn.init.xavier_uniform_(self.WB)
 
         # Per-shard transformation matrices used by the attention aggregator.
         # Init trans_W to identity / trans_B to zero so the aggregator starts
