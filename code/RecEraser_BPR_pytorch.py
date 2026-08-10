@@ -223,17 +223,21 @@ class RecEraserBPR(nn.Module):
         u_agg = F.dropout(u_agg, p=1.0 - DROPOUT_KEEP_PROB,
                           training=self.training)
 
-        # BPR loss with regularization - match TF behavior
+        # BPR loss with regularization
         pos_scores = (u_agg * pos_agg).sum(dim=1)
         neg_scores = (u_agg * neg_agg).sum(dim=1)
         diff = torch.clamp(pos_scores - neg_scores, -50.0, 50.0)
         mf = torch.mean(F.softplus(-diff))
 
-        # Regularization: match TF - only HA/HB and trans_W/trans_B
+        # Regularization: embeddings + attention params
+        # Without embedding regularization, attention can overfit while mean cannot.
+        emb_reg = self.decay * (u_e.pow(2).sum() +
+                                pos_e.pow(2).sum() +
+                                neg_e.pow(2).sum()) / u_e.size(0)
         attn_reg = 1e-6 * (self.HA.pow(2).sum() + self.HB.pow(2).sum())
         trans_reg = 1e-6 * (self.trans_W.pow(2).sum() +
                             self.trans_B.pow(2).sum())
-        reg = attn_reg + trans_reg
+        reg = emb_reg + attn_reg + trans_reg
         return mf, reg, mf + reg, attn_reg, u_w
 
     def agg_loss_mean(self, users: torch.Tensor,
@@ -278,16 +282,17 @@ class RecEraserBPR(nn.Module):
         B = users.size(0)
         N = items.size(0)
         if self.use_attention:
-            with torch.no_grad():
-                u_es = self._per_shard_user_emb(users)
-                pos_i_es = self._per_shard_item_emb(items)
-                u_e = torch.einsum('bkd,kde->bke', u_es,
-                                   self.trans_W) + self.trans_B
-                pos_e = torch.einsum('bkd,kde->bke', pos_i_es,
-                                     self.trans_W) + self.trans_B
-                u_agg, _ = self._attention_aggregate(u_e, 'user')
-                pos_agg, _ = self._attention_aggregate(pos_e, 'item')
-                return u_agg @ pos_agg.t()
+            # NOTE: Don't wrap in no_grad() - embeddings may have been fine-tuned
+            # in phase 2 and we need to evaluate on the updated embeddings.
+            u_es = self._per_shard_user_emb(users)
+            pos_i_es = self._per_shard_item_emb(items)
+            u_e = torch.einsum('bkd,kde->bke', u_es,
+                               self.trans_W) + self.trans_B
+            pos_e = torch.einsum('bkd,kde->bke', pos_i_es,
+                                 self.trans_W) + self.trans_B
+            u_agg, _ = self._attention_aggregate(u_e, 'user')
+            pos_agg, _ = self._attention_aggregate(pos_e, 'item')
+            return u_agg @ pos_agg.t()
         # Mean: average per-shard ratings.
         u_es = self._per_shard_user_emb(users)                # [B, K, D]
         i_es = self._per_shard_item_emb(items)                # [N, K, D]
