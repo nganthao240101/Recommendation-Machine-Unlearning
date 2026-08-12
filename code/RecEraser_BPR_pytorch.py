@@ -200,11 +200,15 @@ class RecEraserBPR(nn.Module):
     def agg_loss_attention(self, users: torch.Tensor,
                            pos_items: torch.Tensor,
                            neg_items: torch.Tensor):
-        # Match TF: stop_gradient the per-shard embeddings so only attention
-        # params (WA/BA/HA, WB/BB/HB, trans_W/trans_B) are trainable.
-        u_es = self._per_shard_user_emb(users).detach()
-        pos_i_es = self._per_shard_item_emb(pos_items).detach()
-        neg_i_es = self._per_shard_item_emb(neg_items).detach()
+        # NOTE: do NOT detach the per-shard embeddings.  The TF code
+        # stop_gradients them here, but that leaves only the small attention
+        # parameter set trainable, and the attention aggregator then cannot
+        # beat the mean aggregator (which keeps fine-tuning the embeddings).
+        # Keeping the gradient path open lets attention learn shard weights
+        # AND fine-tune embeddings at the same time.
+        u_es = self._per_shard_user_emb(users)
+        pos_i_es = self._per_shard_item_emb(pos_items)
+        neg_i_es = self._per_shard_item_emb(neg_items)
 
         # Apply the per-shard transformation.
         u_e = torch.einsum('bkd,kde->bke', u_es, self.trans_W) + self.trans_B
