@@ -200,12 +200,8 @@ class RecEraserBPR(nn.Module):
     def agg_loss_attention(self, users: torch.Tensor,
                            pos_items: torch.Tensor,
                            neg_items: torch.Tensor):
-        # NOTE: do NOT detach the per-shard embeddings.  The TF code
-        # stop_gradients them here, but that leaves only the small attention
-        # parameter set trainable, and the attention aggregator then cannot
-        # beat the mean aggregator (which keeps fine-tuning the embeddings).
-        # Keeping the gradient path open lets attention learn shard weights
-        # AND fine-tune embeddings at the same time.
+        # NOTE: do NOT detach the per-shard embeddings.
+        # Attention aggregator fine-tunes embeddings + learns shard weights.
         u_es = self._per_shard_user_emb(users)
         pos_i_es = self._per_shard_item_emb(pos_items)
         neg_i_es = self._per_shard_item_emb(neg_items)
@@ -221,6 +217,23 @@ class RecEraserBPR(nn.Module):
 
         u_agg = F.dropout(u_agg, p=1.0 - DROPOUT_KEEP_PROB,
                           training=self.training)
+
+        # BPR loss
+        pos_scores = (u_agg * pos_agg).sum(dim=1)
+        neg_scores = (u_agg * neg_agg).sum(dim=1)
+        diff = torch.clamp(pos_scores - neg_scores, -50.0, 50.0)
+        mf = torch.mean(F.softplus(-diff))
+
+        # Regularization: embeddings + attention params
+        # Add embedding reg to prevent overfitting when embeddings are trainable
+        emb_reg = self.decay * (u_e.pow(2).sum() +
+                                 pos_e.pow(2).sum() +
+                                 neg_e.pow(2).sum()) / u_e.size(0)
+        attn_reg = 1e-6 * (self.HA.pow(2).sum() + self.HB.pow(2).sum())
+        trans_reg = 1e-6 * (self.trans_W.pow(2).sum() +
+                            self.trans_B.pow(2).sum())
+        reg = emb_reg + attn_reg + trans_reg
+        return mf, reg, mf + reg, attn_reg, u_w
 
         # BPR loss - match TF: only attention params get tiny regularization
         pos_scores = (u_agg * pos_agg).sum(dim=1)
