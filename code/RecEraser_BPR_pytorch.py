@@ -199,16 +199,20 @@ class RecEraserBPR(nn.Module):
     def agg_loss_attention(self, users: torch.Tensor,
                            pos_items: torch.Tensor,
                            neg_items: torch.Tensor):
-        # NOTE: do NOT detach the per-shard embeddings.
-        # Attention learns weighted average of shards directly (no trans_W).
-        u_es = self._per_shard_user_emb(users)
-        pos_i_es = self._per_shard_item_emb(pos_items)
-        neg_i_es = self._per_shard_item_emb(neg_items)
+        # Match TF: stop_gradient embeddings, use trans_W/trans_B
+        u_es = self._per_shard_user_emb(users).detach()
+        pos_i_es = self._per_shard_item_emb(pos_items).detach()
+        neg_i_es = self._per_shard_item_emb(neg_items).detach()
 
-        # Attention aggregate directly on embeddings (no trans_W/trans_B)
-        u_agg, u_w = self._attention_aggregate(u_es, 'user')
-        pos_agg, _ = self._attention_aggregate(pos_i_es, 'item')
-        neg_agg, _ = self._attention_aggregate(neg_i_es, 'item')
+        # Apply trans_W/trans_B transformation (like TF)
+        u_e = torch.einsum('bkd,kde->bke', u_es, self.trans_W) + self.trans_B
+        pos_e = torch.einsum('bkd,kde->bke', pos_i_es, self.trans_W) + self.trans_B
+        neg_e = torch.einsum('bkd,kde->bke', neg_i_es, self.trans_W) + self.trans_B
+
+        # Attention aggregate
+        u_agg, u_w = self._attention_aggregate(u_e, 'user')
+        pos_agg, _ = self._attention_aggregate(pos_e, 'item')
+        neg_agg, _ = self._attention_aggregate(neg_e, 'item')
 
         u_agg = F.dropout(u_agg, p=1.0 - DROPOUT_KEEP_PROB,
                           training=self.training)
@@ -219,12 +223,10 @@ class RecEraserBPR(nn.Module):
         diff = torch.clamp(pos_scores - neg_scores, -50.0, 50.0)
         mf = torch.mean(F.softplus(-diff))
 
-        # Regularization: embeddings + attention params
-        emb_reg = self.decay * (u_es.pow(2).sum() +
-                                 pos_i_es.pow(2).sum() +
-                                 neg_i_es.pow(2).sum()) / u_es.size(0)
+        # Regularization: match TF exactly - only HA/HB/trans_W/trans_B
         attn_reg = 1e-6 * (self.HA.pow(2).sum() + self.HB.pow(2).sum())
-        reg = emb_reg + attn_reg
+        trans_reg = 1e-6 * (self.trans_W.pow(2).sum() + self.trans_B.pow(2).sum())
+        reg = attn_reg + trans_reg
         return mf, reg, mf + reg, attn_reg, u_w
 
     def agg_loss_mean(self, users: torch.Tensor,
@@ -262,18 +264,20 @@ class RecEraserBPR(nn.Module):
                            items: torch.Tensor) -> torch.Tensor:
         """Compute the (B, N) rating matrix for the aggregator.
 
-        For attention: attention-aggregate embeddings directly and dot with items.
+        For attention: apply trans_W, attention-aggregate and dot with items.
         For mean: average the per-shard rating matrices directly.
         """
         B = users.size(0)
         N = items.size(0)
         if self.use_attention:
-            # Attention aggregate directly (no trans_W)
-            u_es = self._per_shard_user_emb(users)
-            pos_i_es = self._per_shard_item_emb(items)
-            u_agg, _ = self._attention_aggregate(u_es, 'user')
-            pos_agg, _ = self._attention_aggregate(pos_i_es, 'item')
-            return u_agg @ pos_agg.t()
+            with torch.no_grad():
+                u_es = self._per_shard_user_emb(users)
+                pos_i_es = self._per_shard_item_emb(items)
+                u_e = torch.einsum('bkd,kde->bke', u_es, self.trans_W) + self.trans_B
+                pos_e = torch.einsum('bkd,kde->bke', pos_i_es, self.trans_W) + self.trans_B
+                u_agg, _ = self._attention_aggregate(u_e, 'user')
+                pos_agg, _ = self._attention_aggregate(pos_e, 'item')
+                return u_agg @ pos_agg.t()
         # Mean: average per-shard ratings.
         u_es = self._per_shard_user_emb(users)                # [B, K, D]
         i_es = self._per_shard_item_emb(items)                # [N, K, D]
