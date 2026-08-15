@@ -86,15 +86,14 @@ class RecEraserBPR(nn.Module):
         for emb in (self.user_embedding, self.item_embedding):
             init.xavier_uniform_(emb.weight)
 
-        # Attention parameters (only used when agg_type == 'attention').
-        # Match TF: truncated_normal for WA/WB, zeros for BA/BB, ones*0.1 for HA/HB
+        # Attention parameters
         self.WA = nn.Parameter(torch.empty(emb_dim, self.attention_size))
         self.BA = nn.Parameter(torch.zeros(self.attention_size))
-        self.HA = nn.Parameter(torch.ones(self.attention_size, 1) * 0.1)
+        self.HA = nn.Parameter(torch.ones(self.attention_size, 1))  # init 1.0 for stronger attention
 
         self.WB = nn.Parameter(torch.empty(emb_dim, self.attention_size))
         self.BB = nn.Parameter(torch.zeros(self.attention_size))
-        self.HB = nn.Parameter(torch.ones(self.attention_size, 1) * 0.1)
+        self.HB = nn.Parameter(torch.ones(self.attention_size, 1))  # init 1.0 for stronger attention
 
         # Xavier uniform init for more stable training
         nn.init.xavier_uniform_(self.WA)
