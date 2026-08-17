@@ -339,9 +339,9 @@ def test_torch(model: RecEraserBPR, users_to_test, local_num=0,
 
     all_result = np.concatenate(all_result, axis=0)
     final_result = np.mean(all_result, axis=0)
-    final_result = np.reshape(final_result, newshape=[5, max_top])
+    final_result = final_result.reshape([5, max_top])
     final_result = final_result[:, top_show - 1]
-    final_result = np.reshape(final_result, newshape=[5, len(top_show)])
+    final_result = final_result.reshape([5, len(top_show)])
     result['precision'] += final_result[0]
     result['recall'] += final_result[1]
     result['ndcg'] += final_result[3]
