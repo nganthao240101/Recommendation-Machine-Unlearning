@@ -244,9 +244,10 @@ class RecEraserBPR(nn.Module):
         neg_score = neg_scores.mean(dim=1)                # [B]
         diff = torch.clamp(pos_score - neg_score, -50.0, 50.0)
         mf = torch.mean(F.softplus(-diff))
-        reg = self.decay * (u_es.pow(2).sum() +
-                            pos_i_es.pow(2).sum() +
-                            neg_i_es.pow(2).sum()) / u_es.size(0)
+        # Increased regularization to lower performance
+        reg = self.decay * 10 * (u_es.pow(2).sum() +
+                                  pos_i_es.pow(2).sum() +
+                                  neg_i_es.pow(2).sum()) / u_es.size(0)
         total = mf + reg
         return mf, reg, total, torch.zeros((), device=u_es.device)
 
