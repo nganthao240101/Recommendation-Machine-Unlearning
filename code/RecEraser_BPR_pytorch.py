@@ -100,10 +100,13 @@ class RecEraserBPR(nn.Module):
         nn.init.trunc_normal_(self.WA, mean=0.0, std=std_w, a=-2*std_w, b=2*std_w)
         nn.init.trunc_normal_(self.WB, mean=0.0, std=std_w, a=-2*std_w, b=2*std_w)
 
-        # Per-shard transformation matrices (match TF: GlorotUniform)
+        # Per-shard transformation matrices used by the attention aggregator.
+        # Init trans_W to identity / trans_B to zero so the aggregator starts
+        # from the raw phase-1 embeddings and learns how to *combine* them.
         self.trans_W = nn.Parameter(torch.empty(num_local, emb_dim, emb_dim))
         self.trans_B = nn.Parameter(torch.zeros(num_local, emb_dim))
-        nn.init.xavier_uniform_(self.trans_W)  # Match TF
+        for k in range(num_local):
+            self.trans_W.data[k] = torch.eye(emb_dim)
 
     # -----------------------------------------------------------------
     # Helpers
