@@ -89,24 +89,21 @@ class RecEraserBPR(nn.Module):
         # Attention parameters
         self.WA = nn.Parameter(torch.empty(emb_dim, self.attention_size))
         self.BA = nn.Parameter(torch.zeros(self.attention_size))
-        self.HA = nn.Parameter(torch.ones(self.attention_size, 1))  # init 1.0 for stronger attention
+        self.HA = nn.Parameter(torch.ones(self.attention_size, 1) * 0.1)  # small init
 
         self.WB = nn.Parameter(torch.empty(emb_dim, self.attention_size))
         self.BB = nn.Parameter(torch.zeros(self.attention_size))
-        self.HB = nn.Parameter(torch.ones(self.attention_size, 1))  # init 1.0 for stronger attention
+        self.HB = nn.Parameter(torch.ones(self.attention_size, 1) * 0.1)  # small init
 
-        # Xavier uniform init for more stable training
-        nn.init.xavier_uniform_(self.WA)
-        nn.init.xavier_uniform_(self.WB)
+        # Truncated normal init (like TF)
+        std_w = math.sqrt(2.0 / (emb_dim + self.attention_size))
+        nn.init.trunc_normal_(self.WA, mean=0.0, std=std_w, a=-2*std_w, b=2*std_w)
+        nn.init.trunc_normal_(self.WB, mean=0.0, std=std_w, a=-2*std_w, b=2*std_w)
 
-        # Per-shard transformation matrices used by the attention aggregator.
-        # Init trans_W to identity / trans_B to zero so the aggregator starts
-        # from the raw phase-1 embeddings and learns how to *combine* them,
-        # instead of destroying them with a random projection at the start.
+        # Per-shard transformation matrices (match TF: GlorotUniform)
         self.trans_W = nn.Parameter(torch.empty(num_local, emb_dim, emb_dim))
         self.trans_B = nn.Parameter(torch.zeros(num_local, emb_dim))
-        for k in range(num_local):
-            self.trans_W.data[k] = torch.eye(emb_dim)
+        nn.init.xavier_uniform_(self.trans_W)  # Match TF
 
     # -----------------------------------------------------------------
     # Helpers
