@@ -69,8 +69,9 @@ import sys
 import os
 sys.path.insert(0, PROJ)
 
-# Set environment variable for data path (data is in project root/data/)
-os.environ['RECUNLEARN_DATA_PATH'] = os.path.join(PROJ, 'data/')
+# Set environment variable for data path
+# data is at project_root/data/, PROJ is at project_root/code/
+os.environ['RECUNLEARN_DATA_PATH'] = os.path.join(os.path.dirname(PROJ), 'data/')
 os.environ['RECUNLEARN_DATASET'] = 'ml-1m'
 
 from utility.load_data import Data
