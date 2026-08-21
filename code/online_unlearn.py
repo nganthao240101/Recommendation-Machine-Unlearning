@@ -371,7 +371,7 @@ def main():
                     help='If set, only run this partition type.')
     ap.add_argument('--unlearn_type', type=str, default=None,
                     help='If set, only run this unlearn type.')
-    ap.add_argument('--ratio', type=int, default=20)
+    ap.add_argument('--unlearn_ratio', type=float, default=0.1)
     ap.add_argument('--agg_type', type=str, default='mean',
                     choices=['attention', 'mean'])
     ap.add_argument('--regs', default='0.01')
@@ -385,11 +385,11 @@ def main():
     out_doc = {}
     for pt in ptypes:
         for ut in utypes:
-            r = run_one_scenario(part_num, pt, cli.agg_type, ut, cli.ratio,
+            r = run_one_scenario(part_num, pt, cli.agg_type, ut, cli.unlearn_ratio,
                                  cli.regs)
             if r is None:
                 continue
-            key = f'num{part_num}_{METHOD_INFO[pt]}-{cli.agg_type}_{ut}_r{cli.ratio:02d}'
+            key = f'num{part_num}_{METHOD_INFO[pt]}-{cli.agg_type}_{ut}_r{int(cli.unlearn_ratio*100):02d}'
             out_doc[key] = r
 
     if not out_doc:
