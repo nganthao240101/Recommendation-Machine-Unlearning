@@ -64,30 +64,14 @@ DATA = os.path.join(PROJ, '..', 'data', 'ml-1m')
 WEIGHTS = os.path.join(PROJ, 'weights', 'ml-1m', 'RecEraser_BPR')
 RESULTS = os.path.join(PROJ, '..', 'results')
 
-# Fix data path for online_unlearn - set BEFORE imports
+# Fix data path for online_unlearn
 import sys
 import os
 sys.path.insert(0, PROJ)
 
-# Override parse_args to fix data path
-import argparse
-_orig_parse_args = None
-
-def _fix_args():
-    global _orig_parse_args
-    if _orig_parse_args is None:
-        from utility.parser import parse_args as _parse
-        _orig_parse_args = _parse
-
-    args = _orig_parse_args()
-    # Fix path: data is at ../data/ relative to code/
-    args.data_path = os.path.join(os.path.dirname(PROJ), 'data/')
-    args.dataset = 'ml-1m'
-    return args
-
-# Monkey-patch before imports
-import utility.parser
-utility.parser.parse_args = _fix_args
+# Set environment variable for data path
+os.environ['RECUNLEARN_DATA_PATH'] = os.path.join(os.path.dirname(PROJ), 'data/')
+os.environ['RECUNLEARN_DATASET'] = 'ml-1m'
 
 from utility.load_data import Data
 from utility.batch_test import test

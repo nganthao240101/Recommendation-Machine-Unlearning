@@ -3,7 +3,18 @@ import pickle
 import copy
 import random
 import numpy as np
+import os
+
+# Override args with environment variables if set
+_data_path = os.environ.get('RECUNLEARN_DATA_PATH', None)
+_dataset = os.environ.get('RECUNLEARN_DATASET', None)
+
+# Parse args normally but override if env vars are set
 args = parse_args()
+if _data_path:
+    args.data_path = _data_path
+if _dataset:
+    args.dataset = _dataset
 
 
 def E_score1(a,b):
