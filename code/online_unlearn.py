@@ -70,9 +70,9 @@ import os
 sys.path.insert(0, PROJ)
 
 # Set environment variable for data path
-# data is at project_root/data/, PROJ is at project_root/code/
-os.environ['RECUNLEARN_DATA_PATH'] = os.path.join(os.path.dirname(PROJ), 'data/')
-os.environ['RECUNLEARN_DATASET'] = 'ml-1m'
+# Path should point to data directory containing ml-1m/
+os.environ['RECUNLEARN_DATA_PATH'] = os.path.join(os.path.dirname(PROJ), 'data/ml-1m/')
+os.environ['RECUNLEARN_DATASET'] = ''  # Empty since path already includes ml-1m
 
 from utility.load_data import Data
 from utility.batch_test import test

@@ -19,14 +19,13 @@ def ensureDir(dir_path):
         os.makedirs(d)
 class Data(object):
     def __init__(self, path, batch_size,part_type,part_num,part_T):
-        # Use environment variable if path is relative
-        if path.startswith('../'):
-            data_path = os.environ.get('RECUNLEARN_DATA_PATH', None)
-            if data_path:
-                path = data_path
-            else:
-                base_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-                path = os.path.join(base_dir, path[3:])
+        # Check environment variable for data path override
+        data_path = os.environ.get('RECUNLEARN_DATA_PATH', None)
+        if data_path:
+            path = data_path
+        elif path.startswith('../'):
+            base_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+            path = os.path.join(base_dir, path[3:])
         self.path = path
         self.batch_size = batch_size
         self.part_type = part_type
