@@ -64,11 +64,23 @@ DATA = os.path.join(PROJ, '..', 'data', 'ml-1m')
 WEIGHTS = os.path.join(PROJ, 'weights', 'ml-1m', 'RecEraser_BPR')
 RESULTS = os.path.join(PROJ, '..', 'results')
 
+# Fix data path for online_unlearn
+import sys
+sys.path.insert(0, PROJ)
 from utility.parser import parse_args
 from utility.load_data import Data
 from utility.batch_test import test
 from RecEraser_BPR import RecEraser_BPR
 from time import time
+
+# Override args.data_path for online_unlearn
+import argparse
+_orig_parse_args = parse_args
+def parse_args():
+    args = _orig_parse_args()
+    args.data_path = PROJ + '/data/'
+    args.dataset = 'ml-1m'
+    return args
 
 
 METHOD_INFO = {1: 'InP', 2: 'UBP', 3: 'Random', 4: 'IBP'}
