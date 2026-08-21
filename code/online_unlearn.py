@@ -73,7 +73,7 @@ from utility.batch_test import test
 from RecEraser_BPR import RecEraser_BPR
 from time import time
 
-# Override args.data_path for online_unlearn
+# Override args.data_path for online_unlearn BEFORE importing other modules
 import argparse
 _orig_parse_args = parse_args
 def parse_args():

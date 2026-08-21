@@ -19,6 +19,10 @@ def ensureDir(dir_path):
         os.makedirs(d)
 class Data(object):
     def __init__(self, path, batch_size,part_type,part_num,part_T):
+        # Fix path to be absolute
+        if path.startswith('../'):
+            base_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+            path = os.path.join(base_dir, path[3:])
         self.path = path
         self.batch_size = batch_size
         self.part_type = part_type
