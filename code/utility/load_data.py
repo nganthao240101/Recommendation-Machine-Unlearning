@@ -22,7 +22,9 @@ class Data(object):
         # Check environment variable for data path override
         data_path = os.environ.get('RECUNLEARN_DATA_PATH', None)
         if data_path:
-            path = data_path
+            # Use env var path + dataset
+            dataset = os.environ.get('RECUNLEARN_DATASET', '')
+            path = data_path + dataset
         elif path.startswith('../'):
             base_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
             path = os.path.join(base_dir, path[3:])

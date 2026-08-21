@@ -24,17 +24,20 @@ import torch.nn.functional as F
 from torch.optim import Adagrad
 from time import time
 
-# Add project path
+# Add project path AND SET DATA PATH BEFORE IMPORTS
 PROJ = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, PROJ)
+
+# IMPORTANT: Set data path BEFORE importing RecEraser_BPR_pytorch
+# because it imports utility.batch_test which creates data_generator at module level
+# data is at project_root/data/, PROJ is at project_root/code/
+os.environ['RECUNLEARN_DATA_PATH'] = os.path.join(os.path.dirname(PROJ), 'data/')
+os.environ['RECUNLEARN_DATASET'] = 'ml-1m'
 
 from utility.helper import early_stopping
 from utility.load_data import Data
 from evaluator.python.evaluate_foldout import eval_score_matrix_foldout
 from RecEraser_BPR_pytorch import RecEraserBPR, test_torch
-
-# Data path fix
-os.environ['RECUNLEARN_DATA_PATH'] = os.path.join(PROJ, 'data/ml-1m/')
 
 RESULTS = os.path.join(PROJ, '..', 'results')
 
