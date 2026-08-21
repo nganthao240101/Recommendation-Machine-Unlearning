@@ -69,7 +69,7 @@ class RecEraserBPR(nn.Module):
         self.n_users = n_users
         self.n_items = n_items
         self.emb_dim = emb_dim
-        self.attention_size = emb_dim  # Larger attention for better capacity
+        self.attention_size = 32  # Match paper: k=32
         self.num_local = num_local
         self.batch_size = args.batch_size
         self.lr = lr
