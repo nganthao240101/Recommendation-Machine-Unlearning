@@ -115,8 +115,8 @@ def find_affected_shards(C, unlearn_type, unlearned_uids, unlearned_iids):
                 if u in unlearned_uids:
                     hit = True
                     break
-                for i in items:
-                    if i in unlearned_iids:
+                for item_id in items:
+                    if item_id in unlearned_iids:
                         hit = True
                         break
                 if hit:
