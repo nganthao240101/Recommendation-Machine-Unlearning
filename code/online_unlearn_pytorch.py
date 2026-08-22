@@ -211,11 +211,15 @@ def run_one_scenario(part_num, part_type, agg_type, unlearn_type, ratio, regs='0
     )
 
     # Load pretrained weights
-    weights_path = os.path.join(
-        PROJ, 'weights', 'ml-1m', 'RecEraser_BPR',
-        f'p{part_num}-t{part_type}-e{args.epoch}-lr{args.lr}-agg-{agg_type}',
-        'weights.pt'
-    )
+    # Check multiple possible epoch values (100, 5, etc.)
+    for ep in [100, 1000, 5, 3]:
+        weights_path = os.path.join(
+            PROJ, 'weights', 'ml-1m', 'RecEraser_BPR',
+            f'p{part_num}-t{part_type}-e{ep}-lr{args.lr}-agg-{agg_type}',
+            'weights.pt'
+        )
+        if os.path.exists(weights_path):
+            break
 
     if not os.path.exists(weights_path):
         print(f'   [SKIP] no checkpoint at {weights_path}')
