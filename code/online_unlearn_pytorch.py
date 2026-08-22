@@ -256,6 +256,11 @@ def run_one_scenario(part_num, part_type, agg_type, unlearn_type, ratio, regs='0
     model.load_state_dict(checkpoint['state_dict'])
     print(f'   loaded pretrained from {weights_path}')
 
+    # Debug: check embedding norm
+    with torch.no_grad():
+        emb_norm = model.user_embedding.weight.norm().item()
+        print(f'   DEBUG: user_emb norm = {emb_norm:.4f}')
+
     # Load partition data
     C_path = os.path.join(project_root, 'data', 'ml-1m', f'C_type-{part_type}_num-{part_num}.pk')
     if not os.path.exists(C_path):
