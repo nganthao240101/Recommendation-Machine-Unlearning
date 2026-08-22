@@ -62,8 +62,21 @@ def load_train(path):
 def get_unlearn_entities(unlearn_type, ratio, data_path):
     """Return (unlearned_uids, unlearned_iids)."""
     base = os.path.join(data_path, 'train.txt')
-    target_name = f'train_unlearned_{unlearn_type}_r{int(ratio*100):02d}.txt'
-    target = os.path.join(data_path, target_name)
+    # Check multiple possible filenames
+    possible_names = [
+        f'train_unlearned_{unlearn_type}_r{int(ratio*100):02d}.txt',
+        f'train_unlearned_r{int(ratio*100):02d}.txt',
+        'train_unlearned.txt'
+    ]
+    target = None
+    for name in possible_names:
+        candidate = os.path.join(data_path, name)
+        if os.path.exists(candidate):
+            target = candidate
+            break
+    if target is None:
+        print(f"   [ERROR] No unlearned file found. Tried: {possible_names}")
+        return set(), set()
 
     base_data = load_train(base)
     target_data = load_train(target)
