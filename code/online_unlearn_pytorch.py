@@ -243,7 +243,7 @@ def run_one_scenario(part_num, part_type, agg_type, unlearn_type, ratio, regs='0
     print(f'   loaded pretrained from {weights_path}')
 
     # Load partition data
-    C_path = os.path.join(data_path, f'C_type-{part_type}_num-{part_num}.pk')
+    C_path = os.path.join(project_root, 'data', 'ml-1m', f'C_type-{part_type}_num-{part_num}.pk')
     if not os.path.exists(C_path):
         print(f'   [SKIP] no partition file at {C_path}')
         return None
