@@ -196,8 +196,11 @@ def run_one_scenario(part_num, part_type, agg_type, unlearn_type, ratio, regs='0
         '--pretrain', '1'
     ]
 
+    # PROJ is /workspace/Recommendation-Machine-Unlearning/code/, so use parent dir
+    project_root = os.path.dirname(PROJ)  # /workspace/Recommendation-Machine-Unlearning
+
     # Load data
-    data_path = os.path.join(PROJ, 'data/ml-1m/')
+    data_path = os.path.join(project_root, 'data/ml-1m/')
     from utility.parser import parse_args
     args = parse_args()
     args.data_path = data_path
@@ -211,8 +214,6 @@ def run_one_scenario(part_num, part_type, agg_type, unlearn_type, ratio, regs='0
     )
 
     # Load pretrained weights
-    # PROJ is /workspace/Recommendation-Machine-Unlearning/code/, so use parent dir
-    project_root = os.path.dirname(PROJ)  # /workspace/Recommendation-Machine-Unlearning
     for ep in [100, 1000, 5, 3]:
         weights_path = os.path.join(
             project_root, 'weights', 'ml-1m', 'RecEraser_BPR',
