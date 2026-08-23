@@ -1,7 +1,5 @@
 """
 Online Recommendation Unlearning with PyTorch (paper RecEraser Section 4.2).
-
-This script unlearns interactions using the SHARDED strategy.
 """
 import os
 import sys
@@ -19,14 +17,17 @@ from time import time
 PROJ = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, PROJ)
 
-os.environ['RECUNLEARN_DATA_PATH'] = os.path.join(os.path.dirname(PROJ), 'data/')
+# Set data path BEFORE importing modules
+project_root = os.path.dirname(PROJ)
+os.environ['RECUNLEARN_DATA_PATH'] = project_root
+os.environ['RECUNLEARN_DATASET'] = 'ml-1m'
 
 from utility.helper import early_stopping
 from utility.load_data import Data
 from evaluator.python.evaluate_foldout import eval_score_matrix_foldout
 from RecEraser_BPR_pytorch import RecEraserBPR, test_torch
 
-RESULTS = os.path.join(PROJ, '..', 'results')
+RESULTS = os.path.join(project_root, 'results')
 
 METHOD_INFO = {1: 'InP', 2: 'UBP', 3: 'Random', 4: 'IBP'}
 
@@ -194,8 +195,7 @@ def run_one_scenario(part_num, part_type, agg_type, unlearn_type, ratio, regs='0
         '--pretrain', '1'
     ]
 
-    project_root = os.path.dirname(PROJ)
-    data_path = os.path.join(project_root, 'data/ml-1m/')
+    data_path = os.path.join(project_root, 'data/ml-1m')
 
     from utility.parser import parse_args
     args = parse_args()
@@ -321,8 +321,9 @@ def main():
             out_path = os.path.join(RESULTS, out_filename)
             os.makedirs(os.path.dirname(out_path), exist_ok=True)
 
+            key = f'num{part_num}_{METHOD_INFO[pt]}_{cli.agg_type}_{ut}_r{int(cli.unlearn_ratio*100):02d}'
             with open(out_path, 'w') as f:
-                json.dump({f'num{part_num}_{METHOD_INFO[pt]}_{cli.agg_type}_{ut}_r{int(cli.unlearn_ratio*100):02d}': r}, f, indent=2)
+                json.dump({key: r}, f, indent=2)
             print(f'[OK] Saved: {out_path}')
 
 
