@@ -1,15 +1,7 @@
 """
 Online Recommendation Unlearning with PyTorch (paper RecEraser Section 4.2).
 
-This script unlearns interactions using the SHARDED strategy:
-  1) Load the trained RecEraser checkpoint (PyTorch)
-  2) Identify shards containing unlearned entities
-  3) Retrain ONLY affected shards
-  4) Keep unaffected shards as-is
-  5) Re-evaluate
-
-Usage:
-  python online_unlearn_pytorch.py --agg_type attention --unlearn_ratio 0.05 --part_type 1
+This script unlearns interactions using the SHARDED strategy.
 """
 import os
 import sys
@@ -24,15 +16,10 @@ import torch.nn.functional as F
 from torch.optim import Adagrad
 from time import time
 
-# Add project path AND SET DATA PATH BEFORE IMPORTS
 PROJ = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, PROJ)
 
-# IMPORTANT: Set data path BEFORE importing RecEraser_BPR_pytorch
-# because it imports utility.batch_test which creates data_generator at module level
-# data is at project_root/data/, PROJ is at project_root/code/
 os.environ['RECUNLEARN_DATA_PATH'] = os.path.join(os.path.dirname(PROJ), 'data/')
-os.environ['RECUNLEARN_DATASET'] = 'ml-1m'
 
 from utility.helper import early_stopping
 from utility.load_data import Data
@@ -47,10 +34,10 @@ METHOD_INFO = {1: 'InP', 2: 'UBP', 3: 'Random', 4: 'IBP'}
 def load_train(path):
     """Load train.txt -> dict {uid: [items...]}."""
     data = {}
-    with open(path) as f:
+    with open(path, 'r') as f:
         for line in f:
-            parts = line.strip().split(' ')
-            if not parts or parts == ['']:
+            parts = line.strip().split()
+            if not parts:
                 continue
             uid = int(parts[0])
             items = [int(x) for x in parts[1:] if x]
@@ -62,7 +49,6 @@ def load_train(path):
 def get_unlearn_entities(unlearn_type, ratio, data_path):
     """Return (unlearned_uids, unlearned_iids)."""
     base = os.path.join(data_path, 'train.txt')
-    # Check multiple possible filenames
     possible_names = [
         f'train_unlearned_{unlearn_type}_r{int(ratio*100):02d}.txt',
         f'train_unlearned_r{int(ratio*100):02d}.txt',
@@ -109,7 +95,7 @@ def find_affected_shards(C, unlearn_type, unlearned_uids, unlearned_iids):
             hit = bool(shard_users & unlearned_uids)
         elif unlearn_type == 'item':
             hit = bool(shard_items & unlearned_iids)
-        else:  # interaction
+        else:
             hit = False
             for u, items in shard.items():
                 if u in unlearned_uids:
@@ -133,7 +119,7 @@ def filter_shard_data(shard, unlearn_type, unlearned_uids, unlearned_iids):
     elif unlearn_type == 'item':
         return {u: [i for i in items if i not in unlearned_iids]
                 for u, items in shard.items()}
-    else:  # interaction
+    else:
         result = {}
         for u, items in shard.items():
             if u in unlearned_uids:
@@ -199,7 +185,6 @@ def run_one_scenario(part_num, part_type, agg_type, unlearn_type, ratio, regs='0
     print(f'\n=== num={part_num}, type={part_type} ({METHOD_INFO[part_type]}), '
           f'agg={agg_type}, unlearn={unlearn_type} r={ratio} ===', flush=True)
 
-    # Parse args
     sys.argv = [
         '', '--dataset', 'ml-1m',
         '--part_type', str(part_type),
@@ -209,11 +194,9 @@ def run_one_scenario(part_num, part_type, agg_type, unlearn_type, ratio, regs='0
         '--pretrain', '1'
     ]
 
-    # PROJ is /workspace/Recommendation-Machine-Unlearning/code/, so use parent dir
-    project_root = os.path.dirname(PROJ)  # /workspace/Recommendation-Machine-Unlearning
-
-    # Load data
+    project_root = os.path.dirname(PROJ)
     data_path = os.path.join(project_root, 'data/ml-1m/')
+
     from utility.parser import parse_args
     args = parse_args()
     args.data_path = data_path
@@ -226,7 +209,6 @@ def run_one_scenario(part_num, part_type, agg_type, unlearn_type, ratio, regs='0
         part_T=getattr(args, 'part_T', 5)
     )
 
-    # Load pretrained weights
     for ep in [100, 1000, 5, 3]:
         weights_path = os.path.join(
             project_root, 'weights', 'ml-1m', 'RecEraser_BPR',
@@ -241,7 +223,6 @@ def run_one_scenario(part_num, part_type, agg_type, unlearn_type, ratio, regs='0
         print(f'   [SKIP] no checkpoint at {weights_path}')
         return None
 
-    # Create model
     device = 'cuda' if torch.cuda.is_available() else 'cpu'
     model = RecEraserBPR(
         n_users=data_generator.n_users,
@@ -256,12 +237,6 @@ def run_one_scenario(part_num, part_type, agg_type, unlearn_type, ratio, regs='0
     model.load_state_dict(checkpoint['state_dict'])
     print(f'   loaded pretrained from {weights_path}')
 
-    # Debug: check embedding norm
-    with torch.no_grad():
-        emb_norm = model.user_embedding.weight.norm().item()
-        print(f'   DEBUG: user_emb norm = {emb_norm:.4f}')
-
-    # Load partition data
     C_path = os.path.join(project_root, 'data', 'ml-1m', f'C_type-{part_type}_num-{part_num}.pk')
     if not os.path.exists(C_path):
         print(f'   [SKIP] no partition file at {C_path}')
@@ -270,21 +245,17 @@ def run_one_scenario(part_num, part_type, agg_type, unlearn_type, ratio, regs='0
     with open(C_path, 'rb') as f:
         C = pickle.load(f)
 
-    # Baseline evaluation
     print('   evaluating baseline...', flush=True)
     users_to_test = list(data_generator.test_set.keys())
     baseline = test_torch(model, users_to_test, device=device)
     print(f'   baseline Recall@20={baseline["recall"][1]:.4f}')
 
-    # Find unlearn set
     u_unlearn, i_unlearn = get_unlearn_entities(unlearn_type, ratio, data_path)
     print(f'   unlearn: {len(u_unlearn)} users, {len(i_unlearn)} items')
 
-    # Find affected shards
     affected = find_affected_shards(C, unlearn_type, u_unlearn, i_unlearn)
     print(f'   affected shards: {affected}')
 
-    # Retrain affected shards
     t0 = time()
     for sid in affected:
         print(f'   retrain shard {sid}...', flush=True)
@@ -295,7 +266,6 @@ def run_one_scenario(part_num, part_type, agg_type, unlearn_type, ratio, regs='0
     retrain_time = time() - t0
     print(f'   retrain time: {retrain_time:.1f}s')
 
-    # Evaluate after unlearning
     print('   evaluating after unlearn...', flush=True)
     online = test_torch(model, users_to_test, device=device)
 
@@ -338,26 +308,22 @@ def main():
     ptypes = [cli.part_type] if cli.part_type else [1, 2, 3, 4]
     utypes = [cli.unlearn_type]
 
-    part_num = 10  # Fixed for this project
+    part_num = 10
 
-    out_doc = {}
     for pt in ptypes:
         for ut in utypes:
             r = run_one_scenario(part_num, pt, cli.agg_type, ut, cli.unlearn_ratio, cli.regs)
             if r is None:
                 continue
-            key = f'num{part_num}_{METHOD_INFO[pt]}-{cli.agg_type}_{ut}_r{int(cli.unlearn_ratio*100):02d}'
-            out_doc[key] = r
 
-    if not out_doc:
-        print('No scenarios run.')
-        return
+            # Save to file with partition in name
+            out_filename = f'online_unlearn_p{part_num}_t{pt}_{cli.agg_type}_{ut}_r{int(cli.unlearn_ratio*100):02d}.json'
+            out_path = os.path.join(RESULTS, out_filename)
+            os.makedirs(os.path.dirname(out_path), exist_ok=True)
 
-    out_path = cli.out or os.path.join(RESULTS, f'online_unlearn_num{part_num}_pytorch_{cli.agg_type}_{cli.unlearn_type}_r{int(cli.unlearn_ratio*100):02d}.json')
-    os.makedirs(os.path.dirname(out_path), exist_ok=True)
-    with open(out_path, 'w') as f:
-        json.dump(out_doc, f, indent=2)
-    print(f'\n[OK] Saved: {out_path}')
+            with open(out_path, 'w') as f:
+                json.dump({f'num{part_num}_{METHOD_INFO[pt]}_{cli.agg_type}_{ut}_r{int(cli.unlearn_ratio*100):02d}': r}, f, indent=2)
+            print(f'[OK] Saved: {out_path}')
 
 
 if __name__ == '__main__':
