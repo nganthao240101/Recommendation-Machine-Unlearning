@@ -40,9 +40,14 @@ def summarize_results(results_dir='results'):
 
             for key, val in data.items():
                 partition = val.get('partition', 'Unknown')
-                unlearn_type = val.get('unlearn_type', 'unknown')
-                ratio = 5
+                # Extract unlearn_type from key
+                unlearn_type = 'unknown'
+                for ut in ['interaction', 'item', 'user_random', 'user_high', 'user_low']:
+                    if ut in key:
+                        unlearn_type = ut
+                        break
 
+                ratio = 5
                 ratio_match = re.search(r'r(\d+)', key)
                 if ratio_match:
                     ratio = int(ratio_match.group(1))
