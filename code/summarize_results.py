@@ -7,30 +7,30 @@ import glob
 import re
 
 def summarize_results(results_dir='results'):
-    # Try multiple possible locations
     possible_dirs = [
         results_dir,
         os.path.join('..', results_dir),
         os.path.join(os.path.dirname(__file__), '..', results_dir),
     ]
 
-    results_dir = None
+    results_dir_path = None
     for d in possible_dirs:
         if os.path.exists(d) and os.path.isdir(d):
-            results_dir = d
+            results_dir_path = d
             break
 
-    if results_dir is None:
+    if results_dir_path is None:
         print("ERROR: results directory not found")
         return
 
-    files = glob.glob(os.path.join(results_dir, 'online_unlearn_num10*.json'))
+    files = glob.glob(os.path.join(results_dir_path, 'online_unlearn*.json'))
+    files = list(set(files))
 
     if not files:
-        print(f"No results found in {results_dir}")
+        print("No results found in", results_dir_path)
         return
 
-    print(f"Found {len(files)} result files in {results_dir}")
+    print("Found", len(files), "result files in", results_dir_path)
 
     results = []
     for f in sorted(files):
@@ -39,29 +39,13 @@ def summarize_results(results_dir='results'):
                 data = json.load(fp)
 
             for key, val in data.items():
-                # Parse key formats:
-                # num10_InP-attention_interaction_r05
-                # num10_IBP-attention_interaction_r05
-                # num10_UBP-attention_interaction_r05
-                # num10_Random-attention_interaction_r05
+                partition = val.get('partition', 'Unknown')
+                unlearn_type = val.get('unlearn_type', 'unknown')
+                ratio = 5
 
-                # Extract parts using regex
-                match = re.match(r'num(\d+)_(.+?)-(.+?)_(.+?)_r(\d+)', key)
-                if not match:
-                    # Try alternative format
-                    parts = key.split('_')
-                    if len(parts) >= 5:
-                        partition = parts[1].split('-')[0]  # InP-attention -> InP
-                        unlearn_type = parts[3]
-                        ratio_str = parts[4]
-                    else:
-                        print(f"Skipping malformed key: {key}")
-                        continue
-                else:
-                    partition = match.group(2)  # InP, IBP, UBP, Random
-                    agg = match.group(3)  # attention, mean
-                    unlearn_type = match.group(4)
-                    ratio_str = 'r' + match.group(5)
+                ratio_match = re.search(r'r(\d+)', key)
+                if ratio_match:
+                    ratio = int(ratio_match.group(1))
 
                 baseline_recall = val['baseline']['recall20']
                 after_recall = val['online_unlearn']['recall20']
@@ -72,7 +56,7 @@ def summarize_results(results_dir='results'):
                 results.append({
                     'partition': partition,
                     'unlearn_type': unlearn_type,
-                    'ratio': int(ratio_str[1:]),  # r05 -> 5
+                    'ratio': ratio,
                     'baseline': baseline_recall,
                     'after': after_recall,
                     'change_pct': change,
@@ -80,29 +64,28 @@ def summarize_results(results_dir='results'):
                     'n_shards': n_shards
                 })
         except Exception as e:
-            print(f"Error reading {f}: {e}")
+            print("Error reading", f, ":", e)
 
     if not results:
         print("No valid results found")
         return
 
-    # Sort by partition, unlearn_type, ratio
     results.sort(key=lambda x: (x['partition'], x['unlearn_type'], x['ratio']))
 
-    # Print table
     print("=" * 130)
-    print(f"{'Partition':<10} {'Unlearn Type':<15} {'Ratio':<8} {'Baseline':<12} {'After':<12} {'Change%':<12} {'Time(s)':<10} {'Shards':<8}")
+    print("{:<10} {:<15} {:<8} {:<12} {:<12} {:<12} {:<10} {:<8}".format(
+        'Partition', 'Unlearn Type', 'Ratio', 'Baseline', 'After', 'Change%', 'Time(s)', 'Shards'))
     print("=" * 130)
 
     for r in results:
         status = "OK" if abs(r['change_pct']) < 5 else "BAD"
-        print(f"{r['partition']:<10} {r['unlearn_type']:<15} {r['ratio']:>4}%   "
-              f"{r['baseline']:<12.4f} {r['after']:<12.4f} {r['change_pct']:>+10.1f}%  {status}  "
-              f"{r['retrain_time']:<10.2f} {r['n_shards']:<8}")
+        print("{:<10} {:<15} {:>4}%   {:<12.4f} {:<12.4f} {:>+10.1f}%  {}  {:<10.2f} {:<8}".format(
+            r['partition'], r['unlearn_type'], r['ratio'],
+            r['baseline'], r['after'], r['change_pct'], status,
+            r['retrain_time'], r['n_shards']))
 
     print("=" * 130)
 
-    # Summary by unlearn type
     print("\n" + "=" * 60)
     print("SUMMARY BY UNLEARN TYPE (avg change %)")
     print("=" * 60)
@@ -117,9 +100,8 @@ def summarize_results(results_dir='results'):
     for ut, changes in sorted(summary.items()):
         avg = sum(changes) / len(changes)
         status = "[GOOD]" if avg > -5 else "[BAD]"
-        print(f"{ut:<20}: {avg:>+8.2f}% avg change  {status}")
+        print("{:<20}: {:>+8.2f}% avg change  {}".format(ut, avg, status))
 
-    # Summary by partition
     print("\n" + "=" * 60)
     print("SUMMARY BY PARTITION (avg change %)")
     print("=" * 60)
@@ -134,10 +116,10 @@ def summarize_results(results_dir='results'):
     for pt, changes in sorted(summary_partition.items()):
         avg = sum(changes) / len(changes)
         status = "[GOOD]" if avg > -5 else "[BAD]"
-        print(f"{pt:<10}: {avg:>+8.2f}% avg change  {status}")
+        print("{:<10}: {:>+8.2f}% avg change  {}".format(pt, avg, status))
 
     print("=" * 60)
-    print(f"\nTotal results: {len(results)}")
+    print("\nTotal results:", len(results))
 
 if __name__ == '__main__':
     summarize_results()
