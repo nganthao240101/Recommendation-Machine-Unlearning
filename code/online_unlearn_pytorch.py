@@ -353,7 +353,7 @@ def main():
         print('No scenarios run.')
         return
 
-    out_path = cli.out or os.path.join(RESULTS, f'online_unlearn_num{part_num}_pytorch_{cli.agg_type}_r{int(cli.unlearn_ratio*100):02d}.json')
+    out_path = cli.out or os.path.join(RESULTS, f'online_unlearn_num{part_num}_pytorch_{cli.agg_type}_{cli.unlearn_type}_r{int(cli.unlearn_ratio*100):02d}.json')
     os.makedirs(os.path.dirname(out_path), exist_ok=True)
     with open(out_path, 'w') as f:
         json.dump(out_doc, f, indent=2)
