@@ -2,7 +2,7 @@
 Random User Unlearning - Run multiple times with different random users.
 
 Usage:
-  python unlearn_random_users.py --agg_type attention --ratio 5 --part_type 1 --n_runs 5
+  python unlearn_random_users.py --ratio 5 --part_type 1 --n_runs 5
 """
 import os
 import sys
@@ -15,16 +15,21 @@ import torch
 from torch.optim import Adagrad
 from time import time
 
+# BLOCK TensorFlow imports by setting fake args FIRST
+sys.argv = ['unlearn_random_users.py']  # Reset before any imports
+
 # Project paths
 PROJ = os.path.dirname(os.path.abspath(__file__))
 project_root = os.path.dirname(PROJ)
 sys.path.insert(0, PROJ)
 
-# Set data path
+# Set data path BEFORE importing
 os.environ['RECUNLEARN_DATA_PATH'] = os.path.join(project_root, 'data/')
 os.environ['RECUNLEARN_DATASET'] = 'ml-1m'
 
+# Import after setting env vars
 from RecEraser_BPR_pytorch import RecEraserBPR, test_torch
+from utility.load_data import Data
 
 METHOD_INFO = {1: 'InP', 2: 'UBP', 3: 'Random', 4: 'IBP'}
 
@@ -70,52 +75,19 @@ def create_random_unlearn_file(input_file, output_file, n_users, seed):
     return unlearned_users
 
 
-def find_affected_shards(C, unlearn_type, unlearned_uids, unlearned_iids):
-    """Return list of shard indices containing unlearned entities."""
+def find_affected_shards(C, unlearned_uids):
+    """Return list of shard indices containing unlearned users."""
     affected = []
     for i, shard in enumerate(C):
         shard_users = set(shard.keys())
-        shard_items = set()
-        for items in shard.values():
-            shard_items.update(items)
-
-        if unlearn_type == 'user':
-            hit = bool(shard_users & unlearned_uids)
-        elif unlearn_type == 'item':
-            hit = bool(shard_items & unlearned_iids)
-        else:
-            hit = False
-            for u, items in shard.items():
-                if u in unlearned_uids:
-                    hit = True
-                    break
-                for item_id in items:
-                    if item_id in unlearned_iids:
-                        hit = True
-                        break
-                if hit:
-                    break
-        if hit:
+        if shard_users & unlearned_uids:
             affected.append(i)
     return affected
 
 
-def filter_shard_data(shard, unlearn_type, unlearned_uids, unlearned_iids):
-    """Return new shard dict with unlearned entities removed."""
-    if unlearn_type == 'user':
-        return {u: items for u, items in shard.items() if u not in unlearned_uids}
-    elif unlearn_type == 'item':
-        return {u: [i for i in items if i not in unlearned_iids]
-                for u, items in shard.items()}
-    else:
-        result = {}
-        for u, items in shard.items():
-            if u in unlearned_uids:
-                continue
-            filtered = [i for i in items if i not in unlearned_iids]
-            if filtered:
-                result[u] = filtered
-        return result
+def filter_shard_by_users(shard, unlearned_uids):
+    """Return new shard dict with unlearned users removed."""
+    return {u: items for u, items in shard.items() if u not in unlearned_uids}
 
 
 def retrain_shard(model, shard_id, shard_data, lr, batch_size, device, n_epochs=1):
@@ -168,10 +140,15 @@ def retrain_shard(model, shard_id, shard_data, lr, batch_size, device, n_epochs=
     return loss_acc
 
 
-def run_one_unlearn(part_num, part_type, agg_type, ratio, data_path, n_runs=5, seed_start=42):
+def run_random_unlearn(part_type, ratio, n_runs, seed_start=42):
     """Run unlearn multiple times with different random users."""
+    part_num = 10
+    agg_type = 'attention'
+    lr = 0.05
+
     results_dir = os.path.join(project_root, 'results')
     os.makedirs(results_dir, exist_ok=True)
+    data_path = os.path.join(project_root, 'data/ml-1m')
 
     # Load partition data
     C_path = os.path.join(data_path, f'C_type-{part_type}_num-{part_num}.pk')
@@ -179,7 +156,6 @@ def run_one_unlearn(part_num, part_type, agg_type, ratio, data_path, n_runs=5, s
         C = pickle.load(f)
 
     # Load weights
-    lr = 0.05
     for ep in [100, 1000, 5, 3]:
         weights_path = os.path.join(
             project_root, 'weights', 'ml-1m', 'RecEraser_BPR',
@@ -208,7 +184,6 @@ def run_one_unlearn(part_num, part_type, agg_type, ratio, data_path, n_runs=5, s
     print(f"  loaded pretrained from {weights_path}")
 
     # Get test users
-    from utility.load_data import Data
     data_gen = Data(
         path=data_path,
         batch_size=512,
@@ -217,6 +192,9 @@ def run_one_unlearn(part_num, part_type, agg_type, ratio, data_path, n_runs=5, s
         part_T=5
     )
     users_to_test = list(data_gen.test_set.keys())
+
+    total_users = 6040
+    n_users_to_unlearn = int(total_users * ratio / 100)
 
     all_results = []
 
@@ -229,23 +207,12 @@ def run_one_unlearn(part_num, part_type, agg_type, ratio, data_path, n_runs=5, s
         unlearned_users = create_random_unlearn_file(
             os.path.join(data_path, 'train.txt'),
             temp_file,
-            int(6040 * ratio / 100),  # 5% of 6040 users
+            n_users_to_unlearn,
             seed
         )
 
-        # Get unlearn entities
-        base_data = load_train(os.path.join(data_path, 'train.txt'))
-        target_data = load_train(temp_file)
-
-        unlearned_uids = set()
-        for uid in base_data:
-            if uid not in target_data:
-                unlearned_uids.add(uid)
-
-        print(f"  unlearn: {len(unlearned_uids)} users")
-
         # Find affected shards
-        affected = find_affected_shards(C, 'user', unlearned_uids, set())
+        affected = find_affected_shards(C, unlearned_users)
         print(f"  affected shards: {affected}")
 
         # Evaluate baseline
@@ -255,7 +222,7 @@ def run_one_unlearn(part_num, part_type, agg_type, ratio, data_path, n_runs=5, s
         # Retrain affected shards
         t0 = time()
         for sid in affected:
-            shard_data = filter_shard_data(C[sid], 'user', unlearned_uids, set())
+            shard_data = filter_shard_by_users(C[sid], unlearned_users)
             loss = retrain_shard(model, sid, shard_data, lr, 512, device, n_epochs=1)
             print(f"  shard {sid} retrain done (loss={loss:.4f})")
 
@@ -263,19 +230,16 @@ def run_one_unlearn(part_num, part_type, agg_type, ratio, data_path, n_runs=5, s
 
         # Evaluate after
         after = test_torch(model, users_to_test, device=device)
-        print(f"  after Recall@20={after['recall'][1]:.4f} (change: {(after['recall'][1] - baseline['recall'][1])/baseline['recall'][1]*100:+.1f}%)")
+        change = (after['recall'][1] - baseline['recall'][1]) / baseline['recall'][1] * 100
+        print(f"  after Recall@20={after['recall'][1]:.4f} (change: {change:+.1f}%)")
 
         result = {
             'run_idx': run_idx + 1,
             'seed': seed,
             'n_unlearned_users': len(unlearned_users),
-            'baseline': {
-                'recall20': float(baseline['recall'][1]),
-            },
-            'after': {
-                'recall20': float(after['recall'][1]),
-            },
-            'change_pct': float((after['recall'][1] - baseline['recall'][1]) / baseline['recall'][1] * 100),
+            'baseline_recall20': float(baseline['recall'][1]),
+            'after_recall20': float(after['recall'][1]),
+            'change_pct': float(change),
             'retrain_time_s': float(retrain_time),
             'affected_shards': affected,
         }
@@ -289,35 +253,25 @@ def run_one_unlearn(part_num, part_type, agg_type, ratio, data_path, n_runs=5, s
 
 
 def main():
-    ap = argparse.ArgumentParser()
-    ap.add_argument('--agg_type', type=str, default='attention',
-                    choices=['attention', 'mean'])
-    ap.add_argument('--ratio', type=int, default=5,
-                    help='Percentage of users to unlearn (default: 5)')
-    ap.add_argument('--part_type', type=int, default=1,
-                    help='Partition type: 1=InP, 2=UBP, 3=Random, 4=IBP')
-    ap.add_argument('--n_runs', type=int, default=5,
-                    help='Number of runs with different random users (default: 5)')
+    ap = argparse.ArgumentParser(description='Random User Unlearning')
+    ap.add_argument('--ratio', type=int, default=5, help='Percentage of users to unlearn')
+    ap.add_argument('--part_type', type=int, default=1, help='Partition type: 1=InP, 2=UBP, 3=Random, 4=IBP')
+    ap.add_argument('--n_runs', type=int, default=5, help='Number of runs')
     cli = ap.parse_args()
 
     print(f"\n{'='*60}")
     print(f"RANDOM USER UNLEARN")
-    print(f"  agg_type: {cli.agg_type}")
     print(f"  ratio: {cli.ratio}%")
     print(f"  partition: {METHOD_INFO[cli.part_type]}")
     print(f"  runs: {cli.n_runs}")
     print(f"{'='*60}")
 
-    data_path = os.path.join(project_root, 'data/ml-1m')
     results_dir = os.path.join(project_root, 'results')
     os.makedirs(results_dir, exist_ok=True)
 
-    all_results = run_one_unlearn(
-        part_num=10,
+    all_results = run_random_unlearn(
         part_type=cli.part_type,
-        agg_type=cli.agg_type,
         ratio=cli.ratio,
-        data_path=data_path,
         n_runs=cli.n_runs,
         seed_start=42
     )
@@ -327,8 +281,8 @@ def main():
         return
 
     # Calculate statistics
-    baseline_recalls = [r['baseline']['recall20'] for r in all_results]
-    after_recalls = [r['after']['recall20'] for r in all_results]
+    baseline_recalls = [r['baseline_recall20'] for r in all_results]
+    after_recalls = [r['after_recall20'] for r in all_results]
     changes = [r['change_pct'] for r in all_results]
 
     print(f"\n{'='*60}")
@@ -340,11 +294,10 @@ def main():
 
     # Save
     output_file = os.path.join(results_dir,
-        f'random_user_unlearn_p{10}_t{cli.part_type}_{cli.agg_type}_r{cli.ratio:02d}_runs{cli.n_runs}.json')
+        f'random_user_p{10}_t{cli.part_type}_r{cli.ratio:02d}_runs{cli.n_runs}.json')
 
     output_data = {
         'config': {
-            'agg_type': cli.agg_type,
             'ratio': cli.ratio,
             'part_type': METHOD_INFO[cli.part_type],
             'n_runs': cli.n_runs,
