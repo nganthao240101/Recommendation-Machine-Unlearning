@@ -19,7 +19,7 @@ sys.path.insert(0, PROJ)
 
 # Set data path BEFORE importing modules
 project_root = os.path.dirname(PROJ)
-os.environ['RECUNLEARN_DATA_PATH'] = project_root
+os.environ['RECUNLEARN_DATA_PATH'] = project_root + '/data/'
 os.environ['RECUNLEARN_DATASET'] = 'ml-1m'
 
 from utility.helper import early_stopping
