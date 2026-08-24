@@ -15,15 +15,22 @@ import torch
 from torch.optim import Adagrad
 from time import time
 
-# BLOCK TensorFlow imports by setting fake args FIRST
-sys.argv = ['unlearn_random_users.py']  # Reset before any imports
+# Parse arguments FIRST, before any other imports
+ap = argparse.ArgumentParser(description='Random User Unlearning')
+ap.add_argument('--ratio', type=int, default=5, help='Percentage of users to unlearn')
+ap.add_argument('--part_type', type=int, default=1, help='Partition type: 1=InP, 2=UBP, 3=Random, 4=IBP')
+ap.add_argument('--n_runs', type=int, default=5, help='Number of runs')
+cli = ap.parse_args()
+
+# BLOCK TensorFlow imports by resetting sys.argv AFTER argparse
+sys.argv = ['unlearn_random_users.py']
 
 # Project paths
 PROJ = os.path.dirname(os.path.abspath(__file__))
 project_root = os.path.dirname(PROJ)
 sys.path.insert(0, PROJ)
 
-# Set data path BEFORE importing
+# Set data path
 os.environ['RECUNLEARN_DATA_PATH'] = os.path.join(project_root, 'data/')
 os.environ['RECUNLEARN_DATASET'] = 'ml-1m'
 
@@ -53,19 +60,15 @@ def create_random_unlearn_file(input_file, output_file, n_users, seed):
     """Create unlearn file with randomly selected n_users."""
     random.seed(seed)
 
-    # Load data
     user_items = load_train(input_file)
     all_users = list(user_items.keys())
 
-    # Randomly select n_users to unlearn
     n_to_unlearn = min(n_users, len(all_users))
     unlearned_users = set(random.sample(all_users, n_to_unlearn))
 
-    # Create unlearned data
     unlearned_data = {uid: items for uid, items in user_items.items()
                      if uid not in unlearned_users}
 
-    # Save
     with open(output_file, 'w') as f:
         for uid in sorted(unlearned_data.keys()):
             items = unlearned_data[uid]
@@ -149,6 +152,8 @@ def run_random_unlearn(part_type, ratio, n_runs, seed_start=42):
     results_dir = os.path.join(project_root, 'results')
     os.makedirs(results_dir, exist_ok=True)
     data_path = os.path.join(project_root, 'data/ml-1m')
+
+    print(f"\n  partition: {METHOD_INFO[part_type]} (type={part_type})")
 
     # Load partition data
     C_path = os.path.join(data_path, f'C_type-{part_type}_num-{part_num}.pk')
@@ -253,12 +258,6 @@ def run_random_unlearn(part_type, ratio, n_runs, seed_start=42):
 
 
 def main():
-    ap = argparse.ArgumentParser(description='Random User Unlearning')
-    ap.add_argument('--ratio', type=int, default=5, help='Percentage of users to unlearn')
-    ap.add_argument('--part_type', type=int, default=1, help='Partition type: 1=InP, 2=UBP, 3=Random, 4=IBP')
-    ap.add_argument('--n_runs', type=int, default=5, help='Number of runs')
-    cli = ap.parse_args()
-
     print(f"\n{'='*60}")
     print(f"RANDOM USER UNLEARN")
     print(f"  ratio: {cli.ratio}%")
