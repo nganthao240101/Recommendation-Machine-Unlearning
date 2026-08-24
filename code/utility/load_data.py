@@ -23,8 +23,8 @@ class Data(object):
         data_path = os.environ.get('RECUNLEARN_DATA_PATH', None)
         if data_path:
             # Use env var path + dataset
-            dataset = os.environ.get('RECUNLEARN_DATASET', '')
-            path = data_path + dataset
+            dataset = os.environ.get('RECUNLEARN_DATASET', 'ml-1m')
+            path = os.path.join(data_path, dataset)
         elif path.startswith('../'):
             base_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
             path = os.path.join(base_dir, path[3:])
