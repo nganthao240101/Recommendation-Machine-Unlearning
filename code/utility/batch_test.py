@@ -14,12 +14,22 @@ import heapq
 import numpy as np
 cores = multiprocessing.cpu_count() // 2
 
+# Set data path from environment variable FIRST
+if os.environ.get('RECUNLEARN_DATA_PATH'):
+    _data_path = os.environ['RECUNLEARN_DATA_PATH']
+    _dataset = os.environ.get('RECUNLEARN_DATASET', 'ml-1m')
+else:
+    _data_path = None
+    _dataset = None
+
 args = parse_args()
 
-# Fix default data path
-if not hasattr(args, 'data_path') or not args.data_path:
+# Use env var if set, otherwise use parsed args
+if _data_path and _dataset:
+    args.data_path = _data_path
+    args.dataset = _dataset
+elif not hasattr(args, 'data_path') or not args.data_path:
     args.data_path = os.path.dirname(os.path.dirname(os.path.abspath(__file__))) + '/data/'
-if not hasattr(args, 'dataset') or not args.dataset:
     args.dataset = 'ml-1m'
 
 data_generator = Data(path=args.data_path + args.dataset, batch_size=args.batch_size,part_type=args.part_type,part_num=args.part_num,part_T=args.part_T)
