@@ -66,9 +66,12 @@ def load_train(path):
 
 
 def create_random_unlearn_file(input_file, output_file, unlearn_type, ratio, seed):
-    """Create unlearn file based on type."""
+    """Create unlearn file based on type. Returns (unlearned_uids, unlearned_iids, unlearned_data)."""
     random.seed(seed)
     user_items = load_train(input_file)
+
+    unlearned_uids = set()
+    unlearned_iids = set()
 
     if unlearn_type == 'user':
         # Unlearn random users
@@ -76,7 +79,7 @@ def create_random_unlearn_file(input_file, output_file, unlearn_type, ratio, see
         n_to_unlearn = int(len(all_users) * ratio / 100)
         unlearned_users = set(random.sample(all_users, n_to_unlearn))
         unlearned_data = {uid: items for uid, items in user_items.items() if uid not in unlearned_users}
-        return len(unlearned_users), set(), unlearned_data
+        unlearned_uids = unlearned_users
 
     elif unlearn_type == 'item':
         # Unlearn random items
@@ -91,7 +94,7 @@ def create_random_unlearn_file(input_file, output_file, unlearn_type, ratio, see
             remaining = [i for i in items if i not in unlearned_items]
             if remaining:
                 unlearned_data[uid] = remaining
-        return set(), unlearned_items, unlearned_data
+        unlearned_iids = unlearned_items
 
     elif unlearn_type == 'interaction':
         # Unlearn random interactions
@@ -106,7 +109,10 @@ def create_random_unlearn_file(input_file, output_file, unlearn_type, ratio, see
             remaining = [i for i in items if (uid, i) not in to_unlearn]
             if remaining:
                 unlearned_data[uid] = remaining
-        return set(), set(), unlearned_data
+            else:
+                unlearned_uids.add(uid)  # User lost all items
+
+    return unlearned_uids, unlearned_iids, unlearned_data
 
 
 def find_affected_shards(C, unlearn_type, unlearned_uids, unlearned_iids):
