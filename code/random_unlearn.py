@@ -261,6 +261,9 @@ def run_random_unlearn(unlearn_type, part_type, ratio, n_runs, seed_start=42):
         seed = seed_start + run_idx
         print(f"\n  --- Run {run_idx + 1}/{n_runs} (seed={seed}) ---")
 
+        # RELOAD MODEL FROM CHECKPOINT for each run
+        model.load_state_dict(checkpoint['state_dict'])
+
         # Create random unlearned data
         temp_file = os.path.join(data_path, f'temp_{unlearn_type}_r{ratio:02d}_run{run_idx}.txt')
         unlearned_uids, unlearned_iids, unlearned_data = create_random_unlearn_file(
