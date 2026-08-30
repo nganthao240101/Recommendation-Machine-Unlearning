@@ -1,4 +1,3 @@
-
 import tensorflow as tf
 tf.compat.v1.disable_eager_execution()
 from utility.helper import *
@@ -11,7 +10,7 @@ import copy
 import pickle
 
 class WMF:
-    def __init__(self, user_num, item_num,max_item_pu):
+    def __init__(self, user_num, item_num, max_item_pu):
         self.user_num = user_num
         self.item_num = item_num
         self.embedding_size = args.embed_size
@@ -22,17 +21,17 @@ class WMF:
         self.Ks = eval(args.Ks)
 
     def _create_placeholders(self):
-        self.input_u = tf.placeholder(tf.int32, [None, 1], name="input_uid")
-        self.input_ur = tf.placeholder(tf.int32, [None, None], name="input_ur")
-        self.dropout_keep_prob = tf.placeholder(tf.float32, name="dropout_keep_prob")
+        self.input_u = tf.compat.v1.placeholder(tf.int32, [None, 1], name="input_uid")
+        self.input_ur = tf.compat.v1.placeholder(tf.int32, [None, None], name="input_ur")
+        self.dropout_keep_prob = tf.compat.v1.placeholder(tf.float32, name="dropout_keep_prob")
 
-        self.users = tf.placeholder(tf.int32, shape=(None,))
-        self.pos_items = tf.placeholder(tf.int32, shape=(None,))
+        self.users = tf.compat.v1.placeholder(tf.int32, shape=(None,))
+        self.pos_items = tf.compat.v1.placeholder(tf.int32, shape=(None,))
 
     def _create_variables(self):
-        self.uidW = tf.Variable(tf.truncated_normal(shape=[self.user_num, self.embedding_size], mean=0.0,
+        self.uidW = tf.Variable(tf.random.truncated_normal(shape=[self.user_num, self.embedding_size], mean=0.0,
                                                     stddev=0.01), dtype=tf.float32, name="uidWg")
-        self.iidW = tf.Variable(tf.truncated_normal(shape=[self.item_num + 1, self.embedding_size], mean=0.0,
+        self.iidW = tf.Variable(tf.random.truncated_normal(shape=[self.item_num + 1, self.embedding_size], mean=0.0,
                                                     stddev=0.01), dtype=tf.float32, name="iidW")
 
     def _create_inference(self):
@@ -63,7 +62,7 @@ class WMF:
         self.reg_loss = self.lambda_bilinear[0] * self.l2_loss0 \
                         + self.lambda_bilinear[1] * self.l2_loss1
 
-        self.opt = tf.train.AdagradOptimizer(learning_rate=self.lr, initial_accumulator_value=1e-8).minimize(self.loss)
+        self.opt = tf.compat.v1.train.AdagradOptimizer(learning_rate=self.lr, initial_accumulator_value=1e-8).minimize(self.loss)
 
     def _build_graph(self):
         self._create_placeholders()
@@ -72,54 +71,76 @@ class WMF:
         self._create_loss()
         self._pre()
         #self.opt = tf.train.AdamOptimizer(learning_rate=self.lr).minimize(self.loss)
-        
+
 
 
 def get_lables(temp_set,k=0.9999):
     max_item = 0
     item_lenth = []
-    for i in temp_set:
-        item_lenth.append(len(temp_set[i]))
-        if len(temp_set[i]) > max_item:
-            max_item = len(temp_set[i])
-    item_lenth.sort()
+    for key in temp_set:
+        item_lenth.append(len(temp_set[key]))
+        if len(temp_set[key]) > max_item:
+            max_item = len(temp_set[key])
+    print('max_item length of train:', max_item)
+    result = []
+    for key in temp_set:
+        temp = temp_set[key]
+        tem_length = len(temp)
+        labeled = temp.copy()
+        if tem_length < max_item:
+            labeled.extend([temp_set['user_num']] * (max_item - tem_length))
+        result.append(labeled)
 
-    max_item = item_lenth[int(len(item_lenth) * k)-1]
+    item_set = []
+    for key in temp_set:
+        item_set.extend(temp_set[key])
+    item_set = set(item_set)
 
-    print(max_item)
-    for i in temp_set:
-        if len(temp_set[i]) > max_item:
-            temp_set[i] = temp_set[i][0:max_item]
-        while len(temp_set[i]) < max_item:
-            temp_set[i].append(n_items)
-    return max_item, temp_set
+    return max_item, result
 
-def get_train_instances(lable):
-    user_train, item= [], []
+def get_sparse_graph(train_items, n_items):
+    row, col, data = [], [], []
+    for u, items in train_items.items():
+        for i in items:
+            row.append(u)
+            col.append(n_items + i)
+            data.append(1)
+    for u, items in train.items():
+        for i in items:
+            row.append(n_items + i)
+            col.append(u)
+            data.append(1)
+    return csr_matrix((data, (row, col)), len(item_set)
 
-    for i in lable.keys():
-        user_train.append(i)
-        item.append(lable[i])
-    user_train = np.array(user_train)
-    item = np.array(item)
-    user_train = user_train[:, np.newaxis]
-    return user_train, item
+
+def prepare_data(train_items):
+    n_users = 0
+    n_items = 0
+    for key in train_items:
+        n_users = max(n_users, key)
+        for i in train_items[key]:
+            n_items = max(n_items, i)
+    n_users += 1
+    n_items += 1
+    train_items_user = {}
+    for key in train_items:
+        train_items_user[key] = list(train_items[key])
+    return n_users, n_items, train_items_user
+
 
 if __name__ == '__main__':
 
     tf.random.set_seed(2021)
     np.random.seed(2021)
 
-    n_users, n_items = data_generator.n_users, data_generator.n_items
-    train_items = copy.deepcopy(data_generator.train_items)
+    n_users, n_items, train_items = prepare_data(data_generator.train_items)
+    train = data_generator.train_items
     max_item, lable = get_lables(train_items)
 
     t0 = time()
 
     model = WMF(n_users, n_items, max_item)
     model._build_graph()
-
-
 
     config = tf.compat.v1.ConfigProto()
     config.gpu_options.allow_growth = True
@@ -132,111 +153,93 @@ if __name__ == '__main__':
 
     loss_loger, pre_loger, rec_loger, ndcg_loger,  = [], [], [], []
 
-    stopping_step = 0
-    should_stop = False
-
-    user_train1, item1 = get_train_instances(lable)
-
     for epoch in range(args.epoch):
-        shuffle_indices = np.random.permutation(np.arange(len(user_train1)))
-        user_train1 = user_train1[shuffle_indices]
-        item1 = item1[shuffle_indices]
+        loss, pre, rec, ndcg = [], [], [], []
+        train_samp = []
+        for key in train_items:
+            train_samp.append(key)
+        random.shuffle(train_samp)
+        for user in train_samp:
+            user_batch = [user]
+            item_batch = list(train_items[user])
 
-        t1 = time()
-        loss, mf_loss, emb_loss = 0., 0., 0.
-        n_batch = int(len(user_train1) / args.batch_size)
-        for idx in range(n_batch):
-            start_index = idx * args.batch_size
-            end_index = min((idx + 1) * args.batch_size, len(user_train1))
+            users, items = [], []
+            for i in range(args.batch_size):
+                users.append(user_batch[i % len(user_batch)])
+                items.append(item_batch[i % len(item_batch)])
 
-            u_batch = user_train1[start_index:end_index]
-            v_batch = item1[start_index:end_index]
-            _, batch_loss = sess.run(
+            _, loss_batch = sess.run(
                 [model.opt, model.loss],
-                feed_dict={model.input_u: u_batch,
-                           model.input_ur: v_batch,
-                           model.dropout_keep_prob:args.dropout
-                           })
-            loss += batch_loss / n_batch
+                feed_dict={model.input_u: np.array(users).reshape(len(users), 1),
+                           model.input_ur: np.array(items).reshape(len(users), max_item),
+                           model.dropout_keep_prob: 1,
+                           model.users: np.array(users),
+                           model.pos_items: np.array(items)})
+            loss.append(loss_batch)
 
-        if np.isnan(loss) == True:
-            print('ERROR: loss is nan.')
-            sys.exit()
+        loss_test, recall, ndcg_test = [], [], []
+        for user in range(n_users):
+            users, items = [], []
+            item_batch = list(set(range(n_items)) - set(train_items[user]))
 
-        if (epoch + 1) % 5 != 0:
-            if args.verbose > 0 and epoch % args.verbose == 0:
-                perf_str = 'Epoch %d [%.1fs]: train==[%.5f]' % (
-                    epoch, time() - t1, loss)
-                print(perf_str)
-            continue
+            for i in range(args.batch_size):
+                users.append(user)
+                items.append(item_batch[i % len(item_batch)])
 
-        t2 = time()
-        users_to_test = list(data_generator.test_set.keys())
-        ret = test(sess, model, users_to_test, drop_flag=False)
+            ret = sess.run(
+                model.batch_ratings,
+                feed_dict={model.users: np.array(users),
+                           model.pos_items: np.array(items)})
+            ret = np.array(ret).flatten()
 
-        t3 = time()
-        loss_loger.append(loss)
-        rec_loger.append(ret['recall'])
-        pre_loger.append(ret['precision'])
-        ndcg_loger.append(ret['ndcg'])
+            item_pos = train_items[user]
+            item_score_map = dict(zip(range(len(ret)), ret))
+            rank_list = heapq.nlargest(args.Ks[1], item_score_map, key=item_score_map.get)
+            item_pop = set(item_pos)
 
-        if args.verbose > 0:
-            perf_str = 'Epoch %d [%.1fs + %.1fs]:, recall=[%.5f, %.5f], ' \
-                       'precision=[%.5f, %.5f], ndcg=[%.5f, %.5f]' % \
-                       (epoch, t2 - t1, t3 - t2, ret['recall'][0], ret['recall'][1],
-                        ret['precision'][0], ret['precision'][1],
-                        ret['ndcg'][0], ret['ndcg'][1])
-            print(perf_str)
+            pre = [0.0 for _ in args.Ks]
+            rec = [0.0 for _ in args.Ks]
+            ndcg = [0.0 for _ in args.Ks]
 
-        cur_best_pre_0, stopping_step, should_stop = early_stopping(ret['recall'][0], cur_best_pre_0,
-                                                                    stopping_step, expected_order='acc', flag_step=10)
-        if should_stop == True:
-            break
+            for k in range(len(args.Ks)):
+                hit_list = list(rank_list[:args.Ks[k]])
+                dcg = 0.0
+                for i in range(len(hit_list)):
+                    if hit_list[i] in item_pop:
+                        dcg += 1.0 / np.log2(i + 2.0)
+                idcg = 0.0
+                for i in range(min(len(item_pos), args.Ks[k])):
+                    idcg += 1.0 / np.log2(i + 2.0)
+                ndcg[k] = dcg / idcg
 
-    recs = np.array(rec_loger)
-    pres = np.array(pre_loger)
-    ndcgs = np.array(ndcg_loger)
+            for k in range(len(args.Ks)):
+                hit_list = list(rank_list[:args.Ks[k]])
+                hit_num = len(set(hit_list) & set(item_pos))
+                pre[k] = hit_num / float(args.Ks[k])
+                rec[k] = hit_num / float(len(item_pos))
 
-    best_rec_0 = max(pres[:, 0])
-    idx = list(pres[:, 0]).index(best_rec_0)
+            pre_loger.append(pre)
+            rec_loger.append(rec)
+            ndcg_loger.append(ndcg)
 
-    final_perf = "Best Iter=[%d]@[%.1f]\trecall=[%s], precision=[%s], ndcg=[%s]" % \
-                 (idx, time() - t0, '\t'.join(['%.5f' % r for r in recs[idx]]),
-                  '\t'.join(['%.5f' % r for r in pres[idx]]),
-                  '\t'.join(['%.5f' % r for r in ndcgs[idx]]))
-    print(final_perf)
+        loss_loger.append(np.mean(loss))
+        print(f'Epoch {epoch}: loss={np.mean(loss):.4f}')
 
     uidW, iidW = sess.run([model.uidW, model.iidW])
 
     from datetime import datetime
     timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
 
-    # Save with timestamp (new version)
+    # Save with timestamp
     with open(args.data_path + args.dataset + f'/user_pretrain_{timestamp}.pk', 'wb') as f:
         pickle.dump(uidW, f)
     with open(args.data_path + args.dataset + f'/item_pretrain_{timestamp}.pk', 'wb') as f:
         pickle.dump(iidW, f)
 
-    # Also save as default (for RecEraser to load)
+    # Also save as default
     with open(args.data_path + args.dataset + '/user_pretrain.pk', 'wb') as f:
         pickle.dump(uidW, f)
     with open(args.data_path + args.dataset + '/item_pretrain.pk', 'wb') as f:
         pickle.dump(iidW, f)
 
     print(f'\n[SAVED] Embeddings with timestamp: {timestamp}')
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
