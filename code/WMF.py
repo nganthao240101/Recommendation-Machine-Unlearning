@@ -98,19 +98,19 @@ def get_lables(temp_set,k=0.9999):
 
     return max_item, result
 
-def get_sparse_graph(train_items, n_items):
+def get_sparse_graph(train_items, n_items, item_set):
     row, col, data = [], [], []
     for u, items in train_items.items():
         for i in items:
             row.append(u)
             col.append(n_items + i)
             data.append(1)
-    for u, items in train.items():
+    for u, items in train_items.items():
         for i in items:
             row.append(n_items + i)
             col.append(u)
             data.append(1)
-    return csr_matrix((data, (row, col)), len(item_set)
+    return csr_matrix((data, (row, col)), shape=(len(item_set), len(item_set)))
 
 
 def prepare_data(train_items):
