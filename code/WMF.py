@@ -107,7 +107,7 @@ def get_train_instances(lable):
 
 if __name__ == '__main__':
 
-    tf.set_random_seed(2021)
+    tf.random.set_seed(2021)
     np.random.seed(2021)
 
     n_users, n_items = data_generator.n_users, data_generator.n_items
