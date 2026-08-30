@@ -20,17 +20,17 @@ _dataset = os.environ.get('RECUNLEARN_DATASET', None)
 
 args = parse_args()
 
-# Override with env vars if set
+# Override with env vars if set, otherwise use default
 if _data_path and _dataset:
-    args.data_path = _data_path
-    args.dataset = _dataset
-elif not hasattr(args, 'data_path') or not args.data_path:
-    # Default: project_root/data/
+    data_full_path = os.path.join(_data_path, _dataset)
+elif hasattr(args, 'data_path') and args.data_path and hasattr(args, 'dataset') and args.dataset:
+    data_full_path = args.data_path + args.dataset
+else:
+    # Default: project_root/data/ml-1m
     project_root = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-    args.data_path = os.path.join(project_root, 'data')
-    args.dataset = 'ml-1m'
+    data_full_path = os.path.join(project_root, 'data', 'ml-1m')
 
-data_generator = Data(path=args.data_path + args.dataset, batch_size=args.batch_size,part_type=args.part_type,part_num=args.part_num,part_T=args.part_T)
+data_generator = Data(path=data_full_path, batch_size=args.batch_size,part_type=args.part_type,part_num=args.part_num,part_T=args.part_T)
 USR_NUM, ITEM_NUM = data_generator.n_users, data_generator.n_items
 N_TRAIN, N_TEST = data_generator.n_train, data_generator.n_test
 
