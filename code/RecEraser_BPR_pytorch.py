@@ -594,6 +594,48 @@ def main():
     print(f'  ndcg@50:   {ret["ndcg"][2]:.4f}')
     print('=' * 70)
 
+    # Save results to file (won't be overwritten)
+    import json
+    from datetime import datetime
+
+    results_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), '..', 'results')
+    os.makedirs(results_dir, exist_ok=True)
+
+    timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
+    result_file = os.path.join(results_dir,
+        f'RecEraser_p{args.part_num}_t{args.part_type}_{args.agg_type}_{timestamp}.json')
+
+    result_data = {
+        'config': {
+            'part_num': args.part_num,
+            'part_type': args.part_type,
+            'agg_type': args.agg_type,
+            'epoch': args.epoch,
+            'epoch_agg': args.epoch_agg,
+            'embed_size': args.embed_size,
+            'lr': args.lr,
+            'regs': str(args.regs),
+        },
+        'results': {
+            'recall': {
+                'recall@10': float(ret['recall'][0]),
+                'recall@20': float(ret['recall'][1]),
+                'recall@50': float(ret['recall'][2]),
+            },
+            'ndcg': {
+                'ndcg@10': float(ret['ndcg'][0]),
+                'ndcg@20': float(ret['ndcg'][1]),
+                'ndcg@50': float(ret['ndcg'][2]),
+            },
+        },
+        'timestamp': timestamp
+    }
+
+    with open(result_file, 'w') as f:
+        json.dump(result_data, f, indent=2)
+
+    print(f'\n[SAVED] Results to: {result_file}')
+
 
 if __name__ == '__main__':
     main()
