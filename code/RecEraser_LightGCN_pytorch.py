@@ -492,6 +492,27 @@ def main():
         agg_type=args.agg_type
     ).to(device)
 
+    # Load WMF pretrained embeddings for initialization
+    wmf_path = args.data_path + args.dataset
+    user_pretrain_path = os.path.join(wmf_path, 'user_pretrain.pk')
+    item_pretrain_path = os.path.join(wmf_path, 'item_pretrain.pk')
+
+    if os.path.exists(user_pretrain_path) and os.path.exists(item_pretrain_path):
+        import pickle
+        with open(user_pretrain_path, 'rb') as f:
+            uidW = pickle.load(f)
+        with open(item_pretrain_path, 'rb') as f:
+            iidW = pickle.load(f)
+
+        # Initialize all local models with WMF embeddings
+        for local_model in model.local_models:
+            local_model.user_embedding.weight.data = torch.FloatTensor(uidW)
+            local_model.item_embedding.weight.data = torch.FloatTensor(iidW)
+
+        print(f'Loaded WMF embeddings: user {uidW.shape}, item {iidW.shape}')
+    else:
+        print(f'WARNING: WMF pretrained embeddings not found at {wmf_path}')
+
     print(f"\nModel created: {n_users} users, {n_items} items, {num_local} shards")
 
     # Phase 1: Local training

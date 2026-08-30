@@ -503,9 +503,44 @@ def main():
             str(args.part_num), str(args.part_type),
             str(args.epoch), str(args.lr), args.agg_type)
         checkpoint_path = os.path.join(pretrain_path, 'weights.pt')
-        checkpoint = torch.load(checkpoint_path, map_location=device)
-        model.load_state_dict(checkpoint['state_dict'])
-        print('load the pretrained model parameters from: ', pretrain_path)
+
+        if os.path.exists(checkpoint_path):
+            checkpoint = torch.load(checkpoint_path, map_location=device)
+            model.load_state_dict(checkpoint['state_dict'])
+            print('load the pretrained model parameters from: ', pretrain_path)
+        else:
+            # Load WMF pretrained embeddings and initialize model
+            print('No checkpoint found. Loading WMF pretrained embeddings...')
+
+            # Load WMF embeddings
+            wmf_path = args.data_path + args.dataset
+            user_pretrain_path = os.path.join(wmf_path, 'user_pretrain.pk')
+            item_pretrain_path = os.path.join(wmf_path, 'item_pretrain.pk')
+
+            if os.path.exists(user_pretrain_path) and os.path.exists(item_pretrain_path):
+                import pickle
+                with open(user_pretrain_path, 'rb') as f:
+                    uidW = pickle.load(f)
+                with open(item_pretrain_path, 'rb') as f:
+                    iidW = pickle.load(f)
+
+                # Convert to tensor and expand for all shards
+                user_emb_np = uidW  # Shape: [n_users, emb_dim]
+                item_emb_np = iidW  # Shape: [n_items, emb_dim]
+
+                # Expand for all shards: [n_users, num_local * emb_dim]
+                user_emb_expanded = np.concatenate([user_emb_np] * args.part_num, axis=1)
+                item_emb_expanded = np.concatenate([item_emb_np] * args.part_num, axis=1)
+
+                # Load into model
+                model.user_embedding.weight.data = torch.FloatTensor(user_emb_expanded)
+                model.item_embedding.weight.data = torch.FloatTensor(item_emb_expanded)
+
+                print(f'Loaded WMF embeddings: user {user_emb_np.shape}, item {item_emb_np.shape}')
+                print(f'Expanded to {args.part_num} shards: user {user_emb_expanded.shape}')
+            else:
+                print(f'WARNING: WMF pretrained embeddings not found at {wmf_path}')
+                print('Using random initialization')
     else:
         # --------------------------------------------------------------
         # Phase 1: per-shard BPR training
