@@ -14,21 +14,22 @@ import heapq
 import numpy as np
 cores = multiprocessing.cpu_count() // 2
 
-# Set data path from environment variable FIRST
-_data_path = os.environ.get('RECUNLEARN_DATA_PATH', None)
-_dataset = os.environ.get('RECUNLEARN_DATASET', None)
+# Set data path from environment variable FIRST (highest priority)
+_env_data_path = os.environ.get('RECUNLEARN_DATA_PATH', None)
+_env_dataset = os.environ.get('RECUNLEARN_DATASET', None)
 
 args = parse_args()
 
-# Override with env vars if set, otherwise use default
-if _data_path and _dataset:
-    data_full_path = os.path.join(_data_path, _dataset)
-elif hasattr(args, 'data_path') and args.data_path and hasattr(args, 'dataset') and args.dataset:
-    data_full_path = args.data_path + args.dataset
+# Priority: env vars > hardcoded default
+if _env_data_path and _env_dataset:
+    # Use environment variables
+    data_full_path = os.path.join(_env_data_path, _env_dataset)
 else:
-    # Default: project_root/data/ml-1m
+    # Default: project_root/data/ml-1m (hardcoded)
     project_root = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
     data_full_path = os.path.join(project_root, 'data', 'ml-1m')
+
+print(f"[DEBUG] data_path: {data_full_path}")
 
 data_generator = Data(path=data_full_path, batch_size=args.batch_size,part_type=args.part_type,part_num=args.part_num,part_T=args.part_T)
 USR_NUM, ITEM_NUM = data_generator.n_users, data_generator.n_items
