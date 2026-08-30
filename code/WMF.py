@@ -208,10 +208,22 @@ if __name__ == '__main__':
 
     uidW, iidW = sess.run([model.uidW, model.iidW])
 
+    from datetime import datetime
+    timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
+
+    # Save with timestamp (new version)
+    with open(args.data_path + args.dataset + f'/user_pretrain_{timestamp}.pk', 'wb') as f:
+        pickle.dump(uidW, f)
+    with open(args.data_path + args.dataset + f'/item_pretrain_{timestamp}.pk', 'wb') as f:
+        pickle.dump(iidW, f)
+
+    # Also save as default (for RecEraser to load)
     with open(args.data_path + args.dataset + '/user_pretrain.pk', 'wb') as f:
         pickle.dump(uidW, f)
     with open(args.data_path + args.dataset + '/item_pretrain.pk', 'wb') as f:
         pickle.dump(iidW, f)
+
+    print(f'\n[SAVED] Embeddings with timestamp: {timestamp}')
 
 
 
