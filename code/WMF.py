@@ -74,7 +74,7 @@ class WMF:
 
 
 
-def get_lables(temp_set,k=0.9999):
+def get_lables(temp_set, k=0.9999):
     max_item = 0
     item_lenth = []
     for key in temp_set:
@@ -82,13 +82,20 @@ def get_lables(temp_set,k=0.9999):
         if len(temp_set[key]) > max_item:
             max_item = len(temp_set[key])
     print('max_item length of train:', max_item)
+
+    # Find a valid item to pad (use last item in dataset)
+    all_items = []
+    for key in temp_set:
+        all_items.extend(temp_set[key])
+    pad_item = max(all_items) if all_items else 0
+
     result = []
     for key in temp_set:
         temp = temp_set[key]
         tem_length = len(temp)
         labeled = temp.copy()
         if tem_length < max_item:
-            labeled.extend([temp_set['user_num']] * (max_item - tem_length))
+            labeled.extend([pad_item] * (max_item - tem_length))
         result.append(labeled)
 
     item_set = []
