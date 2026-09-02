@@ -550,6 +550,10 @@ def main():
         # shard slice in each local loss.
         local_optimizer = Adagrad(model.parameters(), lr=args.lr,
                                   initial_accumulator_value=1e-8)
+        print(f'\n===== Phase 1: Local Training =====')
+        print(f'Partition type: {args.part_type}, shards: {args.part_num}')
+        print(f'Shard sizes (n_C): {data_generator.n_C}')
+
         for shard in range(args.part_num):
             print(f'\n===== Training local shard {shard} =====')
             _train_one_local_model(model, shard, local_optimizer, device)
@@ -575,7 +579,8 @@ def main():
     agg_optimizer = Adagrad(agg_params, lr=args.lr,
                             initial_accumulator_value=1e-8)
 
-    print('\n===== Training aggregator =====')
+    print('\n===== Phase 2: Aggregator Training =====')
+    print(f'Partition type: {args.part_type}, shards: {args.part_num}')
     print(f'[DEBUG] Initial HA values: {model.HA.data.cpu().numpy().flatten()[:5]}...')
     print(f'[DEBUG] Initial HB values: {model.HB.data.cpu().numpy().flatten()[:5]}...')
     ret = _train_aggregator(model, agg_optimizer, device)
