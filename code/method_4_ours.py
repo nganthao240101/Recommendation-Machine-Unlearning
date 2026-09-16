@@ -6,6 +6,11 @@ Hyper-parameters theo bài báo:
 - Learning rate: 0.05
 - Embedding size: 64
 - Max epochs: 1000
+
+ĐIỂM KHÁC BIỆT VỚI RECERASER:
+- RecEraser: Train local + train aggregator (attention weights LEARNED)
+- Ours: Train local + train aggregator (mean, KHÔNG học attention weights)
+         NHƯNG vẫn train TẤT CẢ embeddings thông qua aggregator loss
 """
 
 import os
@@ -83,7 +88,7 @@ def load_data(dataset='ml-1m', batch_size=512):
 
 
 # ============================================================================
-# RECERASER MODEL (mean aggregation only)
+# RECERASER MODEL
 # ============================================================================
 
 class RecEraserBPR(nn.Module):
@@ -101,20 +106,19 @@ class RecEraserBPR(nn.Module):
         for emb in (self.user_embedding, self.item_embedding):
             nn.init.xavier_uniform_(emb.weight)
 
+        # Attention parameters (for compatibility with RecEraser)
+        self.WA = nn.Parameter(torch.empty(emb_dim, attention_size))
+        self.BA = nn.Parameter(torch.zeros(attention_size))
+        self.HA = nn.Parameter(torch.ones(attention_size, 1) * 0.1)
+        self.WB = nn.Parameter(torch.empty(emb_dim, attention_size))
+        self.BB = nn.Parameter(torch.zeros(attention_size))
+        self.HB = nn.Parameter(torch.ones(attention_size, 1) * 0.1)
+
+        # Transformation parameters (initialized to identity)
         self.trans_W = nn.Parameter(torch.empty(num_local, emb_dim, emb_dim))
         self.trans_B = nn.Parameter(torch.zeros(num_local, emb_dim))
         for k in range(num_local):
             self.trans_W.data[k] = torch.eye(emb_dim)
-
-    def _user_emb_for_shard(self, users, shard):
-        emb = self.user_embedding(users)
-        emb = emb.view(-1, self.num_local, self.emb_dim)
-        return emb[:, shard, :]
-
-    def _item_emb_for_shard(self, items, shard):
-        emb = self.item_embedding(items)
-        emb = emb.view(-1, self.num_local, self.emb_dim)
-        return emb[:, shard, :]
 
     def _per_shard_user_emb(self, users):
         return self.user_embedding(users).view(-1, self.num_local, self.emb_dim)
@@ -132,19 +136,52 @@ class RecEraserBPR(nn.Module):
         return mf, reg_loss, mf + reg_loss
 
     def local_loss(self, users, pos_items, neg_items, shard):
-        u_e = self._user_emb_for_shard(users, shard)
-        pos_e = self._item_emb_for_shard(pos_items, shard)
-        neg_e = self._item_emb_for_shard(neg_items, shard)
+        """Local loss for a specific shard."""
+        emb = self._per_shard_user_emb(users)
+        u_e = emb[:, shard, :]
+
+        emb_pos = self._per_shard_item_emb(pos_items)
+        pos_e = emb_pos[:, shard, :]
+
+        emb_neg = self._per_shard_item_emb(neg_items)
+        neg_e = emb_neg[:, shard, :]
+
         mf, reg, total = self._bpr_loss(u_e, pos_e, neg_e)
         return mf, reg, total
 
+    def agg_loss_mean(self, users, pos_items, neg_items):
+        """
+        Mean aggregation loss - ALL embeddings are trained (no stop_gradient).
+        This is the key difference from RecEraser which uses attention.
+        """
+        u_es = self._per_shard_user_emb(users)  # [B, num_local, D]
+        pos_i_es = self._per_shard_item_emb(pos_items)
+        neg_i_es = self._per_shard_item_emb(neg_items)
+
+        # Mean aggregation
+        u_agg = u_es.mean(dim=1)  # [B, D]
+        pos_agg = pos_i_es.mean(dim=1)
+        neg_agg = neg_i_es.mean(dim=1)
+
+        # BPR loss
+        pos_scores = (u_agg * pos_agg).sum(dim=1)
+        neg_scores = (u_agg * neg_agg).sum(dim=1)
+        diff = torch.clamp(pos_scores - neg_scores, -50.0, 50.0)
+        mf = torch.mean(F.softplus(-diff))
+
+        # Regularization
+        reg = 0.01 * (u_es.pow(2).sum() + pos_i_es.pow(2).sum() +
+                      neg_i_es.pow(2).sum()) / u_es.size(0)
+
+        return mf, reg, mf + reg
+
     @torch.no_grad()
     def predict(self, users, items):
-        """Predict scores using MEAN aggregation (fixed equal weights)."""
+        """Predict scores using MEAN aggregation."""
         u_es = self._per_shard_user_emb(users)
         i_es = self._per_shard_item_emb(items)
 
-        # Simple mean (fixed equal weights = 1/n_shards)
+        # Mean aggregation
         u_agg = u_es.mean(dim=1)
         i_agg = i_es.mean(dim=1)
 
@@ -174,7 +211,7 @@ class DataPartitioner:
                 self.user_to_shard[user_id] = user_id % self.n_shards
 
         shard_counts = np.bincount(self.user_to_shard, minlength=self.n_shards)
-        print(f"    [Ours] Shard sizes: min={shard_counts.min()}, max={shard_counts.max()}")
+        print(f"    [Ours] Shard sizes: min={shard_counts.min()}, max={shard_counts.max()}, mean={shard_counts.mean():.1f}")
 
         return self.user_to_shard
 
@@ -276,6 +313,7 @@ def evaluate_model(model, train_data, test_data, n_users, n_items, device, Ks=[1
 
 def train_local_model(model, shard_data, n_items, device, shard_id,
                     batch_size=512, lr=0.05, n_epochs=10):
+    """Train local model for a specific shard."""
     optimizer = Adagrad(model.parameters(), lr=lr, initial_accumulator_value=1e-8)
 
     samples = []
@@ -312,6 +350,60 @@ def train_local_model(model, shard_data, n_items, device, shard_id,
             optimizer.step()
 
             total_loss += total.item()
+
+    return total_loss
+
+
+def train_aggregator(model, train_data, n_items, device,
+                    batch_size=512, lr=0.05, n_epochs=10):
+    """
+    Train aggregator with mean loss - ALL embeddings are trained.
+
+    KEY DIFFERENCE: In RecEraser, agg_loss uses stop_gradient for embeddings.
+    In Ours, we train ALL embeddings through the aggregator.
+    """
+    optimizer = Adagrad(model.parameters(), lr=lr, initial_accumulator_value=1e-8)
+
+    samples = []
+    for user, items in train_data.items():
+        for pos_item in items:
+            neg_item = random.randint(0, n_items - 1)
+            while neg_item in items:
+                neg_item = random.randint(0, n_items - 1)
+            samples.append((user, pos_item, neg_item))
+
+    if not samples:
+        return 0.0
+
+    print(f"    [Ours] Aggregator training with {len(samples)} samples, {n_epochs} epochs")
+
+    for epoch in range(n_epochs):
+        random.shuffle(samples)
+        total_loss = 0
+        n_batches = max(1, len(samples) // batch_size)
+
+        for i in range(n_batches):
+            start = i * batch_size
+            end = min(start + batch_size, len(samples))
+            batch = samples[start:end]
+
+            if not batch:
+                continue
+
+            users = torch.LongTensor([s[0] for s in batch]).to(device)
+            pos_items = torch.LongTensor([s[1] for s in batch]).to(device)
+            neg_items = torch.LongTensor([s[2] for s in batch]).to(device)
+
+            optimizer.zero_grad()
+            mf, reg, total = model.agg_loss_mean(users, pos_items, neg_items)
+            total.backward()
+            optimizer.step()
+
+            total_loss += total.item()
+
+        if (epoch + 1) % 20 == 0:
+            avg_loss = total_loss / n_batches
+            print(f"    [Ours] Aggregator Epoch {epoch+1}: loss={avg_loss:.4f}")
 
     return total_loss
 
@@ -382,12 +474,14 @@ class OursMethod:
         self.partitioner.partition_users(train_data, self.n_users)
         self.partitioner.build_shard_data(train_data)
 
-        print("    [Ours] Component 3: Training with fixed equal weights...")
+        print("    [Ours] Component 3: Training with fixed mean aggregation...")
         self.model = RecEraserBPR(
             self.n_users, self.n_items, self.emb_dim,
             num_local=self.n_shards, agg_type='mean'
         ).to(device)
 
+        # Phase 1: Train local models (initialize per-shard embeddings)
+        print(f"    [Ours] Phase 1: Local training ({self.max_epochs} epochs per shard)...")
         for shard_id in range(self.n_shards):
             shard_data = self.partitioner.shard_data[shard_id]
             print(f"    [Ours] Training shard {shard_id}...")
@@ -395,7 +489,14 @@ class OursMethod:
                            shard_id, batch_size=self.batch_size, lr=self.lr,
                            n_epochs=self.max_epochs)
 
-        print("    [Ours] Note: NO aggregator training (fixed equal weights = 1/n_shards)")
+        # Phase 2: Train aggregator (train ALL embeddings)
+        # KEY DIFFERENCE FROM RECERASER: We use mean aggregation, NOT attention
+        # But we still train all embeddings through the aggregator
+        print(f"    [Ours] Phase 2: Aggregator training ({self.max_epochs} epochs)...")
+        print("    [Ours] Note: Training ALL embeddings through mean aggregation")
+        train_aggregator(self.model, train_data, self.n_items, device,
+                        batch_size=self.batch_size, lr=self.lr,
+                        n_epochs=self.max_epochs)
 
         return self.model
 
@@ -403,12 +504,18 @@ class OursMethod:
         affected_shards = self.partitioner.get_affected_shards(unlearn_user_ids)
         print(f"    [Ours] Affected shards: {affected_shards}")
 
+        # Component 1: Remove from signatures
         print("    [Ours] Component 1: Removing from signatures...")
         self.remove_from_signatures(unlearn_user_ids)
 
+        # Component 2: Assignment is STABLE
         print("    [Ours] Component 2: Assignment is STABLE (no changes needed)")
 
-        print("    [Ours] Component 3: Retraining only affected shards (NO aggregator retrain)...")
+        # Component 3: Retrain affected shards + aggregator
+        # KEY DIFFERENCE: We retrain aggregator (to train all embeddings)
+        # But use FIXED mean weights instead of learned attention
+        print("    [Ours] Component 3: Retraining affected shards + aggregator...")
+
         for shard_id in affected_shards:
             filtered_data = self.partitioner.filter_shard_data(shard_id, set(unlearn_user_ids))
             print(f"    [Ours] Retraining shard {shard_id}...")
@@ -416,7 +523,13 @@ class OursMethod:
                            shard_id, batch_size=self.batch_size, lr=self.lr,
                            n_epochs=retrain_epochs)
 
-        print("    [Ours] Note: Weights are FIXED (1/n_shards) - no aggregator retraining needed")
+        # Retrain aggregator
+        print("    [Ours] Retraining aggregator...")
+        train_aggregator(self.model, train_data, self.n_items, device,
+                        batch_size=self.batch_size, lr=self.lr,
+                        n_epochs=retrain_epochs)
+
+        print("    [Ours] Note: Using FIXED mean weights (1/n_shards), NOT learned attention")
 
         return self.model, affected_shards
 
@@ -441,6 +554,13 @@ def run_ours(dataset='ml-1m', emb_dim=64, n_shards=8,
     print(f"  - Embedding dim: {emb_dim}")
     print(f"  - Max epochs per shard: {max_epochs}")
     print(f"  - N shards: {n_shards}")
+    print(f"  - Aggregation: FIXED mean (1/n_shards)")
+    print("""
+    3 Components:
+      Component 1: Deletion-Local User Signatures
+      Component 2: Deletion-Stable Assignment
+      Component 3: Isolated Training (fixed mean weights)
+    """)
 
     device = 'cuda' if torch.cuda.is_available() else 'cpu'
     print(f"\nUsing device: {device}")
@@ -493,7 +613,7 @@ def run_ours(dataset='ml-1m', emb_dim=64, n_shards=8,
         'components': {
             'component_1': 'Deletion-Local User Signatures',
             'component_2': 'Deletion-Stable Assignment',
-            'component_3': 'Isolated Training (fixed equal weights)',
+            'component_3': 'Isolated Training (fixed mean weights)',
         },
         'unlearn_ratio': unlearn_ratio,
         'n_unlearn': n_unlearn,
