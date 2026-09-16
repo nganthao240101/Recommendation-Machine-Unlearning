@@ -728,7 +728,7 @@ def run_ours(dataset='ml-1m', emb_dim=64, n_shards=8,
         'inference': 'HARD-ROUTING: y_xv = f_{M_{g(x)}}(x, v)',
         'unlearn_ratio': unlearn_ratio,
         'n_unlearn': n_unlearn,
-        'affected_shards': affected_shards,
+        'affected_shards': [int(s) for s in affected_shards],
         'train_time': train_time,
         'unlearn_time': unlearn_time,
         'before': {
