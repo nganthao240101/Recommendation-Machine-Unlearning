@@ -26,29 +26,67 @@ import heapq
 PROJ = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, PROJ)
 
-from utility.load_data import Data
+
+# ============================================================================
+# CUSTOM DATA LOADER
+# ============================================================================
+
+class SimpleDataLoader:
+    def __init__(self, data_dir, batch_size=512):
+        self.path = data_dir
+        self.batch_size = batch_size
+
+        train_file = os.path.join(data_dir, 'train.txt')
+        test_file = os.path.join(data_dir, 'test.txt')
+
+        self.n_users, self.n_items = 0, 0
+        self.train_items = {}
+        self.test_set = {}
+
+        with open(train_file, 'r') as f:
+            for line in f.readlines():
+                if len(line) > 0:
+                    parts = line.strip('\n').split(' ')
+                    uid = int(parts[0])
+                    items = [int(i) for i in parts[1:]]
+                    self.train_items[uid] = items
+                    self.n_users = max(self.n_users, uid + 1)
+                    self.n_items = max(self.n_items, max(items) + 1 if items else 0)
+
+        with open(test_file, 'r') as f:
+            for line in f.readlines():
+                if len(line) > 0:
+                    parts = line.strip('\n').split(' ')
+                    uid = int(parts[0])
+                    items = [int(i) for i in parts[1:]]
+                    self.test_set[uid] = items
+
+        print(f"  Loaded: {self.n_users} users, {self.n_items} items")
+
+
+def load_data(dataset='ml-1m', batch_size=512):
+    data_path = os.environ.get('RECUNLEARN_DATA_PATH', None)
+
+    if data_path:
+        dataset_name = os.environ.get('RECUNLEARN_DATASET', dataset)
+        data_dir = os.path.join(data_path, dataset_name)
+    else:
+        base_dir = os.path.dirname(PROJ)
+        data_dir = os.path.join(base_dir, 'data', dataset)
+
+    print(f"  Loading data from: {data_dir}")
+
+    if not os.path.exists(data_dir):
+        raise FileNotFoundError(f"Data directory not found: {data_dir}")
+
+    return SimpleDataLoader(data_dir, batch_size)
 
 
 # ============================================================================
-# HYPER-PARAMETERS THEO BÀI BÁO
-# ============================================================================
-
-DEFAULT_CONFIG = {
-    'batch_size': 512,
-    'learning_rate': 0.05,
-    'embedding_dim': 64,
-    'max_epochs': 1000,
-    'Ks': [10, 20, 50]
-}
-
-
-# ============================================================================
-# RECERASER MODEL (để reuse architecture)
+# RECERASER MODEL (mean aggregation only)
 # ============================================================================
 
 class RecEraserBPR(nn.Module):
-    """RecEraser BPR Model - Dùng lại architecture từ code gốc."""
-
     def __init__(self, n_users, n_items, emb_dim, num_local, agg_type='mean', attention_size=32):
         super().__init__()
         self.n_users = n_users
@@ -57,20 +95,11 @@ class RecEraserBPR(nn.Module):
         self.num_local = num_local
         self.agg_type = agg_type
 
-        # Per-shard embeddings
         self.user_embedding = nn.Embedding(n_users, num_local * emb_dim)
         self.item_embedding = nn.Embedding(n_items, num_local * emb_dim)
 
         for emb in (self.user_embedding, self.item_embedding):
             nn.init.xavier_uniform_(emb.weight)
-
-        # Attention parameters (not used in mean mode)
-        self.WA = nn.Parameter(torch.empty(emb_dim, attention_size))
-        self.BA = nn.Parameter(torch.zeros(attention_size))
-        self.HA = nn.Parameter(torch.ones(attention_size, 1) * 0.1)
-        self.WB = nn.Parameter(torch.empty(emb_dim, attention_size))
-        self.BB = nn.Parameter(torch.zeros(attention_size))
-        self.HB = nn.Parameter(torch.ones(attention_size, 1) * 0.1)
 
         self.trans_W = nn.Parameter(torch.empty(num_local, emb_dim, emb_dim))
         self.trans_B = nn.Parameter(torch.zeros(num_local, emb_dim))
@@ -128,8 +157,6 @@ class RecEraserBPR(nn.Module):
 # ============================================================================
 
 class DataPartitioner:
-    """Partition data into shards using stable hash."""
-
     def __init__(self, n_shards=8, seed=42):
         self.n_shards = n_shards
         self.seed = seed
@@ -147,8 +174,7 @@ class DataPartitioner:
                 self.user_to_shard[user_id] = user_id % self.n_shards
 
         shard_counts = np.bincount(self.user_to_shard, minlength=self.n_shards)
-        print(f"    [Ours] Shard sizes: min={shard_counts.min()}, "
-              f"max={shard_counts.max()}, mean={shard_counts.mean():.1f}")
+        print(f"    [Ours] Shard sizes: min={shard_counts.min()}, max={shard_counts.max()}")
 
         return self.user_to_shard
 
@@ -291,24 +317,10 @@ def train_local_model(model, shard_data, n_items, device, shard_id,
 
 
 # ============================================================================
-# OURS METHOD (DELETION-STABLE 3 COMPONENTS)
+# OURS METHOD
 # ============================================================================
 
 class OursMethod:
-    """
-    Method 4: Ours (Deletion-Stable 3 Components)
-
-    3 Components đảm bảo Deletion-Stable Property:
-
-    Component 1: Deletion-Local User Signatures
-    Component 2: Deletion-Stable Assignment
-    Component 3: Isolated Training (fixed equal weights)
-
-    Điểm khác biệt với RecEraser:
-    - RecEraser: Attention weights THAY ĐỔI khi unlearn
-    - Ours: Fixed weights KHÔNG đổi → Deletion-Stable
-    """
-
     def __init__(self, n_users, n_items, emb_dim, n_shards=8,
                  batch_size=512, lr=0.05, max_epochs=500):
         self.n_users = n_users
@@ -323,7 +335,6 @@ class OursMethod:
         self.user_signatures = None
 
     def build_signatures(self, train_data):
-        """Component 1: Build deletion-local user signatures."""
         print("    [Ours] Component 1: Building deletion-local signatures...")
 
         rows, cols, data = [], [], []
@@ -353,7 +364,6 @@ class OursMethod:
         return self.user_signatures
 
     def remove_from_signatures(self, unlearn_user_ids):
-        """Component 1: Remove unlearned users from signatures."""
         print(f"    [Ours] Component 1: Removing {len(unlearn_user_ids)} users from signatures...")
 
         mask = np.ones(self.n_users, dtype=bool)
@@ -365,12 +375,6 @@ class OursMethod:
         print(f"    [Ours] Signatures updated: {self.user_signatures.nnz} non-zero entries")
 
     def train(self, train_data, device):
-        """
-        Train with deletion-stable property.
-        Component 1: Build signatures
-        Component 2: Stable assignment
-        Component 3: Train with fixed equal weights (NO aggregator training)
-        """
         print("    [Ours] Component 1: Building deletion-local signatures...")
         self.build_signatures(train_data)
 
@@ -381,11 +385,9 @@ class OursMethod:
         print("    [Ours] Component 3: Training with fixed equal weights...")
         self.model = RecEraserBPR(
             self.n_users, self.n_items, self.emb_dim,
-            num_local=self.n_shards, agg_type='mean'  # FIXED: mean, not attention
+            num_local=self.n_shards, agg_type='mean'
         ).to(device)
 
-        # Train only local models, NO aggregator training
-        # (weights are fixed = 1/n_shards)
         for shard_id in range(self.n_shards):
             shard_data = self.partitioner.shard_data[shard_id]
             print(f"    [Ours] Training shard {shard_id}...")
@@ -398,28 +400,14 @@ class OursMethod:
         return self.model
 
     def unlearn(self, unlearn_user_ids, train_data, device, retrain_epochs=50):
-        """
-        Deletion-stable unlearning.
-
-        Component 1: Remove users from signatures
-        Component 2: Assignment is STABLE - NO changes needed
-        Component 3: Retrain only affected shards (NO aggregator retraining)
-
-        Điểm khác biệt với RecEraser:
-        - RecEraser: Retrain shards + retrain aggregator (attention weights change)
-        - Ours: Retrain shards ONLY (fixed weights stay unchanged)
-        """
         affected_shards = self.partitioner.get_affected_shards(unlearn_user_ids)
         print(f"    [Ours] Affected shards: {affected_shards}")
 
-        # Component 1: Remove from signatures
         print("    [Ours] Component 1: Removing from signatures...")
         self.remove_from_signatures(unlearn_user_ids)
 
-        # Component 2: Assignment is STABLE
         print("    [Ours] Component 2: Assignment is STABLE (no changes needed)")
 
-        # Component 3: Only retrain affected shards, NO aggregator retraining
         print("    [Ours] Component 3: Retraining only affected shards (NO aggregator retrain)...")
         for shard_id in affected_shards:
             filtered_data = self.partitioner.filter_shard_data(shard_id, set(unlearn_user_ids))
@@ -444,7 +432,6 @@ class OursMethod:
 def run_ours(dataset='ml-1m', emb_dim=64, n_shards=8,
             batch_size=512, lr=0.05, max_epochs=500,
             unlearn_ratio=0.1, retrain_epochs=50, output_suffix=''):
-    """Run Ours method."""
     print(f"\n{'='*60}")
     print(f"METHOD 4: OURS (DELETION-STABLE 3 COMPONENTS)")
     print(f"{'='*60}")
@@ -454,35 +441,17 @@ def run_ours(dataset='ml-1m', emb_dim=64, n_shards=8,
     print(f"  - Embedding dim: {emb_dim}")
     print(f"  - Max epochs per shard: {max_epochs}")
     print(f"  - N shards: {n_shards}")
-    print("""
-    3 Components:
-      Component 1: Deletion-Local User Signatures
-      Component 2: Deletion-Stable Assignment
-      Component 3: Isolated Training (fixed equal weights)
-    """)
 
     device = 'cuda' if torch.cuda.is_available() else 'cpu'
     print(f"\nUsing device: {device}")
 
-    data_path = os.path.join(os.path.dirname(PROJ), 'data', dataset)
-    print(f"\nLoading data from {data_path}...")
-
-    data = Data(
-        path=data_path,
-        batch_size=batch_size,
-        part_type=1,
-        part_num=1,
-        part_T=5
-    )
+    print(f"\nLoading data from dataset: {dataset}...")
+    data = load_data(dataset=dataset, batch_size=batch_size)
 
     n_users = data.n_users
     n_items = data.n_items
     train_data = data.train_items
     test_data = data.test_set
-
-    print(f"Users: {n_users}, Items: {n_items}")
-    print(f"Train interactions: {sum(len(v) for v in train_data.values())}")
-    print(f"Test users: {len(test_data)}")
 
     random.seed(42)
     all_users = list(train_data.keys())
@@ -500,8 +469,7 @@ def run_ours(dataset='ml-1m', emb_dim=64, n_shards=8,
     train_time = time.time() - t0
 
     results_before = method.evaluate(train_data, test_data, device)
-    print(f"  Before - R@10: {results_before['recall'][0]:.4f}, "
-          f"NDCG@10: {results_before['ndcg'][0]:.4f}")
+    print(f"  Before - R@10: {results_before['recall'][0]:.4f}, NDCG@10: {results_before['ndcg'][0]:.4f}")
 
     print(f"\n--- Phase 2: Unlearn (Deletion-Stable 3 Components) ---")
     t0 = time.time()
@@ -509,8 +477,7 @@ def run_ours(dataset='ml-1m', emb_dim=64, n_shards=8,
     unlearn_time = time.time() - t0
 
     results_after = method.evaluate(train_data, test_data, device)
-    print(f"  After - R@10: {results_after['recall'][0]:.4f}, "
-          f"NDCG@10: {results_after['ndcg'][0]:.4f}")
+    print(f"  After - R@10: {results_after['recall'][0]:.4f}, NDCG@10: {results_after['ndcg'][0]:.4f}")
     print(f"  Unlearn time: {unlearn_time:.2f}s")
 
     results = {
@@ -564,13 +531,14 @@ if __name__ == '__main__':
     parser = argparse.ArgumentParser(description='Method 4: Ours (Deletion-Stable 3 Components)')
     parser.add_argument('--dataset', type=str, default='ml-1m')
     parser.add_argument('--batch_size', type=int, default=512)
-    parser.add_argument('--lr', type=float, default=0.05)
+    parser.add_argument('--learning_rate', type=float, default=0.05)
     parser.add_argument('--emb_dim', type=int, default=64)
     parser.add_argument('--n_shards', type=int, default=8)
     parser.add_argument('--max_epochs', type=int, default=500)
     parser.add_argument('--unlearn_ratio', type=float, default=0.1)
     parser.add_argument('--retrain_epochs', type=int, default=50)
     parser.add_argument('--output_suffix', type=str, default='')
+
     args = parser.parse_args()
 
     run_ours(
@@ -578,7 +546,7 @@ if __name__ == '__main__':
         emb_dim=args.emb_dim,
         n_shards=args.n_shards,
         batch_size=args.batch_size,
-        lr=args.lr,
+        lr=args.learning_rate,
         max_epochs=args.max_epochs,
         unlearn_ratio=args.unlearn_ratio,
         retrain_epochs=args.retrain_epochs,

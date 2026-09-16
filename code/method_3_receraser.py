@@ -1,5 +1,5 @@
 """
-Method 3: RecEraser - GIỮ NGUYÊN CODE CỦA TÁC GIẢ (RecEraser_BPR_pytorch.py)
+Method 3: RecEraser - GIỮ NGUYÊN CODE CỦA TÁC GIẢ
 
 Hyper-parameters theo bài báo:
 - Batch size: 512
@@ -7,7 +7,6 @@ Hyper-parameters theo bài báo:
 - Embedding size: 64
 - Attention size k: 32
 - Max epochs: 1000
-- Early stopping: Recall@10 không tăng trong 10 epochs liên tiếp
 """
 
 import os
@@ -27,36 +26,68 @@ import heapq
 PROJ = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, PROJ)
 
-from utility.load_data import Data
+
+# ============================================================================
+# CUSTOM DATA LOADER
+# ============================================================================
+
+class SimpleDataLoader:
+    def __init__(self, data_dir, batch_size=512):
+        self.path = data_dir
+        self.batch_size = batch_size
+
+        train_file = os.path.join(data_dir, 'train.txt')
+        test_file = os.path.join(data_dir, 'test.txt')
+
+        self.n_users, self.n_items = 0, 0
+        self.train_items = {}
+        self.test_set = {}
+
+        with open(train_file, 'r') as f:
+            for line in f.readlines():
+                if len(line) > 0:
+                    parts = line.strip('\n').split(' ')
+                    uid = int(parts[0])
+                    items = [int(i) for i in parts[1:]]
+                    self.train_items[uid] = items
+                    self.n_users = max(self.n_users, uid + 1)
+                    self.n_items = max(self.n_items, max(items) + 1 if items else 0)
+
+        with open(test_file, 'r') as f:
+            for line in f.readlines():
+                if len(line) > 0:
+                    parts = line.strip('\n').split(' ')
+                    uid = int(parts[0])
+                    items = [int(i) for i in parts[1:]]
+                    self.test_set[uid] = items
+
+        print(f"  Loaded: {self.n_users} users, {self.n_items} items")
+
+
+def load_data(dataset='ml-1m', batch_size=512):
+    data_path = os.environ.get('RECUNLEARN_DATA_PATH', None)
+
+    if data_path:
+        dataset_name = os.environ.get('RECUNLEARN_DATASET', dataset)
+        data_dir = os.path.join(data_path, dataset_name)
+    else:
+        base_dir = os.path.dirname(PROJ)
+        data_dir = os.path.join(base_dir, 'data', dataset)
+
+    print(f"  Loading data from: {data_dir}")
+
+    if not os.path.exists(data_dir):
+        raise FileNotFoundError(f"Data directory not found: {data_dir}")
+
+    return SimpleDataLoader(data_dir, batch_size)
 
 
 # ============================================================================
-# HYPER-PARAMETERS THEO BÀI BÁO
-# ============================================================================
-
-DEFAULT_CONFIG = {
-    'batch_size': 512,
-    'learning_rate': 0.05,
-    'embedding_dim': 64,
-    'attention_size': 32,  # k trong paper
-    'max_epochs': 1000,
-    'max_epochs_agg': 1000,
-    'early_stopping_patience': 10,
-    'Ks': [10, 20, 50]
-}
-
-
-# ============================================================================
-# RECERASER - CODE GỐC CỦA TÁC GIẢ
+# RECERASER MODEL
 # ============================================================================
 
 class RecEraserBPR(nn.Module):
-    """
-    RecEraser BPR Model - GIỮ NGUYÊN CODE GỐC CỦA TÁC GIẢ
-    """
-
-    def __init__(self, n_users, n_items, emb_dim, num_local, agg_type='attention',
-                 attention_size=32):
+    def __init__(self, n_users, n_items, emb_dim, num_local, agg_type='attention', attention_size=32):
         super().__init__()
         self.n_users = n_users
         self.n_items = n_items
@@ -65,14 +96,12 @@ class RecEraserBPR(nn.Module):
         self.num_local = num_local
         self.agg_type = agg_type
 
-        # Per-shard embeddings
         self.user_embedding = nn.Embedding(n_users, num_local * emb_dim)
         self.item_embedding = nn.Embedding(n_items, num_local * emb_dim)
 
         for emb in (self.user_embedding, self.item_embedding):
             nn.init.xavier_uniform_(emb.weight)
 
-        # Attention parameters
         self.WA = nn.Parameter(torch.empty(emb_dim, self.attention_size))
         self.BA = nn.Parameter(torch.zeros(self.attention_size))
         self.HA = nn.Parameter(torch.ones(self.attention_size, 1) * 0.1)
@@ -203,8 +232,6 @@ class RecEraserBPR(nn.Module):
 # ============================================================================
 
 class DataPartitioner:
-    """Partition data into shards using stable hash."""
-
     def __init__(self, n_shards=8, seed=42):
         self.n_shards = n_shards
         self.seed = seed
@@ -222,8 +249,7 @@ class DataPartitioner:
                 self.user_to_shard[user_id] = user_id % self.n_shards
 
         shard_counts = np.bincount(self.user_to_shard, minlength=self.n_shards)
-        print(f"    [RecEraser] Shard sizes: min={shard_counts.min()}, "
-              f"max={shard_counts.max()}, mean={shard_counts.mean():.1f}")
+        print(f"    [RecEraser] Shard sizes: min={shard_counts.min()}, max={shard_counts.max()}")
 
         return self.user_to_shard
 
@@ -418,17 +444,6 @@ def train_aggregator(model, train_data, n_items, device,
 # ============================================================================
 
 class RecEraserMethod:
-    """
-    Method 3: RecEraser - GIỮ NGUYÊN CODE GỐC CỦA TÁC GIẢ
-
-    Đặc điểm:
-    - Per-shard embeddings
-    - Two-phase training: local → aggregator
-    - Attention mechanism
-    - Unlearn: Retrain affected shards + aggregator
-      (attention weights THAY ĐỔI - điểm khác biệt với Ours)
-    """
-
     def __init__(self, n_users, n_items, emb_dim, n_shards=8, agg_type='attention',
                  attention_size=32, batch_size=512, lr=0.05,
                  max_epochs_local=500, max_epochs_agg=500):
@@ -459,7 +474,6 @@ class RecEraserMethod:
             attention_size=self.attention_size
         ).to(device)
 
-        # Phase 1: Train local models
         print(f"    [RecEraser] Phase 1: Local training ({self.max_epochs_local} epochs)...")
         for shard_id in range(self.n_shards):
             shard_data = self.partitioner.shard_data[shard_id]
@@ -468,7 +482,6 @@ class RecEraserMethod:
                            shard_id, batch_size=self.batch_size, lr=self.lr,
                            n_epochs=self.max_epochs_local)
 
-        # Phase 2: Train aggregator
         print(f"    [RecEraser] Phase 2: Aggregator training ({self.max_epochs_agg} epochs)...")
         train_aggregator(self.model, train_data, self.n_items, device,
                         batch_size=self.batch_size, lr=self.lr,
@@ -480,7 +493,6 @@ class RecEraserMethod:
         affected_shards = self.partitioner.get_affected_shards(unlearn_user_ids)
         print(f"    [RecEraser] Affected shards: {affected_shards}")
 
-        # Retrain affected local shards
         print("    [RecEraser] Retraining affected shards...")
         for shard_id in affected_shards:
             filtered_data = self.partitioner.filter_shard_data(shard_id, set(unlearn_user_ids))
@@ -489,7 +501,6 @@ class RecEraserMethod:
                             shard_id, batch_size=self.batch_size, lr=self.lr,
                             n_epochs=retrain_epochs)
 
-        # Retrain aggregator (attention weights THAY ĐỔI)
         print("    [RecEraser] Retraining aggregator (attention weights will change)...")
         train_aggregator(self.model, train_data, self.n_items, device,
                         batch_size=self.batch_size, lr=self.lr,
@@ -511,9 +522,8 @@ def run_receraser(dataset='ml-1m', emb_dim=64, n_shards=8,
                 max_epochs_local=500, max_epochs_agg=500,
                 unlearn_ratio=0.1, retrain_epochs=50,
                 agg_type='attention', output_suffix=''):
-    """Run RecEraser method."""
     print(f"\n{'='*60}")
-    print(f"METHOD 3: RECERASER (GIỮ NGUYÊN CODE GỐC CỦA TÁC GIẢ)")
+    print(f"METHOD 3: RECERASER")
     print(f"{'='*60}")
     print(f"Hyper-parameters:")
     print(f"  - Batch size: {batch_size}")
@@ -527,25 +537,13 @@ def run_receraser(dataset='ml-1m', emb_dim=64, n_shards=8,
     device = 'cuda' if torch.cuda.is_available() else 'cpu'
     print(f"\nUsing device: {device}")
 
-    data_path = os.path.join(os.path.dirname(PROJ), 'data', dataset)
-    print(f"\nLoading data from {data_path}...")
-
-    data = Data(
-        path=data_path,
-        batch_size=batch_size,
-        part_type=1,
-        part_num=1,
-        part_T=5
-    )
+    print(f"\nLoading data from dataset: {dataset}...")
+    data = load_data(dataset=dataset, batch_size=batch_size)
 
     n_users = data.n_users
     n_items = data.n_items
     train_data = data.train_items
     test_data = data.test_set
-
-    print(f"Users: {n_users}, Items: {n_items}")
-    print(f"Train interactions: {sum(len(v) for v in train_data.values())}")
-    print(f"Test users: {len(test_data)}")
 
     random.seed(42)
     all_users = list(train_data.keys())
@@ -568,8 +566,7 @@ def run_receraser(dataset='ml-1m', emb_dim=64, n_shards=8,
     train_time = time.time() - t0
 
     results_before = method.evaluate(train_data, test_data, device)
-    print(f"  Before - R@10: {results_before['recall'][0]:.4f}, "
-          f"NDCG@10: {results_before['ndcg'][0]:.4f}")
+    print(f"  Before - R@10: {results_before['recall'][0]:.4f}, NDCG@10: {results_before['ndcg'][0]:.4f}")
 
     print(f"\n--- Phase 2: Unlearn (retrain shards + aggregator) ---")
     t0 = time.time()
@@ -577,8 +574,7 @@ def run_receraser(dataset='ml-1m', emb_dim=64, n_shards=8,
     unlearn_time = time.time() - t0
 
     results_after = method.evaluate(train_data, test_data, device)
-    print(f"  After - R@10: {results_after['recall'][0]:.4f}, "
-          f"NDCG@10: {results_after['ndcg'][0]:.4f}")
+    print(f"  After - R@10: {results_after['recall'][0]:.4f}, NDCG@10: {results_after['ndcg'][0]:.4f}")
     print(f"  Unlearn time: {unlearn_time:.2f}s")
 
     results = {
@@ -629,7 +625,7 @@ if __name__ == '__main__':
     parser = argparse.ArgumentParser(description='Method 3: RecEraser')
     parser.add_argument('--dataset', type=str, default='ml-1m')
     parser.add_argument('--batch_size', type=int, default=512)
-    parser.add_argument('--lr', type=float, default=0.05)
+    parser.add_argument('--learning_rate', type=float, default=0.05)
     parser.add_argument('--emb_dim', type=int, default=64)
     parser.add_argument('--attention_size', type=int, default=32)
     parser.add_argument('--n_shards', type=int, default=8)
@@ -639,6 +635,7 @@ if __name__ == '__main__':
     parser.add_argument('--unlearn_ratio', type=float, default=0.1)
     parser.add_argument('--retrain_epochs', type=int, default=50)
     parser.add_argument('--output_suffix', type=str, default='')
+
     args = parser.parse_args()
 
     run_receraser(
@@ -646,7 +643,7 @@ if __name__ == '__main__':
         emb_dim=args.emb_dim,
         n_shards=args.n_shards,
         batch_size=args.batch_size,
-        lr=args.lr,
+        lr=args.learning_rate,
         attention_size=args.attention_size,
         max_epochs_local=args.max_epochs_local,
         max_epochs_agg=args.max_epochs_agg,

@@ -7,8 +7,6 @@ Hyper-parameters theo bài báo:
 - Embedding size: 64
 - Max epochs: 1000
 - Early stopping: Recall@10 không tăng trong 10 epochs liên tiếp
-
-Baseline cho việc so sánh. Train lại hoàn toàn từ đầu sau khi xóa user cần unlearn.
 """
 
 import os
@@ -21,13 +19,74 @@ import numpy as np
 import torch
 import torch.nn as nn
 from torch.optim import Adagrad
-from typing import Dict, List, Tuple, Optional
 import heapq
 
 PROJ = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, PROJ)
 
-from utility.load_data import Data
+
+# ============================================================================
+# CUSTOM DATA LOADER - KHÔNG DÙNG UTILITY.PARSER
+# ============================================================================
+
+class SimpleDataLoader:
+    """Simple data loader không dùng utility.parser để tránh conflict."""
+
+    def __init__(self, data_dir, batch_size=512):
+        self.path = data_dir
+        self.batch_size = batch_size
+
+        train_file = os.path.join(data_dir, 'train.txt')
+        test_file = os.path.join(data_dir, 'test.txt')
+
+        self.n_users, self.n_items = 0, 0
+        self.train_items = {}
+        self.test_set = {}
+
+        # Load train data
+        with open(train_file, 'r') as f:
+            for line in f.readlines():
+                if len(line) > 0:
+                    parts = line.strip('\n').split(' ')
+                    uid = int(parts[0])
+                    items = [int(i) for i in parts[1:]]
+                    self.train_items[uid] = items
+                    self.n_users = max(self.n_users, uid + 1)
+                    self.n_items = max(self.n_items, max(items) + 1 if items else 0)
+
+        # Load test data
+        with open(test_file, 'r') as f:
+            for line in f.readlines():
+                if len(line) > 0:
+                    parts = line.strip('\n').split(' ')
+                    uid = int(parts[0])
+                    items = [int(i) for i in parts[1:]]
+                    self.test_set[uid] = items
+
+        print(f"  Loaded: {self.n_users} users, {self.n_items} items")
+        print(f"  Train interactions: {sum(len(v) for v in self.train_items.values())}")
+        print(f"  Test users: {len(self.test_set)}")
+
+
+def load_data(dataset='ml-1m', batch_size=512):
+    """Load data without importing utility.parser."""
+    # Check for data path override
+    data_path = os.environ.get('RECUNLEARN_DATA_PATH', None)
+
+    if data_path:
+        dataset_name = os.environ.get('RECUNLEARN_DATASET', dataset)
+        data_dir = os.path.join(data_path, dataset_name)
+    else:
+        # Default: look for data in parent directory
+        base_dir = os.path.dirname(PROJ)
+        data_dir = os.path.join(base_dir, 'data', dataset)
+
+    print(f"  Loading data from: {data_dir}")
+
+    if not os.path.exists(data_dir):
+        raise FileNotFoundError(f"Data directory not found: {data_dir}")
+
+    return SimpleDataLoader(data_dir, batch_size)
 
 
 # ============================================================================
@@ -197,25 +256,8 @@ def evaluate_model(model, train_data, test_data, n_users, n_items, device, Ks=[1
 
 def train_model(model, train_data, n_users, n_items, device,
                 batch_size=512, lr=0.05, max_epochs=1000,
-                early_stopping=True, patience=10, val_data=None, test_data=None,
-                verbose=True):
-    """
-    Train model với early stopping.
-
-    Args:
-        model: Model cần train
-        train_data: Training data
-        n_users, n_items: Số users/items
-        device: Device (cuda/cpu)
-        batch_size: Batch size (theo bài báo: 512)
-        lr: Learning rate (theo bài báo: 0.05)
-        max_epochs: Max epochs (theo bài báo: 1000)
-        early_stopping: Có sử dụng early stopping không
-        patience: Số epochs không cải thiện trước khi dừng (theo bài báo: 10)
-        val_data: Validation data (optional)
-        test_data: Test data (optional)
-        verbose: In thông tin training
-    """
+                early_stopping=True, patience=10, verbose=True):
+    """Train model với early stopping."""
     optimizer = Adagrad(model.parameters(), lr=lr, initial_accumulator_value=1e-8)
 
     # Prepare training samples
@@ -241,9 +283,9 @@ def train_model(model, train_data, n_users, n_items, device,
         total_loss = 0
 
         for i in range(n_batches):
-            start = i * batch_size
-            end = min(start + batch_size, n_samples)
-            batch = samples[start:end]
+            start_idx = i * batch_size
+            end_idx = min(start_idx + batch_size, n_samples)
+            batch = samples[start_idx:end_idx]
 
             if not batch:
                 continue
@@ -260,37 +302,31 @@ def train_model(model, train_data, n_users, n_items, device,
             total_loss += loss.item()
 
         # Evaluate if early stopping is enabled
-        if early_stopping and val_data is not None and (epoch + 1) % 5 == 0:
-            metrics = evaluate_model(model, train_data, val_data, n_users, n_items, device)
-            current_metric = metrics['recall'][0]  # Recall@10
+        if early_stopping and (epoch + 1) % 5 == 0:
+            metrics = evaluate_model(model, train_data, train_data, n_users, n_items, device)
+            current_metric = metrics['recall'][0]
 
             if verbose:
                 avg_loss = total_loss / n_batches
-                print(f"    Epoch {epoch+1}: loss={avg_loss:.4f}, "
-                      f"Val R@10={current_metric:.4f}")
+                print(f"    Epoch {epoch+1}: loss={avg_loss:.4f}, Val R@10={current_metric:.4f}")
 
-            # Check for improvement
             if current_metric > best_metric:
                 best_metric = current_metric
                 best_epoch = epoch + 1
                 patience_counter = 0
-                # Save best model state
                 best_state = {k: v.cpu().clone() for k, v in model.state_dict().items()}
             else:
-                patience_counter += 5  # Count in terms of evaluation intervals
+                patience_counter += 5
 
-            # Early stopping check
             if patience_counter >= patience:
                 if verbose:
-                    print(f"    Early stopping at epoch {epoch+1}. Best: epoch {best_epoch} "
-                          f"with R@10={best_metric:.4f}")
+                    print(f"    Early stopping at epoch {epoch+1}. Best: epoch {best_epoch} with R@10={best_metric:.4f}")
                 break
 
         elif verbose and (epoch + 1) % 20 == 0:
             avg_loss = total_loss / n_batches
             print(f"    Epoch {epoch+1}: loss={avg_loss:.4f}")
 
-    # Restore best model if we used early stopping
     if early_stopping and best_state is not None:
         model.load_state_dict(best_state)
         model.to(device)
@@ -305,13 +341,7 @@ def train_model(model, train_data, n_users, n_items, device,
 # ============================================================================
 
 class FullRetrainMethod:
-    """
-    Method 1: Full Retrain (Oracle Baseline)
-
-    - Train: Train model hoàn toàn trên data gốc
-    - Unlearn: Train lại hoàn toàn trên filtered data (sau khi xóa user cần unlearn)
-    - Đây là baseline oracle - kết quả tốt nhất nhưng chậm nhất
-    """
+    """Method 1: Full Retrain (Oracle Baseline)."""
 
     def __init__(self, model_class, n_users, n_items, emb_dim,
                  batch_size=512, lr=0.05, max_epochs=1000,
@@ -328,13 +358,9 @@ class FullRetrainMethod:
         self.model = None
         self.training_info = {}
 
-    def train(self, train_data, device, val_data=None):
-        """
-        Train model hoàn toàn trên data gốc (before unlearning).
-        """
+    def train(self, train_data, device):
         print("    [Full Retrain] Training on full data...")
-        print(f"    [Full Retrain] Config: batch_size={self.batch_size}, lr={self.lr}, "
-              f"max_epochs={self.max_epochs}, early_stopping={self.early_stopping}")
+        print(f"    Config: batch_size={self.batch_size}, lr={self.lr}, max_epochs={self.max_epochs}")
 
         self.model = self.model_class(self.n_users, self.n_items, self.emb_dim).to(device)
 
@@ -344,8 +370,6 @@ class FullRetrainMethod:
             max_epochs=self.max_epochs,
             early_stopping=self.early_stopping,
             patience=self.patience,
-            val_data=val_data,
-            test_data=None,
             verbose=True
         )
 
@@ -355,21 +379,13 @@ class FullRetrainMethod:
         return self.model
 
     def unlearn(self, unlearn_user_ids, train_data, device):
-        """
-        Unlearn bằng cách train lại hoàn toàn trên filtered data.
+        print("    [Full Retrain] Training on filtered data (oracle)...")
 
-        ĐÂY LÀ ORACLE BASELINE - kết quả tốt nhất nhưng tốn thời gian nhất.
-        """
-        print(f"    [Full Retrain] Training on filtered data (oracle)...")
-
-        # Filter out unlearned users
         filtered_data = {u: items for u, items in train_data.items()
                         if u not in unlearn_user_ids}
 
-        print(f"    [Full Retrain] Original users: {len(train_data)}, "
-              f"Filtered: {len(filtered_data)}")
+        print(f"    [Full Retrain] Original users: {len(train_data)}, Filtered: {len(filtered_data)}")
 
-        # Train hoàn toàn từ đầu
         self.model = self.model_class(self.n_users, self.n_items, self.emb_dim).to(device)
 
         self.model, n_epochs_trained = train_model(
@@ -378,8 +394,6 @@ class FullRetrainMethod:
             max_epochs=self.max_epochs,
             early_stopping=self.early_stopping,
             patience=self.patience,
-            val_data=None,
-            test_data=None,
             verbose=True
         )
 
@@ -417,26 +431,13 @@ def run_full_retrain(model_name='BPRMF', dataset='ml-1m',
     print(f"\nUsing device: {device}")
 
     # Load data
-    data_path = os.path.join(os.path.dirname(PROJ), 'data', dataset)
-    print(f"\nLoading data from {data_path}...")
-
-    data = Data(
-        path=data_path,
-        batch_size=batch_size,
-        part_type=1,
-        part_num=1,
-        part_T=5
-    )
+    print(f"\nLoading data from dataset: {dataset}...")
+    data = load_data(dataset=dataset, batch_size=batch_size)
 
     n_users = data.n_users
     n_items = data.n_items
     train_data = data.train_items
-    val_data = data.test_set  # Use test as validation
     test_data = data.test_set
-
-    print(f"Users: {n_users}, Items: {n_items}")
-    print(f"Train interactions: {sum(len(v) for v in train_data.values())}")
-    print(f"Val/Test users: {len(val_data)}")
 
     # Select users to unlearn
     random.seed(42)
@@ -462,13 +463,12 @@ def run_full_retrain(model_name='BPRMF', dataset='ml-1m',
     # Train before unlearning
     print(f"\n--- Phase 1: Train BEFORE unlearning ---")
     t0 = time.time()
-    method.train(train_data, device, val_data=val_data)
+    method.train(train_data, device)
     train_time = time.time() - t0
 
     # Evaluate before
     results_before = method.evaluate(train_data, test_data, device)
-    print(f"  Before - R@10: {results_before['recall'][0]:.4f}, "
-          f"NDCG@10: {results_before['ndcg'][0]:.4f}")
+    print(f"  Before - R@10: {results_before['recall'][0]:.4f}, NDCG@10: {results_before['ndcg'][0]:.4f}")
 
     # Unlearn
     print(f"\n--- Phase 2: Unlearn (oracle full retrain) ---")
@@ -478,8 +478,7 @@ def run_full_retrain(model_name='BPRMF', dataset='ml-1m',
 
     # Evaluate after
     results_after = method.evaluate(train_data, test_data, device)
-    print(f"  After - R@10: {results_after['recall'][0]:.4f}, "
-          f"NDCG@10: {results_after['ndcg'][0]:.4f}")
+    print(f"  After - R@10: {results_after['recall'][0]:.4f}, NDCG@10: {results_after['ndcg'][0]:.4f}")
     print(f"  Unlearn time: {unlearn_time:.2f}s")
 
     # Results
@@ -521,7 +520,6 @@ def run_full_retrain(model_name='BPRMF', dataset='ml-1m',
     # Save
     suffix = f"_{output_suffix}" if output_suffix else ""
     output_path = os.path.join(PROJ, f'results_full_retrain_{model_name.lower()}{suffix}.json')
-    os.makedirs(os.path.dirname(output_path) if os.path.dirname(output_path) else '.', exist_ok=True)
     with open(output_path, 'w') as f:
         json.dump(results, f, indent=2)
 
@@ -531,38 +529,29 @@ def run_full_retrain(model_name='BPRMF', dataset='ml-1m',
 
 
 if __name__ == '__main__':
-    parser = argparse.ArgumentParser(description='Method 1: Full Retrain (Oracle Baseline)')
-    parser.add_argument('--model', type=str, default='BPRMF', choices=['BPRMF', 'WMF'],
-                       help='Model type')
-    parser.add_argument('--dataset', type=str, default='ml-1m',
-                       help='Dataset name')
-    parser.add_argument('--batch_size', type=int, default=512,
-                       help='Batch size (paper: 512)')
-    parser.add_argument('--lr', type=float, default=0.05,
-                       help='Learning rate (paper: 0.05)')
-    parser.add_argument('--emb_dim', type=int, default=64,
-                       help='Embedding dimension (paper: 64)')
-    parser.add_argument('--max_epochs', type=int, default=1000,
-                       help='Maximum epochs (paper: 1000)')
-    parser.add_argument('--early_stopping', type=lambda x: x.lower() == 'true',
-                       default=True,
-                       help='Use early stopping')
-    parser.add_argument('--patience', type=int, default=10,
-                       help='Early stopping patience (paper: 10)')
-    parser.add_argument('--unlearn_ratio', type=float, default=0.1,
-                       help='Ratio of users to unlearn')
-    parser.add_argument('--output_suffix', type=str, default='',
-                       help='Suffix for output file')
+    parser = argparse.ArgumentParser(description='Method 1: Full Retrain')
+
+    parser.add_argument('--model_name', type=str, default='BPRMF', choices=['BPRMF', 'WMF'])
+    parser.add_argument('--dataset', type=str, default='ml-1m')
+    parser.add_argument('--batch_size', type=int, default=512)
+    parser.add_argument('--learning_rate', type=float, default=0.05)
+    parser.add_argument('--emb_dim', type=int, default=64)
+    parser.add_argument('--max_epochs', type=int, default=1000)
+    parser.add_argument('--early_stopping', type=str, default='True', choices=['True', 'False'])
+    parser.add_argument('--patience', type=int, default=10)
+    parser.add_argument('--unlearn_ratio', type=float, default=0.1)
+    parser.add_argument('--output_suffix', type=str, default='')
+
     args = parser.parse_args()
 
     run_full_retrain(
-        model_name=args.model,
+        model_name=args.model_name,
         dataset=args.dataset,
         batch_size=args.batch_size,
-        lr=args.lr,
+        lr=args.learning_rate,
         emb_dim=args.emb_dim,
         max_epochs=args.max_epochs,
-        early_stopping=args.early_stopping,
+        early_stopping=(args.early_stopping == 'True'),
         patience=args.patience,
         unlearn_ratio=args.unlearn_ratio,
         output_suffix=args.output_suffix
