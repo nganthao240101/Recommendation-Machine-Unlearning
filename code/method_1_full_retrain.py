@@ -254,10 +254,10 @@ def evaluate_model(model, train_data, test_data, n_users, n_items, device, Ks=[1
 # TRAINING VỚI EARLY STOPPING
 # ============================================================================
 
-def train_model(model, train_data, n_users, n_items, device,
+def train_model(model, train_data, test_data, n_users, n_items, device,
                 batch_size=512, lr=0.05, max_epochs=1000,
                 early_stopping=True, patience=10, verbose=True):
-    """Train model với early stopping."""
+    """Train model với early stopping trên test_data."""
     optimizer = Adagrad(model.parameters(), lr=lr, initial_accumulator_value=1e-8)
 
     # Prepare training samples
@@ -301,9 +301,9 @@ def train_model(model, train_data, n_users, n_items, device,
 
             total_loss += loss.item()
 
-        # Evaluate if early stopping is enabled
+        # Evaluate if early stopping is enabled - đánh giá trên TEST_DATA
         if early_stopping and (epoch + 1) % 5 == 0:
-            metrics = evaluate_model(model, train_data, train_data, n_users, n_items, device)
+            metrics = evaluate_model(model, train_data, test_data, n_users, n_items, device)
             current_metric = metrics['recall'][0]
 
             if verbose:
@@ -358,14 +358,14 @@ class FullRetrainMethod:
         self.model = None
         self.training_info = {}
 
-    def train(self, train_data, device):
+    def train(self, train_data, test_data, device):
         print("    [Full Retrain] Training on full data...")
         print(f"    Config: batch_size={self.batch_size}, lr={self.lr}, max_epochs={self.max_epochs}")
 
         self.model = self.model_class(self.n_users, self.n_items, self.emb_dim).to(device)
 
         self.model, n_epochs_trained = train_model(
-            self.model, train_data, self.n_users, self.n_items, device,
+            self.model, train_data, test_data, self.n_users, self.n_items, device,
             batch_size=self.batch_size, lr=self.lr,
             max_epochs=self.max_epochs,
             early_stopping=self.early_stopping,
@@ -378,7 +378,7 @@ class FullRetrainMethod:
 
         return self.model
 
-    def unlearn(self, unlearn_user_ids, train_data, device):
+    def unlearn(self, unlearn_user_ids, train_data, test_data, device):
         print("    [Full Retrain] Training on filtered data (oracle)...")
 
         filtered_data = {u: items for u, items in train_data.items()
@@ -389,7 +389,7 @@ class FullRetrainMethod:
         self.model = self.model_class(self.n_users, self.n_items, self.emb_dim).to(device)
 
         self.model, n_epochs_trained = train_model(
-            self.model, filtered_data, self.n_users, self.n_items, device,
+            self.model, filtered_data, test_data, self.n_users, self.n_items, device,
             batch_size=self.batch_size, lr=self.lr,
             max_epochs=self.max_epochs,
             early_stopping=self.early_stopping,
@@ -463,7 +463,7 @@ def run_full_retrain(model_name='BPRMF', dataset='ml-1m',
     # Train before unlearning
     print(f"\n--- Phase 1: Train BEFORE unlearning ---")
     t0 = time.time()
-    method.train(train_data, device)
+    method.train(train_data, test_data, device)
     train_time = time.time() - t0
 
     # Evaluate before
@@ -473,7 +473,7 @@ def run_full_retrain(model_name='BPRMF', dataset='ml-1m',
     # Unlearn
     print(f"\n--- Phase 2: Unlearn (oracle full retrain) ---")
     t0 = time.time()
-    method.unlearn(unlearn_users, train_data, device)
+    method.unlearn(unlearn_users, train_data, test_data, device)
     unlearn_time = time.time() - t0
 
     # Evaluate after
