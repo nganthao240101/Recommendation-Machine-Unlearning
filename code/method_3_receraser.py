@@ -666,6 +666,12 @@ class RecEraserMethod:
             attention_size=self.attention_size
         ).to(device)
 
+        # Debug: Print embedding stats before training
+        user_emb = self.model.user_embedding.weight.data
+        item_emb = self.model.item_embedding.weight.data
+        print(f"    [DEBUG] Before train - User emb: mean={user_emb.mean():.4f}, std={user_emb.std():.4f}, norm={user_emb.norm():.2f}")
+        print(f"    [DEBUG] Before train - Item emb: mean={item_emb.mean():.4f}, std={item_emb.std():.4f}, norm={item_emb.norm():.2f}")
+
         # Phase 1: Local training với early stopping
         print(f"\n    [RecEraser] Phase 1: Local training (max {self.max_epochs_local} epochs)...")
         for shard_id in range(self.n_shards):
@@ -687,6 +693,12 @@ class RecEraserMethod:
             max_epochs=self.max_epochs_agg,
             early_stopping_patience=self.early_stopping_patience
         )
+
+        # Debug: Print embedding stats after training
+        user_emb = self.model.user_embedding.weight.data
+        item_emb = self.model.item_embedding.weight.data
+        print(f"    [DEBUG] After train - User emb: mean={user_emb.mean():.4f}, std={user_emb.std():.4f}, norm={user_emb.norm():.2f}")
+        print(f"    [DEBUG] After train - Item emb: mean={item_emb.mean():.4f}, std={item_emb.std():.4f}, norm={item_emb.norm():.2f}")
 
         return self.model
 
