@@ -396,7 +396,7 @@ def evaluate_model(model, train_data, test_data, n_users, n_items, device, Ks=[1
 
 def train_local_model(model, shard_data, n_items, device, shard_id, test_data,
                     train_data, n_users, batch_size=512, lr=0.05, max_epochs=500,
-                    early_stopping_patience=10):
+                    early_stopping_patience=10, verbose=True):
     """Train local model với early stopping - giống code gốc."""
 
     # Count samples
@@ -410,7 +410,8 @@ def train_local_model(model, shard_data, n_items, device, shard_id, test_data,
     cur_best = 0.0
     stopping_step = 0
 
-    print(f"    [Local {shard_id}] Training with early stopping (patience={early_stopping_patience})...")
+    if verbose:
+        print(f"    [Local {shard_id}] Training with early stopping (patience={early_stopping_patience})...")
 
     for epoch in range(max_epochs):
         t1 = time.time()
@@ -450,16 +451,62 @@ def train_local_model(model, shard_data, n_items, device, shard_id, test_data,
             recall = metrics['recall'][0]
 
             elapsed = time.time() - t1
-            print(f"    [Local {shard_id}] Epoch {epoch+1} [{elapsed:.1f}s]: "
-                  f"loss={loss_sum:.5f}, recall={recall:.5f}")
+            if verbose:
+                print(f"    [Local {shard_id}] Epoch {epoch+1} [{elapsed:.1f}s]: "
+                      f"loss={loss_sum:.5f}, recall={recall:.5f}")
 
             # Early stopping
             cur_best, stopping_step, should_stop = early_stopping(
                 recall, cur_best, stopping_step, expected_order='acc', flag_step=early_stopping_patience)
 
             if should_stop:
-                print(f"    [Local {shard_id}] Early stopping at epoch {epoch+1}")
+                if verbose:
+                    print(f"    [Local {shard_id}] Early stopping at epoch {epoch+1}")
                 break
+
+    return loss_sum
+
+
+def train_local_model_fast(model, shard_data, n_items, device, shard_id, batch_size=512, lr=0.05, max_epochs=50):
+    """Train local model NHANH - không evaluate, không early stopping.
+    Dùng cho unlearn để đo thời gian thực tế.
+    """
+    n_samples = sum(len(items) for items in shard_data.values())
+    if n_samples == 0:
+        return 0.0
+
+    optimizer = Adagrad(model.parameters(), lr=lr, initial_accumulator_value=1e-8)
+
+    print(f"    [Local {shard_id}] Training (fast, no eval)...")
+
+    for epoch in range(max_epochs):
+        # Build samples
+        samples = []
+        for user, items in shard_data.items():
+            for pos_item in items:
+                neg_item = random.randint(0, n_items - 1)
+                while neg_item in items:
+                    neg_item = random.randint(0, n_items - 1)
+                samples.append((user, pos_item, neg_item))
+
+        random.shuffle(samples)
+        loss_sum = 0.0
+        n_batches = max(1, len(samples) // batch_size)
+
+        for _ in range(n_batches):
+            indices = random.sample(range(len(samples)), min(batch_size, len(samples)))
+            batch = [samples[i] for i in indices]
+
+            users = torch.LongTensor([s[0] for s in batch]).to(device)
+            pos_items = torch.LongTensor([s[1] for s in batch]).to(device)
+            neg_items = torch.LongTensor([s[2] for s in batch]).to(device)
+
+            optimizer.zero_grad()
+            mf, reg, total = model.local_loss(users, pos_items, neg_items, shard_id)
+            total.backward()
+            optimizer.step()
+
+            loss_sum += total.item()
 
     return loss_sum
 
@@ -535,6 +582,53 @@ def train_aggregator(model, train_data, test_data, n_users, n_items, device,
     return loss_sum
 
 
+def train_aggregator_fast(model, train_data, n_items, device, batch_size=512, lr=0.05, max_epochs=50):
+    """Train aggregator NHANH - không evaluate, không early stopping.
+    Dùng cho unlearn để đo thời gian thực tế.
+    """
+    n_samples = sum(len(items) for items in train_data.values())
+    if n_samples == 0:
+        return 0.0
+
+    optimizer = Adagrad(model.parameters(), lr=lr, initial_accumulator_value=1e-8)
+
+    print(f"    [Aggregator] Training (fast, no eval)...")
+
+    for epoch in range(max_epochs):
+        # Build samples
+        samples = []
+        for user, items in train_data.items():
+            for pos_item in items:
+                neg_item = random.randint(0, n_items - 1)
+                while neg_item in items:
+                    neg_item = random.randint(0, n_items - 1)
+                samples.append((user, pos_item, neg_item))
+
+        random.shuffle(samples)
+        loss_sum = 0.0
+        n_batches = max(1, len(samples) // batch_size)
+
+        for _ in range(n_batches):
+            indices = random.sample(range(len(samples)), min(batch_size, len(samples)))
+            batch = [samples[i] for i in indices]
+
+            users = torch.LongTensor([s[0] for s in batch]).to(device)
+            pos_items = torch.LongTensor([s[1] for s in batch]).to(device)
+            neg_items = torch.LongTensor([s[2] for s in batch]).to(device)
+
+            optimizer.zero_grad()
+            if model.agg_type == 'attention':
+                mf, reg, total, attn, _ = model.agg_loss_attention(users, pos_items, neg_items)
+            else:
+                mf, reg, total, attn, _ = model.agg_loss_mean(users, pos_items, neg_items)
+            total.backward()
+            optimizer.step()
+
+            loss_sum += total.item()
+
+    return loss_sum
+
+
 # ============================================================================
 # RECERASER METHOD
 # ============================================================================
@@ -597,28 +691,26 @@ class RecEraserMethod:
         return self.model
 
     def unlearn(self, unlearn_user_ids, train_data, test_data, device, retrain_epochs=50):
+        """Unlearn với thời gian thực tế - chỉ train, không evaluate."""
         affected_shards = self.partitioner.get_affected_shards(unlearn_user_ids)
         print(f"    [RecEraser] Affected shards: {affected_shards}")
 
-        # Retrain affected shards với early stopping
+        # Retrain affected shards - dùng fast version (không evaluate)
         for shard_id in affected_shards:
             filtered_data = self.partitioner.filter_shard_data(shard_id, set(unlearn_user_ids))
-            print(f"    [RecEraser] Retraining shard {shard_id}...")
-            train_local_model(
+            print(f"    [RecEraser] Retraining shard {shard_id} (fast, no eval)...")
+            train_local_model_fast(
                 self.model, filtered_data, self.n_items, device, shard_id,
-                test_data, train_data, self.n_users,
                 batch_size=self.batch_size, lr=self.lr,
-                max_epochs=retrain_epochs,
-                early_stopping_patience=self.early_stopping_patience
+                max_epochs=retrain_epochs
             )
 
-        # Retrain aggregator với early stopping
-        print(f"    [RecEraser] Retraining aggregator...")
-        train_aggregator(
-            self.model, train_data, test_data, self.n_users, self.n_items, device,
+        # Retrain aggregator - dùng fast version (không evaluate)
+        print(f"    [RecEraser] Retraining aggregator (fast, no eval)...")
+        train_aggregator_fast(
+            self.model, train_data, self.n_items, device,
             batch_size=self.batch_size, lr=self.lr,
-            max_epochs=retrain_epochs,
-            early_stopping_patience=self.early_stopping_patience
+            max_epochs=retrain_epochs
         )
 
         return self.model, affected_shards
