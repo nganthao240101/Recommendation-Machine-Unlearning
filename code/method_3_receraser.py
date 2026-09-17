@@ -149,6 +149,31 @@ class RecEraserBPR(nn.Module):
         for k in range(num_local):
             self.trans_W.data[k] = torch.eye(emb_dim)
 
+    def load_pretrained_embeddings(self, user_emb, item_emb):
+        """Load pretrained embeddings cho tất cả shards.
+
+        Args:
+            user_emb: (n_users, emb_dim) numpy array
+            item_emb: (n_items, emb_dim) numpy array
+        """
+        # user_emb và item_emb có shape (n, emb_dim)
+        # Nhưng trong model, embeddings có shape (n, num_local * emb_dim)
+        # Chúng ta lặp lại embedding cho mỗi shard
+
+        n_users, emb_dim = user_emb.shape
+        n_items = item_emb.shape[0]
+
+        # Reshape: (n, emb_dim) -> (n, num_local * emb_dim)
+        # Lặp lại cùng embedding cho mỗi shard
+        user_emb_expanded = np.repeat(user_emb, self.num_local, axis=1)  # (n_users, num_local * emb_dim)
+        item_emb_expanded = np.repeat(item_emb, self.num_local, axis=1)  # (n_items, num_local * emb_dim)
+
+        # Load vào model
+        self.user_embedding.weight.data = torch.FloatTensor(user_emb_expanded)
+        self.item_embedding.weight.data = torch.FloatTensor(item_emb_expanded)
+
+        print(f"    [RecEraser] Loaded pretrained embeddings: users={n_users}, items={n_items}, shards={self.num_local}")
+
     def _user_emb_for_shard(self, users, shard):
         emb = self.user_embedding(users)
         emb = emb.view(-1, self.num_local, self.emb_dim)
@@ -652,7 +677,7 @@ class RecEraserMethod:
         self.model = None
         self.partitioner = DataPartitioner(n_shards)
 
-    def train(self, train_data, test_data, device):
+    def train(self, train_data, test_data, device, pretrained_emb_path=None):
         print("    [RecEraser] Partitioning users...")
         self.partitioner.partition_users(train_data, self.n_users)
 
@@ -665,6 +690,16 @@ class RecEraserMethod:
             num_local=self.n_shards, agg_type=self.agg_type,
             attention_size=self.attention_size
         ).to(device)
+
+        # Load pretrained embeddings if provided
+        if pretrained_emb_path is not None and os.path.exists(pretrained_emb_path):
+            print(f"    [RecEraser] Loading pretrained embeddings from {pretrained_emb_path}...")
+            data = np.load(pretrained_emb_path)
+            user_emb = data['user_embeddings']
+            item_emb = data['item_embeddings']
+            self.model.load_pretrained_embeddings(user_emb, item_emb)
+        else:
+            print("    [RecEraser] No pretrained embeddings, using Xavier init")
 
         # Debug: Print embedding stats before training
         user_emb = self.model.user_embedding.weight.data
@@ -742,7 +777,7 @@ def run_receraser(dataset='ml-1m', emb_dim=64, n_shards=8,
                 early_stopping_patience=10,
                 unlearn_ratio=0.1, unlearn_mode='random', unlearn_user_id=None,
                 retrain_epochs=50,
-                agg_type='attention', output_suffix=''):
+                agg_type='attention', pretrained_emb_path=None, output_suffix=''):
     print(f"\n{'='*60}")
     print(f"METHOD 3: RECERASER (giống code gốc)")
     print(f"{'='*60}")
@@ -806,7 +841,7 @@ def run_receraser(dataset='ml-1m', emb_dim=64, n_shards=8,
 
     print(f"\n--- Phase 1: Train BEFORE unlearning ---")
     t0 = time.time()
-    method.train(train_data, test_data, device)
+    method.train(train_data, test_data, device, pretrained_emb_path=pretrained_emb_path)
     train_time = time.time() - t0
 
     results_before = method.evaluate(train_data, test_data, device)
@@ -887,6 +922,8 @@ if __name__ == '__main__':
     parser.add_argument('--unlearn_user_id', type=int, default=None,
                        help='Chi dinh user ID cu the de unlearn (dung voi --unlearn_mode single)')
     parser.add_argument('--retrain_epochs', type=int, default=50)
+    parser.add_argument('--pretrained_emb_path', type=str, default=None,
+                       help='Duong dan den file pretrained embeddings (npz)')
     parser.add_argument('--output_suffix', type=str, default='')
 
     args = parser.parse_args()
@@ -902,6 +939,7 @@ if __name__ == '__main__':
         max_epochs_agg=args.max_epochs_agg,
         early_stopping_patience=args.early_stopping_patience,
         agg_type=args.agg_type,
+        pretrained_emb_path=args.pretrained_emb_path,
         unlearn_ratio=args.unlearn_ratio,
         unlearn_mode=args.unlearn_mode,
         unlearn_user_id=args.unlearn_user_id,
