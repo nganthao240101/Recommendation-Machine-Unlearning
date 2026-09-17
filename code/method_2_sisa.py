@@ -442,7 +442,8 @@ class SISAMethod:
 
 def run_sisa(model_name='BPRMF', dataset='ml-1m', emb_dim=64, n_shards=8,
            batch_size=512, lr=0.05, max_epochs=1000,
-           unlearn_ratio=0.1, unlearn_mode='random', retrain_epochs=50, output_suffix=''):
+           unlearn_ratio=0.1, unlearn_mode='random', unlearn_user_id=None,
+           retrain_epochs=50, output_suffix=''):
     print(f"\n{'='*60}")
     print(f"METHOD 2: SISA")
     print(f"{'='*60}")
@@ -469,7 +470,14 @@ def run_sisa(model_name='BPRMF', dataset='ml-1m', emb_dim=64, n_shards=8,
     n_unlearn = int(len(all_users) * unlearn_ratio)
 
     # Unlearn mode
-    if unlearn_mode == 'fewest':
+    if unlearn_mode == 'single':
+        if unlearn_user_id is None:
+            raise ValueError("--unlearn_user_id is required when using --unlearn_mode single")
+        unlearn_users = {unlearn_user_id}
+        n_unlearn = 1
+        n_interactions = len(train_data.get(unlearn_user_id, []))
+        print(f"\nUnlearn mode: SINGLE USER (ID={unlearn_user_id}, interactions={n_interactions})")
+    elif unlearn_mode == 'fewest':
         user_interactions = [(u, len(items)) for u, items in train_data.items()]
         user_interactions.sort(key=lambda x: x[1])
         unlearn_users = set([u for u, _ in user_interactions[:n_unlearn]])
@@ -564,8 +572,10 @@ if __name__ == '__main__':
     parser.add_argument('--max_epochs', type=int, default=1000)
     parser.add_argument('--unlearn_ratio', type=float, default=0.1)
     parser.add_argument('--unlearn_mode', type=str, default='random',
-                       choices=['random', 'fewest', 'most'],
-                       help='random: ngau nhien, fewest: it interaction nhat, most: nhieu interaction nhat')
+                       choices=['random', 'fewest', 'most', 'single'],
+                       help='random: ngau nhien, fewest: it interaction nhat, most: nhieu interaction nhat, single: 1 user')
+    parser.add_argument('--unlearn_user_id', type=int, default=None,
+                       help='Chi dinh user ID cu the de unlearn (dung voi --unlearn_mode single)')
     parser.add_argument('--retrain_epochs', type=int, default=50)
     parser.add_argument('--output_suffix', type=str, default='')
 
@@ -581,6 +591,7 @@ if __name__ == '__main__':
         max_epochs=args.max_epochs,
         unlearn_ratio=args.unlearn_ratio,
         unlearn_mode=args.unlearn_mode,
+        unlearn_user_id=args.unlearn_user_id,
         retrain_epochs=args.retrain_epochs,
         output_suffix=args.output_suffix
     )

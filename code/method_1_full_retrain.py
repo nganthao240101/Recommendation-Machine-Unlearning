@@ -414,7 +414,8 @@ class FullRetrainMethod:
 def run_full_retrain(model_name='BPRMF', dataset='ml-1m',
                     batch_size=512, lr=0.05, emb_dim=64,
                     max_epochs=1000, early_stopping=True, patience=10,
-                    unlearn_ratio=0.1, unlearn_mode='random', output_suffix=''):
+                    unlearn_ratio=0.1, unlearn_mode='random',
+                    unlearn_user_id=None, output_suffix=''):
     """Run Full Retrain method."""
     print(f"\n{'='*60}")
     print(f"METHOD 1: FULL RETRAIN (ORACLE BASELINE)")
@@ -445,26 +446,26 @@ def run_full_retrain(model_name='BPRMF', dataset='ml-1m',
     n_unlearn = int(len(all_users) * unlearn_ratio)
 
     # Unlearn mode
-    unlearn_mode = getattr(args, 'unlearn_mode', 'random')  # random, fewest, most
-
-    if unlearn_mode == 'fewest':
-        # User có ít interaction nhất
+    if unlearn_mode == 'single':
+        if unlearn_user_id is None:
+            raise ValueError("--unlearn_user_id is required when using --unlearn_mode single")
+        unlearn_users = {unlearn_user_id}
+        n_unlearn = 1
+        n_interactions = len(train_data.get(unlearn_user_id, []))
+        print(f"\nUnlearn mode: SINGLE USER (ID={unlearn_user_id}, interactions={n_interactions})")
+    elif unlearn_mode == 'fewest':
         user_interactions = [(u, len(items)) for u, items in train_data.items()]
         user_interactions.sort(key=lambda x: x[1])
         unlearn_users = set([u for u, _ in user_interactions[:n_unlearn]])
         print(f"\nUnlearn mode: FEWEST interactions ({n_unlearn} users)")
         print(f"  Min: user {user_interactions[0][0]} ({user_interactions[0][1]} interactions)")
-        print(f"  Max in selection: user {user_interactions[n_unlearn-1][0]} ({user_interactions[n_unlearn-1][1]} interactions)")
     elif unlearn_mode == 'most':
-        # User có nhiều interaction nhất
         user_interactions = [(u, len(items)) for u, items in train_data.items()]
         user_interactions.sort(key=lambda x: x[1], reverse=True)
         unlearn_users = set([u for u, _ in user_interactions[:n_unlearn]])
         print(f"\nUnlearn mode: MOST interactions ({n_unlearn} users)")
         print(f"  Max: user {user_interactions[0][0]} ({user_interactions[0][1]} interactions)")
-        print(f"  Min in selection: user {user_interactions[n_unlearn-1][0]} ({user_interactions[n_unlearn-1][1]} interactions)")
     else:
-        # Ngẫu nhiên
         unlearn_users = set(random.sample(all_users, n_unlearn))
         print(f"\nUnlearn mode: RANDOM ({n_unlearn} users)")
 
@@ -564,8 +565,10 @@ if __name__ == '__main__':
     parser.add_argument('--patience', type=int, default=10)
     parser.add_argument('--unlearn_ratio', type=float, default=0.1)
     parser.add_argument('--unlearn_mode', type=str, default='random',
-                       choices=['random', 'fewest', 'most'],
-                       help='random: ngau nhien, fewest: it interaction nhat, most: nhieu interaction nhat')
+                       choices=['random', 'fewest', 'most', 'single'],
+                       help='random: ngau nhien, fewest: it interaction nhat, most: nhieu interaction nhat, single: 1 user')
+    parser.add_argument('--unlearn_user_id', type=int, default=None,
+                       help='Chi dinh user ID cu the de unlearn (dung voi --unlearn_mode single)')
     parser.add_argument('--output_suffix', type=str, default='')
 
     args = parser.parse_args()
@@ -581,5 +584,6 @@ if __name__ == '__main__':
         patience=args.patience,
         unlearn_ratio=args.unlearn_ratio,
         unlearn_mode=args.unlearn_mode,
+        unlearn_user_id=args.unlearn_user_id,
         output_suffix=args.output_suffix
     )
