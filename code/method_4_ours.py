@@ -637,7 +637,7 @@ class OursMethod:
 
 def run_ours(dataset='ml-1m', emb_dim=64, n_shards=8,
             batch_size=512, lr=0.05, max_epochs=100,
-            unlearn_ratio=0.1, retrain_epochs=50,
+            unlearn_ratio=0.1, unlearn_mode='random', retrain_epochs=50,
             signature_dim=64, output_suffix=''):
     """
     Chạy Ours method với 3 components đúng theo bài báo
@@ -676,9 +676,23 @@ def run_ours(dataset='ml-1m', emb_dim=64, n_shards=8,
     random.seed(42)
     all_users = list(train_data.keys())
     n_unlearn = int(len(all_users) * unlearn_ratio)
-    unlearn_users = set(random.sample(all_users, n_unlearn))
 
-    print(f"\nUnlearn ratio: {unlearn_ratio} ({n_unlearn} users)")
+    # Unlearn mode
+    if unlearn_mode == 'fewest':
+        user_interactions = [(u, len(items)) for u, items in train_data.items()]
+        user_interactions.sort(key=lambda x: x[1])
+        unlearn_users = set([u for u, _ in user_interactions[:n_unlearn]])
+        print(f"\nUnlearn mode: FEWEST interactions ({n_unlearn} users)")
+        print(f"  Min: user {user_interactions[0][0]} ({user_interactions[0][1]} interactions)")
+    elif unlearn_mode == 'most':
+        user_interactions = [(u, len(items)) for u, items in train_data.items()]
+        user_interactions.sort(key=lambda x: x[1], reverse=True)
+        unlearn_users = set([u for u, _ in user_interactions[:n_unlearn]])
+        print(f"\nUnlearn mode: MOST interactions ({n_unlearn} users)")
+        print(f"  Max: user {user_interactions[0][0]} ({user_interactions[0][1]} interactions)")
+    else:
+        unlearn_users = set(random.sample(all_users, n_unlearn))
+        print(f"\nUnlearn mode: RANDOM ({n_unlearn} users)")
 
     method = OursMethod(
         n_users, n_items, emb_dim, n_shards,
@@ -727,7 +741,9 @@ def run_ours(dataset='ml-1m', emb_dim=64, n_shards=8,
         },
         'inference': 'HARD-ROUTING: y_xv = f_{M_{g(x)}}(x, v)',
         'unlearn_ratio': unlearn_ratio,
+        'unlearn_mode': unlearn_mode,
         'n_unlearn': n_unlearn,
+        'unlearn_users_sample': list(unlearn_users)[:10],
         'affected_shards': [int(s) for s in affected_shards],
         'train_time': train_time,
         'unlearn_time': unlearn_time,
@@ -771,6 +787,9 @@ if __name__ == '__main__':
     parser.add_argument('--max_epochs', type=int, default=100)
     parser.add_argument('--signature_dim', type=int, default=64)
     parser.add_argument('--unlearn_ratio', type=float, default=0.1)
+    parser.add_argument('--unlearn_mode', type=str, default='random',
+                       choices=['random', 'fewest', 'most'],
+                       help='random: ngau nhien, fewest: it interaction nhat, most: nhieu interaction nhat')
     parser.add_argument('--retrain_epochs', type=int, default=50)
     parser.add_argument('--output_suffix', type=str, default='')
 
@@ -785,6 +804,7 @@ if __name__ == '__main__':
         max_epochs=args.max_epochs,
         signature_dim=args.signature_dim,
         unlearn_ratio=args.unlearn_ratio,
+        unlearn_mode=args.unlearn_mode,
         retrain_epochs=args.retrain_epochs,
         output_suffix=args.output_suffix
     )

@@ -636,7 +636,7 @@ def run_receraser(dataset='ml-1m', emb_dim=64, n_shards=8,
                 batch_size=512, lr=0.05, attention_size=32,
                 max_epochs_local=500, max_epochs_agg=500,
                 early_stopping_patience=10,
-                unlearn_ratio=0.1, retrain_epochs=50,
+                unlearn_ratio=0.1, unlearn_mode='random', retrain_epochs=50,
                 agg_type='attention', output_suffix=''):
     print(f"\n{'='*60}")
     print(f"METHOD 3: RECERASER (giống code gốc)")
@@ -665,9 +665,23 @@ def run_receraser(dataset='ml-1m', emb_dim=64, n_shards=8,
     random.seed(42)
     all_users = list(train_data.keys())
     n_unlearn = int(len(all_users) * unlearn_ratio)
-    unlearn_users = set(random.sample(all_users, n_unlearn))
 
-    print(f"\nUnlearn ratio: {unlearn_ratio} ({n_unlearn} users)")
+    # Unlearn mode
+    if unlearn_mode == 'fewest':
+        user_interactions = [(u, len(items)) for u, items in train_data.items()]
+        user_interactions.sort(key=lambda x: x[1])
+        unlearn_users = set([u for u, _ in user_interactions[:n_unlearn]])
+        print(f"\nUnlearn mode: FEWEST interactions ({n_unlearn} users)")
+        print(f"  Min: user {user_interactions[0][0]} ({user_interactions[0][1]} interactions)")
+    elif unlearn_mode == 'most':
+        user_interactions = [(u, len(items)) for u, items in train_data.items()]
+        user_interactions.sort(key=lambda x: x[1], reverse=True)
+        unlearn_users = set([u for u, _ in user_interactions[:n_unlearn]])
+        print(f"\nUnlearn mode: MOST interactions ({n_unlearn} users)")
+        print(f"  Max: user {user_interactions[0][0]} ({user_interactions[0][1]} interactions)")
+    else:
+        unlearn_users = set(random.sample(all_users, n_unlearn))
+        print(f"\nUnlearn mode: RANDOM ({n_unlearn} users)")
 
     method = RecEraserMethod(
         n_users, n_items, emb_dim, n_shards, agg_type,
@@ -709,7 +723,9 @@ def run_receraser(dataset='ml-1m', emb_dim=64, n_shards=8,
             'agg_type': agg_type
         },
         'unlearn_ratio': unlearn_ratio,
+        'unlearn_mode': unlearn_mode,
         'n_unlearn': n_unlearn,
+        'unlearn_users_sample': list(unlearn_users)[:10],
         'train_time': train_time,
         'unlearn_time': unlearn_time,
         'before': {
@@ -753,6 +769,9 @@ if __name__ == '__main__':
     parser.add_argument('--early_stopping_patience', type=int, default=10)
     parser.add_argument('--agg_type', type=str, default='attention', choices=['attention', 'mean'])
     parser.add_argument('--unlearn_ratio', type=float, default=0.1)
+    parser.add_argument('--unlearn_mode', type=str, default='random',
+                       choices=['random', 'fewest', 'most'],
+                       help='random: ngau nhien, fewest: it interaction nhat, most: nhieu interaction nhat')
     parser.add_argument('--retrain_epochs', type=int, default=50)
     parser.add_argument('--output_suffix', type=str, default='')
 
@@ -770,6 +789,7 @@ if __name__ == '__main__':
         early_stopping_patience=args.early_stopping_patience,
         agg_type=args.agg_type,
         unlearn_ratio=args.unlearn_ratio,
+        unlearn_mode=args.unlearn_mode,
         retrain_epochs=args.retrain_epochs,
         output_suffix=args.output_suffix
     )

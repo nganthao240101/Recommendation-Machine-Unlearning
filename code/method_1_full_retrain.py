@@ -414,7 +414,7 @@ class FullRetrainMethod:
 def run_full_retrain(model_name='BPRMF', dataset='ml-1m',
                     batch_size=512, lr=0.05, emb_dim=64,
                     max_epochs=1000, early_stopping=True, patience=10,
-                    unlearn_ratio=0.1, output_suffix=''):
+                    unlearn_ratio=0.1, unlearn_mode='random', output_suffix=''):
     """Run Full Retrain method."""
     print(f"\n{'='*60}")
     print(f"METHOD 1: FULL RETRAIN (ORACLE BASELINE)")
@@ -443,9 +443,30 @@ def run_full_retrain(model_name='BPRMF', dataset='ml-1m',
     random.seed(42)
     all_users = list(train_data.keys())
     n_unlearn = int(len(all_users) * unlearn_ratio)
-    unlearn_users = set(random.sample(all_users, n_unlearn))
 
-    print(f"\nUnlearn ratio: {unlearn_ratio} ({n_unlearn} users)")
+    # Unlearn mode
+    unlearn_mode = getattr(args, 'unlearn_mode', 'random')  # random, fewest, most
+
+    if unlearn_mode == 'fewest':
+        # User có ít interaction nhất
+        user_interactions = [(u, len(items)) for u, items in train_data.items()]
+        user_interactions.sort(key=lambda x: x[1])
+        unlearn_users = set([u for u, _ in user_interactions[:n_unlearn]])
+        print(f"\nUnlearn mode: FEWEST interactions ({n_unlearn} users)")
+        print(f"  Min: user {user_interactions[0][0]} ({user_interactions[0][1]} interactions)")
+        print(f"  Max in selection: user {user_interactions[n_unlearn-1][0]} ({user_interactions[n_unlearn-1][1]} interactions)")
+    elif unlearn_mode == 'most':
+        # User có nhiều interaction nhất
+        user_interactions = [(u, len(items)) for u, items in train_data.items()]
+        user_interactions.sort(key=lambda x: x[1], reverse=True)
+        unlearn_users = set([u for u, _ in user_interactions[:n_unlearn]])
+        print(f"\nUnlearn mode: MOST interactions ({n_unlearn} users)")
+        print(f"  Max: user {user_interactions[0][0]} ({user_interactions[0][1]} interactions)")
+        print(f"  Min in selection: user {user_interactions[n_unlearn-1][0]} ({user_interactions[n_unlearn-1][1]} interactions)")
+    else:
+        # Ngẫu nhiên
+        unlearn_users = set(random.sample(all_users, n_unlearn))
+        print(f"\nUnlearn mode: RANDOM ({n_unlearn} users)")
 
     # Model class
     model_classes = {'BPRMF': BPRMF, 'WMF': WMF}
@@ -495,7 +516,9 @@ def run_full_retrain(model_name='BPRMF', dataset='ml-1m',
             'patience': patience
         },
         'unlearn_ratio': unlearn_ratio,
+        'unlearn_mode': unlearn_mode,
         'n_unlearn': n_unlearn,
+        'unlearn_users_sample': list(unlearn_users)[:10],  # Lưu 10 user đầu để debug
         'train_time': train_time,
         'unlearn_time': unlearn_time,
         'training_info': method.training_info,
@@ -540,6 +563,9 @@ if __name__ == '__main__':
     parser.add_argument('--early_stopping', type=str, default='True', choices=['True', 'False'])
     parser.add_argument('--patience', type=int, default=10)
     parser.add_argument('--unlearn_ratio', type=float, default=0.1)
+    parser.add_argument('--unlearn_mode', type=str, default='random',
+                       choices=['random', 'fewest', 'most'],
+                       help='random: ngau nhien, fewest: it interaction nhat, most: nhieu interaction nhat')
     parser.add_argument('--output_suffix', type=str, default='')
 
     args = parser.parse_args()
@@ -554,5 +580,6 @@ if __name__ == '__main__':
         early_stopping=(args.early_stopping == 'True'),
         patience=args.patience,
         unlearn_ratio=args.unlearn_ratio,
+        unlearn_mode=args.unlearn_mode,
         output_suffix=args.output_suffix
     )

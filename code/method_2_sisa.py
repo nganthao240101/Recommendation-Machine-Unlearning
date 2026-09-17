@@ -442,7 +442,7 @@ class SISAMethod:
 
 def run_sisa(model_name='BPRMF', dataset='ml-1m', emb_dim=64, n_shards=8,
            batch_size=512, lr=0.05, max_epochs=1000,
-           unlearn_ratio=0.1, retrain_epochs=50, output_suffix=''):
+           unlearn_ratio=0.1, unlearn_mode='random', retrain_epochs=50, output_suffix=''):
     print(f"\n{'='*60}")
     print(f"METHOD 2: SISA")
     print(f"{'='*60}")
@@ -467,9 +467,23 @@ def run_sisa(model_name='BPRMF', dataset='ml-1m', emb_dim=64, n_shards=8,
     random.seed(42)
     all_users = list(train_data.keys())
     n_unlearn = int(len(all_users) * unlearn_ratio)
-    unlearn_users = set(random.sample(all_users, n_unlearn))
 
-    print(f"\nUnlearn ratio: {unlearn_ratio} ({n_unlearn} users)")
+    # Unlearn mode
+    if unlearn_mode == 'fewest':
+        user_interactions = [(u, len(items)) for u, items in train_data.items()]
+        user_interactions.sort(key=lambda x: x[1])
+        unlearn_users = set([u for u, _ in user_interactions[:n_unlearn]])
+        print(f"\nUnlearn mode: FEWEST interactions ({n_unlearn} users)")
+        print(f"  Min: user {user_interactions[0][0]} ({user_interactions[0][1]} interactions)")
+    elif unlearn_mode == 'most':
+        user_interactions = [(u, len(items)) for u, items in train_data.items()]
+        user_interactions.sort(key=lambda x: x[1], reverse=True)
+        unlearn_users = set([u for u, _ in user_interactions[:n_unlearn]])
+        print(f"\nUnlearn mode: MOST interactions ({n_unlearn} users)")
+        print(f"  Max: user {user_interactions[0][0]} ({user_interactions[0][1]} interactions)")
+    else:
+        unlearn_users = set(random.sample(all_users, n_unlearn))
+        print(f"\nUnlearn mode: RANDOM ({n_unlearn} users)")
 
     model_classes = {'BPRMF': BPRMF, 'WMF': WMF}
     model_class = model_classes.get(model_name, BPRMF)
@@ -506,7 +520,9 @@ def run_sisa(model_name='BPRMF', dataset='ml-1m', emb_dim=64, n_shards=8,
             'n_shards': n_shards
         },
         'unlearn_ratio': unlearn_ratio,
+        'unlearn_mode': unlearn_mode,
         'n_unlearn': n_unlearn,
+        'unlearn_users_sample': list(unlearn_users)[:10],
         'train_time': train_time,
         'unlearn_time': unlearn_time,
         'before': {
@@ -547,6 +563,9 @@ if __name__ == '__main__':
     parser.add_argument('--n_shards', type=int, default=8)
     parser.add_argument('--max_epochs', type=int, default=1000)
     parser.add_argument('--unlearn_ratio', type=float, default=0.1)
+    parser.add_argument('--unlearn_mode', type=str, default='random',
+                       choices=['random', 'fewest', 'most'],
+                       help='random: ngau nhien, fewest: it interaction nhat, most: nhieu interaction nhat')
     parser.add_argument('--retrain_epochs', type=int, default=50)
     parser.add_argument('--output_suffix', type=str, default='')
 
@@ -561,6 +580,7 @@ if __name__ == '__main__':
         lr=args.learning_rate,
         max_epochs=args.max_epochs,
         unlearn_ratio=args.unlearn_ratio,
+        unlearn_mode=args.unlearn_mode,
         retrain_epochs=args.retrain_epochs,
         output_suffix=args.output_suffix
     )
