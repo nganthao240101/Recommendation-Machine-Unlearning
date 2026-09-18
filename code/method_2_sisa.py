@@ -272,7 +272,8 @@ def evaluate_model(model, train_data, test_data, n_users, n_items, device, Ks=[1
     }
 
 
-def evaluate_sisa(models, train_data, test_data, n_users, n_items, device, Ks=[10, 20, 50]):
+def evaluate_sisa(models, train_data, test_data, n_users, n_items, device, user_to_shard, Ks=[10, 20, 50]):
+    """Evaluate SISA - chỉ dùng model của shard mà user được assign (KHÔNG average)."""
     pre_log = {k: [] for k in Ks}
     rec_log = {k: [] for k in Ks}
     ndcg_log = {k: [] for k in Ks}
@@ -281,25 +282,25 @@ def evaluate_sisa(models, train_data, test_data, n_users, n_items, device, Ks=[1
         if user not in test_data or not test_data[user]:
             continue
 
-        scores_list = []
-        for model in models:
-            with torch.no_grad():
-                user_t = torch.LongTensor([user]).to(device)
-                all_items = list(range(n_items))
-                scores = []
-                for i in range(0, n_items, 256):
-                    batch_items = torch.LongTensor(all_items[i:i+256]).to(device)
-                    s = model.predict(user_t, batch_items).cpu().numpy()
-                    scores.extend(s.tolist())
-                scores_list.append(np.array(scores))
+        # Chỉ dùng model của shard mà user được assign
+        shard_id = user_to_shard[user]
+        model = models[shard_id]
 
-        avg_scores = np.mean(scores_list, axis=0)
+        with torch.no_grad():
+            user_t = torch.LongTensor([user]).to(device)
+            all_items = list(range(n_items))
+            scores = []
+            for i in range(0, n_items, 256):
+                batch_items = torch.LongTensor(all_items[i:i+256]).to(device)
+                s = model.predict(user_t, batch_items).cpu().numpy()
+                scores.extend(s.tolist())
+            scores = np.array(scores)
 
         train_items = set(train_data.get(user, []))
         for item in train_items:
-            avg_scores[item] = -np.inf
+            scores[item] = -np.inf
 
-        rank_list = heapq.nlargest(max(Ks), range(len(avg_scores)), key=avg_scores.__getitem__)
+        rank_list = heapq.nlargest(max(Ks), range(len(scores)), key=scores.__getitem__)
 
         item_pos = test_data.get(user, [])
         item_set = set(item_pos)
@@ -433,7 +434,8 @@ class SISAMethod:
 
     def evaluate(self, train_data, test_data, device, Ks=[10, 20, 50]):
         return evaluate_sisa(self.models, train_data, test_data,
-                           self.n_users, self.n_items, device, Ks)
+                           self.n_users, self.n_items, device,
+                           self.partitioner.user_to_shard, Ks)
 
 
 # ============================================================================
