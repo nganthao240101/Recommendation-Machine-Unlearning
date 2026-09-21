@@ -514,7 +514,9 @@ def run_sisa(model_name='BPRMF', dataset='ml-1m', emb_dim=64, n_shards=8,
     method.unlearn(unlearn_users, train_data, device, retrain_epochs=retrain_epochs)
     unlearn_time = time.time() - t0
 
-    results_after = method.evaluate(train_data, test_data, device)
+    # Filter out unlearned users from test set for fair comparison
+    test_data_retained = {u: items for u, items in test_data.items() if u not in unlearn_users}
+    results_after = method.evaluate(train_data, test_data_retained, device)
     print(f"  After - R@10: {results_after['recall'][0]:.4f}, NDCG@10: {results_after['ndcg'][0]:.4f}")
     print(f"  Unlearn time: {unlearn_time:.2f}s")
 
