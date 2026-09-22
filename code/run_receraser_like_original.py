@@ -592,10 +592,15 @@ def run_receraser_like_original(dataset='ml-1m', emb_dim=64, n_shards=8,
 
     train_time = local_time + agg_time
 
-    # Evaluate BEFORE unlearn
-    print(f"\n  Evaluating BEFORE unlearn...")
-    results_before = evaluate_model(model, train_data, test_data_retained, n_users, n_items, device)
-    print(f"    Before - R@10: {results_before['recall'][0]:.4f}, NDCG@10: {results_before['ndcg'][0]:.4f}")
+    # Evaluate BEFORE unlearn - đánh giá trên FULL test set
+    print(f"\n  Evaluating BEFORE unlearn on FULL test set...")
+    results_before = evaluate_model(model, train_data, test_data, n_users, n_items, device)
+    print(f"    Before (FULL) - R@10: {results_before['recall'][0]:.4f}, NDCG@10: {results_before['ndcg'][0]:.4f}")
+
+    # Also evaluate on RETAINED users for comparison
+    print(f"\n  Evaluating BEFORE unlearn on RETAINED users only...")
+    results_before_retained = evaluate_model(model, train_data, test_data_retained, n_users, n_items, device)
+    print(f"    Before (RETAINED) - R@10: {results_before_retained['recall'][0]:.4f}")
 
     # =========================================================================
     # BƯỚC 3: UNLEARN
@@ -622,10 +627,16 @@ def run_receraser_like_original(dataset='ml-1m', emb_dim=64, n_shards=8,
     unlearn_time = time.time() - t0
     print(f"  Unlearn time: {unlearn_time:.1f}s")
 
-    # Evaluate AFTER unlearn
-    print(f"\n  Evaluating AFTER unlearn...")
-    results_after = evaluate_model(model, train_data, test_data_retained, n_users, n_items, device)
-    print(f"    After - R@10: {results_after['recall'][0]:.4f}, NDCG@10: {results_after['ndcg'][0]:.4f}")
+    # Evaluate AFTER unlearn - đánh giá trên FULL test set (cả retained + unlearned)
+    # Unlearned users sẽ predict KÉM vì không có train data
+    print(f"\n  Evaluating AFTER unlearn on FULL test set...")
+    results_after = evaluate_model(model, train_data, test_data, n_users, n_items, device)
+    print(f"    After (FULL) - R@10: {results_after['recall'][0]:.4f}, NDCG@10: {results_after['ndcg'][0]:.4f}")
+
+    # Also evaluate on RETAINED users only for comparison
+    print(f"\n  Evaluating AFTER unlearn on RETAINED users only...")
+    results_after_retained = evaluate_model(model, train_data, test_data_retained, n_users, n_items, device)
+    print(f"    After (RETAINED) - R@10: {results_after_retained['recall'][0]:.4f}")
 
     # =========================================================================
     # SAVE RESULTS
@@ -647,23 +658,26 @@ def run_receraser_like_original(dataset='ml-1m', emb_dim=64, n_shards=8,
         'unlearn_ratio': unlearn_ratio,
         'unlearn_mode': unlearn_mode,
         'n_unlearn': n_unlearn,
+        'n_retained': len(test_data_retained),
         'train_time': train_time,
         'unlearn_time': unlearn_time,
-        'before': {
+        'before_full': {
             'recall@10': results_before['recall'][0],
             'recall@20': results_before['recall'][1],
             'recall@50': results_before['recall'][2],
             'ndcg@10': results_before['ndcg'][0],
-            'ndcg@20': results_before['ndcg'][1],
-            'ndcg@50': results_before['ndcg'][2],
         },
-        'after': {
+        'before_retained': {
+            'recall@10': results_before_retained['recall'][0],
+        },
+        'after_full': {
             'recall@10': results_after['recall'][0],
             'recall@20': results_after['recall'][1],
             'recall@50': results_after['recall'][2],
             'ndcg@10': results_after['ndcg'][0],
-            'ndcg@20': results_after['ndcg'][1],
-            'ndcg@50': results_after['ndcg'][2],
+        },
+        'after_retained': {
+            'recall@10': results_after_retained['recall'][0],
         }
     }
 
