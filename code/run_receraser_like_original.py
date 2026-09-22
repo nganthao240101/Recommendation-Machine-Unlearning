@@ -213,37 +213,57 @@ class RecEraserBPR(nn.Module):
 
         return mf, reg_loss, mf + reg_loss
 
+    def _attention_aggregate(self, embs, which='user'):
+        """Attention aggregation - GIỐNG CODE GỐC"""
+        if which == 'user':
+            W, B, H = self.WA, self.BA, self.HA
+        else:
+            W, B, H = self.WB, self.BB, self.HB
+
+        # embs: [B, K, D]
+        hidden = torch.einsum('bkd,dc->bkc', embs, W) + B  # [B, K, A]
+        hidden = F.relu(hidden)
+        score = torch.einsum('bkc,ca->bka', hidden, H)       # [B, K, 1]
+        attn = F.softmax(score, dim=1)
+        agg = (attn * embs).sum(dim=1)                        # [B, D]
+        return agg, attn
+
     def batch_ratings_full(self, users, items):
         """Full rating với attention aggregation - GIỐNG CODE GỐC"""
-        u_emb = self._per_shard_user_emb(users)  # [B, num_local, D]
-        i_emb = self._per_shard_item_emb(items)  # [B, num_local, D]
+        B = users.size(0)
+        N = items.size(0)
 
-        # Transform each shard
-        u_transformed = torch.einsum('bld,kdl->blk', u_emb, self.trans_W) + self.trans_B
-        i_transformed = torch.einsum('bld,kdl->blk', i_emb, self.trans_W) + self.trans_B
+        if self.agg_type == 'attention':
+            with torch.no_grad():
+                u_es = self._per_shard_user_emb(users)  # [B, K, D]
+                i_es = self._per_shard_item_emb(items)  # [N, K, D]
 
-        # Attention
-        ui = u_transformed.unsqueeze(2) * i_transformed.unsqueeze(1)
-        ui = ui.view(-1, self.num_local, self.emb_dim)
+                # Transform
+                u_e = torch.einsum('bkd,kde->bke', u_es, self.trans_W) + self.trans_B
+                i_e = torch.einsum('bkd,kde->bke', i_es, self.trans_W) + self.trans_B
 
-        e = torch.tanh(torch.einsum('bld,dl->bl', ui, self.WA) + self.BA)
-        e = torch.einsum('bl,ld->bd', e, self.HA).squeeze(-1)
-        alpha = F.softmax(e, dim=1)
+                # Attention aggregate
+                u_agg, _ = self._attention_aggregate(u_e, 'user')
+                i_agg, _ = self._attention_aggregate(i_e, 'item')
 
-        # Aggregate
-        agg_u = (alpha.unsqueeze(-1) * u_transformed).sum(dim=1)
-        agg_i = (alpha.unsqueeze(-1) * i_transformed).sum(dim=1)
-
-        scores = (agg_u * agg_i).sum(dim=1)
-        return scores
+                # Return outer product
+                return u_agg @ i_agg.t()
+        else:
+            # Mean aggregation
+            u_es = self._per_shard_user_emb(users)  # [B, K, D]
+            i_es = self._per_shard_item_emb(items)  # [N, K, D]
+            rs = []
+            for k in range(self.num_local):
+                u_k = u_es[:, k, :]  # [B, D]
+                i_k = i_es[:, k, :]  # [N, D]
+                rs.append(u_k @ i_k.t())  # [B, N]
+            return torch.stack(rs, dim=0).mean(dim=0)
 
     def batch_ratings_local(self, users, items, shard):
         """Local rating cho 1 shard - GIỐNG CODE GỐC"""
-        u_emb = self._user_emb_for_shard(users, shard)
-        i_emb = self._item_emb_for_shard(items, shard)
-
-        scores = (u_emb * i_emb).sum(dim=1)
-        return scores
+        u = self._user_emb_for_shard(users, shard)  # [B, D]
+        i = self._item_emb_for_shard(items, shard)  # [N, D]
+        return u @ i.t()  # [B, N]
 
     def load_pretrained_embeddings(self, user_emb, item_emb, device='cpu'):
         """Load pretrained WMF embeddings"""
@@ -327,8 +347,9 @@ def evaluate_model(model, train_data, test_data, n_users, n_items, device, Ks=[1
                 continue
 
             users_t = torch.LongTensor([user]).to(device)
+            # batch_ratings_full returns [1, N] for 1 user
             rate_batch = model.batch_ratings_full(users_t, item_batch_t)
-            rate_batch = rate_batch.cpu().numpy().copy()
+            rate_batch = rate_batch.cpu().numpy()[0]  # Take first row [N]
 
             # Mask training items
             train_items = train_data.get(user, [])
