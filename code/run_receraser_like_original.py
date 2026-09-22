@@ -245,7 +245,7 @@ class RecEraserBPR(nn.Module):
         scores = (u_emb * i_emb).sum(dim=1)
         return scores
 
-    def load_pretrained_embeddings(self, user_emb, item_emb):
+    def load_pretrained_embeddings(self, user_emb, item_emb, device='cpu'):
         """Load pretrained WMF embeddings"""
         n_users, emb_dim = user_emb.shape
         n_items = item_emb.shape[0]
@@ -253,8 +253,8 @@ class RecEraserBPR(nn.Module):
         user_emb_expanded = np.repeat(user_emb, self.num_local, axis=1)
         item_emb_expanded = np.repeat(item_emb, self.num_local, axis=1)
 
-        self.user_embedding.weight.data = torch.FloatTensor(user_emb_expanded)
-        self.item_embedding.weight.data = torch.FloatTensor(item_emb_expanded)
+        self.user_embedding.weight.data = torch.FloatTensor(user_emb_expanded).to(device)
+        self.item_embedding.weight.data = torch.FloatTensor(item_emb_expanded).to(device)
 
         print(f"    [RecEraser] Loaded pretrained embeddings: users={n_users}, items={n_items}, shards={self.num_local}")
 
@@ -542,7 +542,7 @@ def run_receraser_like_original(dataset='ml-1m', emb_dim=64, n_shards=8,
 
     # Load pretrained embeddings
     print(f"  Loading WMF pretrained embeddings...")
-    model.load_pretrained_embeddings(user_emb_pretrained, item_emb_pretrained)
+    model.load_pretrained_embeddings(user_emb_pretrained, item_emb_pretrained, device)
 
     # Debug: Print embedding stats before training
     u_emb = model.user_embedding.weight.data
