@@ -714,8 +714,11 @@ def run_ours(dataset='ml-1m', emb_dim=64, n_shards=8,
     user_to_shard = method.train(train_data, device)
     train_time = time.time() - t0
 
+    # Keep original train_data for evaluation (before AND after use same mask)
+    train_data_original = {u: items.copy() for u, items in train_data.items()}
+
     # Evaluate BEFORE unlearn on FULL test set (bao gồm cả unlearned users)
-    results_before = method.evaluate(train_data, test_data, user_to_shard, device)
+    results_before = method.evaluate(train_data_original, test_data, user_to_shard, device)
     print(f"\n  Before (FULL) - R@10: {results_before['recall'][0]:.4f}, "
           f"NDCG@10: {results_before['ndcg'][0]:.4f}")
 
@@ -727,7 +730,8 @@ def run_ours(dataset='ml-1m', emb_dim=64, n_shards=8,
     unlearn_time = time.time() - t0
 
     # Evaluate AFTER unlearn on FULL test set (cùng tập với before - fair comparison)
-    results_after = method.evaluate(train_data, test_data, user_to_shard, device)
+    # Use ORIGINAL train_data to mask items (not the modified one)
+    results_after = method.evaluate(train_data_original, test_data, user_to_shard, device)
     print(f"\n  After (FULL) - R@10: {results_after['recall'][0]:.4f}, "
           f"NDCG@10: {results_after['ndcg'][0]:.4f}")
     print(f"  Unlearn time: {unlearn_time:.2f}s")

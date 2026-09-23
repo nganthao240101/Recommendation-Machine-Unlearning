@@ -506,8 +506,11 @@ def run_sisa(model_name='BPRMF', dataset='ml-1m', emb_dim=64, n_shards=8,
     method.train(train_data, device)
     train_time = time.time() - t0
 
+    # Keep original train_data for evaluation (before AND after use same mask)
+    train_data_original = {u: items.copy() for u, items in train_data.items()}
+
     # Evaluate BEFORE unlearn on FULL test set (bao gồm cả unlearned users)
-    results_before = method.evaluate(train_data, test_data, device)
+    results_before = method.evaluate(train_data_original, test_data, device)
     print(f"  Before (FULL) - R@10: {results_before['recall'][0]:.4f}, NDCG@10: {results_before['ndcg'][0]:.4f}")
 
     print(f"\n--- Phase 2: Unlearn (retrain affected shards only) ---")
@@ -516,7 +519,8 @@ def run_sisa(model_name='BPRMF', dataset='ml-1m', emb_dim=64, n_shards=8,
     unlearn_time = time.time() - t0
 
     # Evaluate AFTER unlearn on FULL test set (cùng tập với before - fair comparison)
-    results_after = method.evaluate(train_data, test_data, device)
+    # Use ORIGINAL train_data to mask items (not the modified one)
+    results_after = method.evaluate(train_data_original, test_data, device)
     print(f"  After (FULL) - R@10: {results_after['recall'][0]:.4f}, NDCG@10: {results_after['ndcg'][0]:.4f}")
     print(f"  Unlearn time: {unlearn_time:.2f}s")
 
