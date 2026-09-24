@@ -620,6 +620,15 @@ class OursMethod:
                 n_epochs=retrain_epochs
             )
 
+            # Reset embeddings cua unlearned users trong shard nay de "quen"
+            model.eval()
+            with torch.no_grad():
+                for uid in unlearn_user_ids:
+                    if uid < model.user_embedding.num_embeddings:
+                        model.user_embedding.weight[uid].zero_()
+            model.train()
+            print(f"    [Unlearn] Reset embeddings of unlearned users in shard {shard_id}")
+
         print("    [Unlearn] Done! Using HARD-ROUTING for inference.")
         return affected_shards
 

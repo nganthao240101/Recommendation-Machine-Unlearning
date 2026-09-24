@@ -430,6 +430,16 @@ class SISAMethod:
                        self.n_items, device, batch_size=self.batch_size, lr=self.lr,
                        max_epochs=retrain_epochs, verbose=True)
 
+            # Reset embeddings cua unlearned users trong shard nay de "quen"
+            unlearn_ids = list(unlearn_user_ids)
+            for uid in unlearn_ids:
+                shard_user = uid  # SISA dung round-robin
+                if shard_user < self.models[shard_id].user_embedding.num_embeddings:
+                    # Reset ve zero - model se khong con nho gi ve user nay
+                    with torch.no_grad():
+                        self.models[shard_id].user_embedding.weight[shard_user].zero_()
+            print(f"    [SISA] Reset embeddings of unlearned users in shard {shard_id}")
+
         return self.models, affected_shards
 
     def evaluate(self, train_data, test_data, device, Ks=[10, 20, 50]):
