@@ -612,7 +612,8 @@ class OursMethod:
             }
             self.shard_data[shard_id] = filtered_data
 
-            # Retrain model for this shard
+            # Retrain model for this shard (from scratch - theo bài báo)
+            # Bài báo: "retrain only Mj from scratch using Sj−"
             model = self.shard_models.get_model(shard_id)
             train_shard_model(
                 model, filtered_data, self.n_items, device,
@@ -620,14 +621,8 @@ class OursMethod:
                 n_epochs=retrain_epochs
             )
 
-            # Reset embeddings cua unlearned users trong shard nay de "quen"
-            model.eval()
-            with torch.no_grad():
-                for uid in unlearn_user_ids:
-                    if uid < model.user_embedding.num_embeddings:
-                        model.user_embedding.weight[uid].zero_()
-            model.train()
-            print(f"    [Unlearn] Reset embeddings of unlearned users in shard {shard_id}")
+            # KHÔNG reset embeddings - giống bài báo gốc
+            # Model vẫn giữ embeddings nhưng đánh giá chỉ trên retained users
 
         print("    [Unlearn] Done! Using HARD-ROUTING for inference.")
         return affected_shards
@@ -723,12 +718,12 @@ def run_ours(dataset='ml-1m', emb_dim=64, n_shards=8,
     user_to_shard = method.train(train_data, device)
     train_time = time.time() - t0
 
-    # Keep original train_data for evaluation (before AND after use same mask)
-    train_data_original = {u: items.copy() for u, items in train_data.items()}
+    # Filter out unlearned users from test set for fair comparison (BEFORE and AFTER same set)
+    test_data_retained = {u: items for u, items in test_data.items() if u not in unlearn_users}
 
-    # Evaluate BEFORE unlearn on FULL test set (bao gồm cả unlearned users)
-    results_before = method.evaluate(train_data_original, test_data, user_to_shard, device)
-    print(f"\n  Before (FULL) - R@10: {results_before['recall'][0]:.4f}, "
+    # Evaluate BEFORE unlearn on RETAINED users only (theo bài báo)
+    results_before = method.evaluate(train_data, test_data_retained, user_to_shard, device)
+    print(f"\n  Before (RETAINED) - R@10: {results_before['recall'][0]:.4f}, "
           f"NDCG@10: {results_before['ndcg'][0]:.4f}")
 
     print(f"\n{'='*70}")
@@ -738,10 +733,9 @@ def run_ours(dataset='ml-1m', emb_dim=64, n_shards=8,
     affected_shards = method.unlearn(unlearn_users, train_data, device, retrain_epochs=retrain_epochs)
     unlearn_time = time.time() - t0
 
-    # Evaluate AFTER unlearn on FULL test set (cùng tập với before - fair comparison)
-    # Use ORIGINAL train_data to mask items (not the modified one)
-    results_after = method.evaluate(train_data_original, test_data, user_to_shard, device)
-    print(f"\n  After (FULL) - R@10: {results_after['recall'][0]:.4f}, "
+    # Evaluate AFTER unlearn on RETAINED users only (cùng tập với before - fair comparison)
+    results_after = method.evaluate(train_data, test_data_retained, user_to_shard, device)
+    print(f"\n  After (RETAINED) - R@10: {results_after['recall'][0]:.4f}, "
           f"NDCG@10: {results_after['ndcg'][0]:.4f}")
     print(f"  Unlearn time: {unlearn_time:.2f}s")
 

@@ -430,15 +430,8 @@ class SISAMethod:
                        self.n_items, device, batch_size=self.batch_size, lr=self.lr,
                        max_epochs=retrain_epochs, verbose=True)
 
-            # Reset embeddings cua unlearned users trong shard nay de "quen"
-            unlearn_ids = list(unlearn_user_ids)
-            for uid in unlearn_ids:
-                shard_user = uid  # SISA dung round-robin
-                if shard_user < self.models[shard_id].user_embedding.num_embeddings:
-                    # Reset ve zero - model se khong con nho gi ve user nay
-                    with torch.no_grad():
-                        self.models[shard_id].user_embedding.weight[shard_user].zero_()
-            print(f"    [SISA] Reset embeddings of unlearned users in shard {shard_id}")
+            # KHÔNG reset embeddings - giống bài báo gốc
+            # Model vẫn giữ embeddings nhưng đánh giá chỉ trên retained users
 
         return self.models, affected_shards
 
@@ -516,22 +509,21 @@ def run_sisa(model_name='BPRMF', dataset='ml-1m', emb_dim=64, n_shards=8,
     method.train(train_data, device)
     train_time = time.time() - t0
 
-    # Keep original train_data for evaluation (before AND after use same mask)
-    train_data_original = {u: items.copy() for u, items in train_data.items()}
+    # Filter out unlearned users from test set for fair comparison (BEFORE and AFTER same set)
+    test_data_retained = {u: items for u, items in test_data.items() if u not in unlearn_users}
 
-    # Evaluate BEFORE unlearn on FULL test set (bao gồm cả unlearned users)
-    results_before = method.evaluate(train_data_original, test_data, device)
-    print(f"  Before (FULL) - R@10: {results_before['recall'][0]:.4f}, NDCG@10: {results_before['ndcg'][0]:.4f}")
+    # Evaluate BEFORE unlearn on RETAINED users only (theo bài báo)
+    results_before = method.evaluate(train_data, test_data_retained, device)
+    print(f"  Before (RETAINED) - R@10: {results_before['recall'][0]:.4f}, NDCG@10: {results_before['ndcg'][0]:.4f}")
 
     print(f"\n--- Phase 2: Unlearn (retrain affected shards only) ---")
     t0 = time.time()
     method.unlearn(unlearn_users, train_data, device, retrain_epochs=retrain_epochs)
     unlearn_time = time.time() - t0
 
-    # Evaluate AFTER unlearn on FULL test set (cùng tập với before - fair comparison)
-    # Use ORIGINAL train_data to mask items (not the modified one)
-    results_after = method.evaluate(train_data_original, test_data, device)
-    print(f"  After (FULL) - R@10: {results_after['recall'][0]:.4f}, NDCG@10: {results_after['ndcg'][0]:.4f}")
+    # Evaluate AFTER unlearn on RETAINED users only (cùng tập với before - fair comparison)
+    results_after = method.evaluate(train_data, test_data_retained, device)
+    print(f"  After (RETAINED) - R@10: {results_after['recall'][0]:.4f}, NDCG@10: {results_after['ndcg'][0]:.4f}")
     print(f"  Unlearn time: {unlearn_time:.2f}s")
 
     results = {
