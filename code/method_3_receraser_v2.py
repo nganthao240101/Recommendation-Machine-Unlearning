@@ -295,6 +295,8 @@ class RecEraserModel(nn.Module):
         return emb.view(-1, self.num_local, self.emb_dim)[:, shard, :]
 
     def forward(self, users, pos_items, neg_items, shard):
+        if users.size(0) == 0:
+            return torch.tensor(0.0, device=users.device)
         u_emb = self._get_shard_emb(self.user_embedding(users), shard)
         pos_emb = self._get_shard_emb(self.item_embedding(pos_items), shard)
         neg_emb = self._get_shard_emb(self.item_embedding(neg_items), shard)
