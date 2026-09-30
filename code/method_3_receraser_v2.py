@@ -296,7 +296,7 @@ class RecEraserModel(nn.Module):
 
     def forward(self, users, pos_items, neg_items, shard):
         if users.size(0) == 0:
-            return torch.tensor(0.0, device=users.device)
+            return torch.tensor(0.0, device=users.device, requires_grad=True)
         u_emb = self._get_shard_emb(self.user_embedding(users), shard)
         pos_emb = self._get_shard_emb(self.item_embedding(pos_items), shard)
         neg_emb = self._get_shard_emb(self.item_embedding(neg_items), shard)
@@ -307,7 +307,9 @@ class RecEraserModel(nn.Module):
         diff = torch.clamp(pos_scores - neg_scores, -50.0, 50.0)
         loss = -torch.log(torch.sigmoid(diff) + 1e-10).mean()
 
-        return loss
+        # Add regularization
+        reg_loss = (u_emb.pow(2).sum() + pos_emb.pow(2).sum() + neg_emb.pow(2).sum()) / users.size(0) * 0.01
+        return loss + reg_loss
 
     @torch.no_grad()
     def predict(self, users, items, shard):
@@ -321,7 +323,7 @@ class RecEraserModel(nn.Module):
 # ============================================================================
 
 def train_model(model, shard_data, n_items, device, batch_size=512, lr=0.05, max_epochs=100):
-    optimizer = torch.optim.SGD(model.parameters(), lr=lr)
+    optimizer = torch.optim.Adagrad(model.parameters(), lr=lr, initial_accumulator_value=1e-8)
 
     samples = []
     for user, items in shard_data.items():
