@@ -14,7 +14,6 @@ import argparse
 import numpy as np
 import torch
 import torch.nn as nn
-from torch.optim import Adagrad
 import random
 import json
 
@@ -105,7 +104,7 @@ def train_wmf(dataset='ml-1m', emb_dim=64, max_epochs=100, batch_size=512, lr=0.
 
     # Create model
     model = WMF(n_users, n_items, emb_dim).to(device)
-    optimizer = Adagrad(model.parameters(), lr=lr, initial_accumulator_value=1e-8)
+    optimizer = torch.optim.Adam(model.parameters(), lr=lr)
 
     # Prepare training samples
     print(f"\nPreparing training samples...")

@@ -21,7 +21,6 @@ import argparse
 import numpy as np
 import torch
 import torch.nn as nn
-from torch.optim import Adagrad
 import heapq
 
 PROJ = os.path.dirname(os.path.abspath(__file__))
@@ -321,7 +320,7 @@ class RecEraserModel(nn.Module):
 # ============================================================================
 
 def train_model(model, shard_data, n_items, device, batch_size=512, lr=0.05, max_epochs=100):
-    optimizer = Adagrad(model.parameters(), lr=lr, initial_accumulator_value=1e-8)
+    optimizer = torch.optim.Adam(model.parameters(), lr=lr)
 
     samples = []
     for user, items in shard_data.items():
