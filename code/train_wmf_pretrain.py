@@ -154,11 +154,27 @@ def train_wmf(dataset='ml-1m', emb_dim=64, max_epochs=100, batch_size=512, lr=0.
                     continue
 
                 loss.backward()
+
+                # Check gradients
+                has_nan_grad = False
+                for param in model.parameters():
+                    if param.grad is not None:
+                        if torch.isnan(param.grad).any() or torch.isinf(param.grad).any():
+                            has_nan_grad = True
+                            break
+
+                if has_nan_grad:
+                    print(f"  Warning: NaN/Inf gradient at epoch {epoch+1}, batch {i}, skipping...")
+                    optimizer.zero_grad()
+                    continue
+
                 optimizer.step()
 
                 total_loss += loss.detach().item()
             except Exception as e:
                 print(f"  Error at epoch {epoch+1}, batch {i}: {e}")
+                import traceback
+                traceback.print_exc()
                 continue
 
         if (epoch + 1) % 20 == 0:
