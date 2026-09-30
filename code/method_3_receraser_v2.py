@@ -76,84 +76,35 @@ def load_data(dataset='ml-1m'):
 
 
 # ============================================================================
-# WMF MODEL - Train để lấy pretrained embeddings
+# LOAD PRETRAINED EMBEDDINGS
 # ============================================================================
 
-class WMF(nn.Module):
-    """Weighted Matrix Factorization for pretrained embeddings"""
-    def __init__(self, n_users, n_items, emb_dim):
-        super().__init__()
-        self.user_embedding = nn.Embedding(n_users, emb_dim)
-        self.item_embedding = nn.Embedding(n_items, emb_dim)
-        nn.init.xavier_uniform_(self.user_embedding.weight)
-        nn.init.xavier_uniform_(self.item_embedding.weight)
+def load_or_train_wmf(dataset='ml-1m', emb_dim=64, max_epochs_wmf=100, batch_size=512, lr=0.05):
+    """Load pretrained embeddings từ file, hoặc train nếu chưa có"""
+    pretrained_dir = os.path.join(PROJ, 'pretrained_embeddings')
+    emb_path = os.path.join(pretrained_dir, f'{dataset}_wmfdim{emb_dim}_ep{max_epochs_wmf}.npz')
 
-    def forward(self, users, pos_items, neg_items):
-        u_emb = self.user_embedding(users)
-        pos_emb = self.item_embedding(pos_items)
-        neg_emb = self.item_embedding(neg_items)
-        pos_scores = (u_emb * pos_emb).sum(dim=1)
-        neg_scores = (u_emb * neg_emb).sum(dim=1)
-        diff = torch.clamp(pos_scores - neg_scores, -50.0, 50.0)
-        loss = -torch.log(torch.sigmoid(diff) + 1e-10).mean()
-        reg_loss = (u_emb.pow(2).sum() + pos_emb.pow(2).sum() + neg_emb.pow(2).sum()) / users.size(0) * 0.01
-        return loss + reg_loss
-
-    @torch.no_grad()
-    def predict(self, user_ids, item_ids):
-        u_emb = self.user_embedding(user_ids)
-        i_emb = self.item_embedding(item_ids)
-        return (u_emb * i_emb).sum(dim=1)
-
-
-def train_wmf(train_data, n_users, n_items, device, emb_dim=64, max_epochs=100, batch_size=512, lr=0.05):
-    """Train WMF để lấy pretrained embeddings"""
-    print(f"\n  Training WMF: emb_dim={emb_dim}, epochs={max_epochs}")
-
-    model = WMF(n_users, n_items, emb_dim).to(device)
-    optimizer = Adagrad(model.parameters(), lr=lr, initial_accumulator_value=1e-8)
-
-    samples = []
-    for user, items in train_data.items():
-        for pos_item in items:
-            neg_item = random.randint(0, n_items - 1)
-            while neg_item in items:
-                neg_item = random.randint(0, n_items - 1)
-            samples.append((user, pos_item, neg_item))
-
-    for epoch in range(max_epochs):
-        random.shuffle(samples)
-        total_loss = 0
-        n_batches = max(1, len(samples) // batch_size)
-
-        for i in range(n_batches):
-            start = i * batch_size
-            end = min(start + batch_size, len(samples))
-            batch = samples[start:end]
-
-            if not batch:
-                continue
-
-            users = torch.LongTensor([s[0] for s in batch]).to(device)
-            pos_items = torch.LongTensor([s[1] for s in batch]).to(device)
-            neg_items = torch.LongTensor([s[2] for s in batch]).to(device)
-
-            optimizer.zero_grad()
-            loss = model(users, pos_items, neg_items)
-            loss.backward()
-            optimizer.step()
-            total_loss += loss.item()
-
-        if (epoch + 1) % 20 == 0:
-            print(f"    Epoch {epoch+1}: loss={total_loss/n_batches:.4f}")
-
-    # Get embeddings
-    user_emb = model.user_embedding.weight.data.cpu().numpy()
-    item_emb = model.item_embedding.weight.data.cpu().numpy()
-
-    print(f"  WMF trained. User embeddings shape: {user_emb.shape}")
-
-    return model, user_emb, item_emb
+    if os.path.exists(emb_path):
+        print(f"  Loading pretrained embeddings from: {emb_path}")
+        data = np.load(emb_path)
+        user_emb = data['user_embeddings']
+        item_emb = data['item_embeddings']
+        print(f"  Loaded: user_emb={user_emb.shape}, item_emb={item_emb.shape}")
+        return user_emb, item_emb
+    else:
+        print(f"  Pretrained embeddings not found at {emb_path}")
+        print(f"  Training WMF from scratch...")
+        # Import WMF model
+        from train_wmf_pretrain import train_wmf
+        train_wmf(dataset=dataset, emb_dim=emb_dim, max_epochs=max_epochs_wmf, batch_size=batch_size, lr=lr)
+        # Try loading again
+        if os.path.exists(emb_path):
+            data = np.load(emb_path)
+            user_emb = data['user_embeddings']
+            item_emb = data['item_embeddings']
+            return user_emb, item_emb
+        else:
+            raise FileNotFoundError(f"Failed to create pretrained embeddings at {emb_path}")
 
 
 # ============================================================================
@@ -513,10 +464,8 @@ def run_receraser_v2(dataset='ml-1m', emb_dim=64, n_shards=8, partition_type=1,
     print("STEP 1: TRAIN WMF FOR PRETRAINED EMBEDDINGS")
     print(f"{'='*70}")
 
-    wmf_model, user_emb, item_emb = train_wmf(
-        train_data, n_users, n_items, device,
-        emb_dim=emb_dim, max_epochs=max_epochs_wmf, batch_size=batch_size, lr=lr
-    )
+    # Load pretrained embeddings (hoặc train nếu chưa có)
+    user_emb, item_emb = load_or_train_wmf(dataset, emb_dim, max_epochs_wmf, batch_size, lr)
 
     # =========================================================================
     # STEP 2: Partition users dựa trên embeddings
