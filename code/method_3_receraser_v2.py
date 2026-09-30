@@ -80,8 +80,9 @@ def load_data(dataset='ml-1m'):
 
 def load_or_train_wmf(dataset='ml-1m', emb_dim=64, max_epochs_wmf=100, batch_size=512, lr=0.05):
     """Load pretrained embeddings từ file, hoặc train nếu chưa có"""
-    pretrained_dir = os.path.join(PROJ, 'pretrained_embeddings')
-    emb_path = os.path.join(pretrained_dir, f'{dataset}_wmfdim{emb_dim}_ep{max_epochs_wmf}.npz')
+    # Load from pretrain_wmf.py output path
+    pretrained_dir = os.path.join(PROJ, '..', 'data', dataset)
+    emb_path = os.path.join(pretrained_dir, f'wmf_embeddings.npz')
 
     if os.path.exists(emb_path):
         print(f"  Loading pretrained embeddings from: {emb_path}")
