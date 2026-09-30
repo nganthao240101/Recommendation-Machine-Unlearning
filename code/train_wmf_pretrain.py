@@ -17,6 +17,10 @@ import torch.nn as nn
 import random
 import json
 
+# Disable torch dynamo to avoid issues
+torch._inductor.config.disable = True
+torch._dynamo.config.suppress_errors = True
+
 PROJ = os.path.dirname(os.path.abspath(__file__))
 
 
@@ -104,7 +108,7 @@ def train_wmf(dataset='ml-1m', emb_dim=64, max_epochs=100, batch_size=512, lr=0.
 
     # Create model
     model = WMF(n_users, n_items, emb_dim).to(device)
-    optimizer = torch.optim.Adam(model.parameters(), lr=lr)
+    optimizer = torch.optim.SGD(model.parameters(), lr=lr)
 
     # Prepare training samples
     print(f"\nPreparing training samples...")

@@ -320,7 +320,7 @@ class RecEraserModel(nn.Module):
 # ============================================================================
 
 def train_model(model, shard_data, n_items, device, batch_size=512, lr=0.05, max_epochs=100):
-    optimizer = torch.optim.Adam(model.parameters(), lr=lr)
+    optimizer = torch.optim.SGD(model.parameters(), lr=lr)
 
     samples = []
     for user, items in shard_data.items():

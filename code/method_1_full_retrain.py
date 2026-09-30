@@ -258,7 +258,7 @@ def train_model(model, train_data, test_data, n_users, n_items, device,
                 batch_size=512, lr=0.05, max_epochs=1000,
                 early_stopping=True, patience=10, verbose=True):
     """Train model với early stopping trên test_data."""
-    optimizer = torch.optim.Adam(model.parameters(), lr=lr, initial_accumulator_value=1e-8)
+    optimizer = torch.optim.SGD(model.parameters(), lr=lr, initial_accumulator_value=1e-8)
 
     # Prepare training samples
     samples = []
