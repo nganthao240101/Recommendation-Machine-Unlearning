@@ -277,7 +277,7 @@ class RecEraserModel(nn.Module):
         nn.init.xavier_uniform_(self.user_embedding.weight)
         nn.init.xavier_uniform_(self.item_embedding.weight)
 
-    def load_pretrained_embeddings(self, user_emb, item_emb):
+    def load_pretrained_embeddings(self, user_emb, item_emb, device='cpu'):
         """Load pretrained WMF embeddings"""
         n_users, emb_dim = user_emb.shape
         n_items = item_emb.shape[0]
@@ -286,10 +286,10 @@ class RecEraserModel(nn.Module):
         user_emb_expanded = np.repeat(user_emb, self.num_local, axis=1)
         item_emb_expanded = np.repeat(item_emb, self.num_local, axis=1)
 
-        self.user_embedding.weight.data = torch.FloatTensor(user_emb_expanded)
-        self.item_embedding.weight.data = torch.FloatTensor(item_emb_expanded)
+        self.user_embedding.weight.data = torch.FloatTensor(user_emb_expanded).to(device)
+        self.item_embedding.weight.data = torch.FloatTensor(item_emb_expanded).to(device)
 
-        print(f"    [RecEraser] Loaded pretrained embeddings")
+        print(f"    [RecEraser] Loaded pretrained embeddings to {device}")
 
     def _get_shard_emb(self, emb, shard):
         return emb.view(-1, self.num_local, self.emb_dim)[:, shard, :]
@@ -488,7 +488,7 @@ def run_receraser_v2(dataset='ml-1m', emb_dim=64, n_shards=8, partition_type=1,
     print(f"{'='*70}")
 
     model = RecEraserModel(n_users, n_items, emb_dim, num_local=n_shards).to(device)
-    model.load_pretrained_embeddings(user_emb, item_emb)
+    model.load_pretrained_embeddings(user_emb, item_emb, device)
 
     print(f"  Training RecEraser on all shards...")
     for shard_id in range(n_shards):
