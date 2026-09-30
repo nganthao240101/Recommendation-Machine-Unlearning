@@ -71,7 +71,7 @@ class WMF(nn.Module):
 
     def forward(self, users, pos_items, neg_items):
         if users.size(0) == 0:
-            return torch.tensor(0.0, device=users.device)
+            return torch.tensor(0.0, device=users.device, requires_grad=True)
         u_emb = self.user_embedding(users)
         pos_emb = self.item_embedding(pos_items)
         neg_emb = self.item_embedding(neg_items)
