@@ -337,7 +337,7 @@ def evaluate_sisa(models, train_data, test_data, n_users, n_items, device, user_
 
 def train_model(model, train_data, n_users, n_items, device,
                 batch_size=512, lr=0.05, max_epochs=1000, verbose=True):
-    optimizer = torch.optim.SGD(model.parameters(), lr=lr, initial_accumulator_value=1e-8)
+    optimizer = torch.optim.Adagrad(model.parameters(), lr=lr, initial_accumulator_value=1e-8)
 
     samples = []
     for user, items in train_data.items():

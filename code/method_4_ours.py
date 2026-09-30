@@ -380,7 +380,7 @@ class ShardModels:
 def train_shard_model(model, shard_data, n_items, device,
                      batch_size=512, lr=0.05, n_epochs=100):
     """Train model cho một shard"""
-    optimizer = torch.optim.SGD(model.parameters(), lr=lr, initial_accumulator_value=1e-8)
+    optimizer = torch.optim.Adagrad(model.parameters(), lr=lr, initial_accumulator_value=1e-8)
 
     samples = []
     for user, items in shard_data.items():
