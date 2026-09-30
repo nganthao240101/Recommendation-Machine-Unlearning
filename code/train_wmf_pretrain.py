@@ -90,7 +90,9 @@ class WMF(nn.Module):
             sigmoid_scores = torch.clamp(sigmoid_scores, min=1e-10, max=1-1e-10)
             loss = -torch.log(sigmoid_scores).mean()
             reg_loss = (u_emb.pow(2).sum() + pos_emb.pow(2).sum() + neg_emb.pow(2).sum()) / users.size(0) * 0.01
-            return loss + reg_loss
+            total_loss = loss + reg_loss
+            print(f"    DEBUG: loss={total_loss.item()}, reg_loss={reg_loss.item()}")
+            return total_loss
         except Exception as e:
             import traceback
             print(f"    Forward error: {e}")
@@ -161,7 +163,7 @@ def train_wmf(dataset='ml-1m', emb_dim=64, max_epochs=100, batch_size=512, lr=0.
             loss = model(users, pos_items, neg_items)
             loss.backward()
             optimizer.step()
-            total_loss += loss.item()
+            total_loss += loss.detach().item()
 
         if (epoch + 1) % 20 == 0:
             print(f"  Epoch {epoch+1}/{max_epochs}: loss={total_loss/n_batches:.4f}")
