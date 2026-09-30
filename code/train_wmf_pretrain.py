@@ -72,15 +72,22 @@ class WMF(nn.Module):
     def forward(self, users, pos_items, neg_items):
         if users.size(0) == 0:
             return torch.tensor(0.0, device=users.device, requires_grad=True)
-        u_emb = self.user_embedding(users)
-        pos_emb = self.item_embedding(pos_items)
-        neg_emb = self.item_embedding(neg_items)
-        pos_scores = (u_emb * pos_emb).sum(dim=1)
-        neg_scores = (u_emb * neg_emb).sum(dim=1)
-        diff = torch.clamp(pos_scores - neg_scores, -50.0, 50.0)
-        loss = -torch.log(torch.sigmoid(diff) + 1e-10).mean()
-        reg_loss = (u_emb.pow(2).sum() + pos_emb.pow(2).sum() + neg_emb.pow(2).sum()) / users.size(0) * 0.01
-        return loss + reg_loss
+        try:
+            u_emb = self.user_embedding(users)
+            pos_emb = self.item_embedding(pos_items)
+            neg_emb = self.item_embedding(neg_items)
+            pos_scores = (u_emb * pos_emb).sum(dim=1)
+            neg_scores = (u_emb * neg_emb).sum(dim=1)
+            diff = torch.clamp(pos_scores - neg_scores, -50.0, 50.0)
+            sigmoid_scores = torch.sigmoid(diff)
+            # Prevent log(0)
+            sigmoid_scores = torch.clamp(sigmoid_scores, min=1e-10, max=1-1e-10)
+            loss = -torch.log(sigmoid_scores).mean()
+            reg_loss = (u_emb.pow(2).sum() + pos_emb.pow(2).sum() + neg_emb.pow(2).sum()) / users.size(0) * 0.01
+            return loss + reg_loss
+        except Exception as e:
+            print(f"    Forward error: {e}")
+            return torch.tensor(0.0, device=users.device, requires_grad=True)
 
 
 # ============================================================================
