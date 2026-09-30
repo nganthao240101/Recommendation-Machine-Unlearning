@@ -131,12 +131,16 @@ def train_wmf(dataset='ml-1m', emb_dim=64, max_epochs=100, batch_size=512, lr=0.
             end = min(start + batch_size, len(samples))
             batch = samples[start:end]
 
-            if not batch:
+            if not batch or len(batch) == 0:
                 continue
 
-            users = torch.LongTensor([s[0] for s in batch]).to(device)
-            pos_items = torch.LongTensor([s[1] for s in batch]).to(device)
-            neg_items = torch.LongTensor([s[2] for s in batch]).to(device)
+            try:
+                users = torch.LongTensor([s[0] for s in batch]).to(device)
+                pos_items = torch.LongTensor([s[1] for s in batch]).to(device)
+                neg_items = torch.LongTensor([s[2] for s in batch]).to(device)
+            except Exception as e:
+                print(f"    Error creating tensors: {e}, batch size: {len(batch)}")
+                continue
 
             optimizer.zero_grad()
             loss = model(users, pos_items, neg_items)
