@@ -17,9 +17,6 @@ import torch.nn as nn
 import random
 import json
 
-# Disable torch dynamo to avoid issues
-torch._inductor.config.disable = True
-torch._dynamo.config.suppress_errors = True
 
 PROJ = os.path.dirname(os.path.abspath(__file__))
 
