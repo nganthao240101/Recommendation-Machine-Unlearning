@@ -30,7 +30,9 @@ sys.path.insert(0, PROJ)
 
 def save_models(models, path):
     """Save list of models to file"""
-    os.makedirs(os.path.dirname(path) if os.path.dirname(path) else '.', exist_ok=True)
+    dir_path = os.path.dirname(path)
+    if dir_path:
+        os.makedirs(dir_path, exist_ok=True)
     torch.save([m.state_dict() for m in models], path)
     print(f"    [SISA] Saved models to {path}")
 
@@ -524,7 +526,7 @@ def run_sisa(model_name='BPRMF', dataset='ml-1m', emb_dim=64, n_shards=8,
                        batch_size=batch_size, lr=lr, max_epochs=max_epochs)
 
     # Checkpoint path
-    checkpoint_dir = os.path.join(PROJ, '..', 'checkpoints')
+    checkpoint_dir = 'checkpoints'
     checkpoint_path = os.path.join(checkpoint_dir, f'sisa_{dataset}_d{emb_dim}_k{n_shards}.pt')
 
     print(f"\n--- Phase 1: Train BEFORE unlearning ---")
