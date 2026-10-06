@@ -322,7 +322,7 @@ class RecEraserModel(nn.Module):
 # TRAINING
 # ============================================================================
 
-def train_model(model, shard_data, n_items, device, batch_size=512, lr=0.05, max_epochs=100):
+def train_model(model, partitioner, shard_data, n_items, device, batch_size=512, lr=0.05, max_epochs=100):
     optimizer = torch.optim.Adagrad(model.parameters(), lr=lr, initial_accumulator_value=1e-8)
 
     samples = []
@@ -349,9 +349,18 @@ def train_model(model, shard_data, n_items, device, batch_size=512, lr=0.05, max
             if not batch:
                 continue
 
-            # Train for each shard
-            for shard_id in range(model.num_local):
-                shard_samples = [(s[0], s[1], s[2]) for s in batch]
+            # Get unique shards in this batch
+            shard_ids = set()
+            for s in batch:
+                user_id = s[0]
+                if user_id < len(partitioner.user_to_shard):
+                    shard_ids.add(partitioner.user_to_shard[user_id])
+
+            # Train only the shards that have users in this batch
+            for shard_id in shard_ids:
+                shard_samples = [(s[0], s[1], s[2]) for s in batch
+                                if s[0] < len(partitioner.user_to_shard) and
+                                partitioner.user_to_shard[s[0]] == shard_id]
                 if not shard_samples:
                     continue
 
@@ -496,7 +505,7 @@ def run_receraser_v2(dataset='ml-1m', emb_dim=64, n_shards=8, partition_type=1,
     for shard_id in range(n_shards):
         if partitioner.shard_data[shard_id]:
             print(f"  Training shard {shard_id}...")
-            train_model(model, partitioner.shard_data[shard_id], n_items, device,
+            train_model(model, partitioner, partitioner.shard_data[shard_id], n_items, device,
                        batch_size=batch_size, lr=lr, max_epochs=max_epochs_local)
 
     # =========================================================================
@@ -523,7 +532,7 @@ def run_receraser_v2(dataset='ml-1m', emb_dim=64, n_shards=8, partition_type=1,
     for shard_id in affected_shards:
         filtered_data = partitioner.filter_shard_data(shard_id, unlearn_users)
         print(f"  Retraining shard {shard_id}...")
-        train_model(model, filtered_data, n_items, device,
+        train_model(model, partitioner, filtered_data, n_items, device,
                    batch_size=batch_size, lr=lr, max_epochs=max_epochs_local)
 
     unlearn_time = time.time() - t0
