@@ -462,7 +462,7 @@ def evaluate_model(model, partitioner, train_data, test_data, n_users, n_items, 
 
 def run_receraser_v2(dataset='ml-1m', emb_dim=64, n_shards=8, partition_type=1,
                     max_epochs_wmf=100, max_epochs_local=50, unlearn_ratio=0.1,
-                    batch_size=512, lr=0.05, output_suffix=''):
+                    batch_size=512, lr=0.01, lr_finetune=0.001, output_suffix=''):
     """
     RecEraser với WMF pretrained embeddings
 
