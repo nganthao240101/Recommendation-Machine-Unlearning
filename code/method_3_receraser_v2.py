@@ -561,8 +561,9 @@ def run_receraser_v2(dataset='ml-1m', emb_dim=64, n_shards=8, partition_type=1,
     print(f"{'='*70}")
 
     # BEFORE: Evaluate on FULL test set (all users)
-    recall_before, ndcg_before = evaluate_model(model, partitioner, train_data, test_data, n_users, n_items, device)
-    print(f"  Before (FULL) - R@10: {recall_before:.4f}, NDCG@10: {ndcg_before:.4f}")
+    # Evaluate BEFORE unlearn on RETAINED test set (for fair comparison)
+    recall_before, ndcg_before = evaluate_model(model, partitioner, train_data, test_data_retained, n_users, n_items, device)
+    print(f"  Before (RETAINED) - R@10: {recall_before:.4f}, NDCG@10: {ndcg_before:.4f}")
 
     # =========================================================================
     # STEP 5: Unlearn (retrain affected shards)
