@@ -338,11 +338,13 @@ class RecEraserModel(nn.Module):
         pos_scores = (u_emb * pos_emb).sum(dim=1)
         neg_scores = (u_emb * neg_emb).sum(dim=1)
 
+        # Use softplus like original (more stable)
         diff = torch.clamp(pos_scores - neg_scores, -50.0, 50.0)
-        loss = -torch.log(torch.sigmoid(diff) + 1e-10).mean()
+        loss = torch.mean(torch.nn.functional.softplus(-diff))
 
-        # Add regularization
-        reg_loss = (u_emb.pow(2).sum() + pos_emb.pow(2).sum() + neg_emb.pow(2).sum()) / users.size(0) * 0.01
+        # Regularization (like original)
+        reg = (u_emb.pow(2).sum() + pos_emb.pow(2).sum() + neg_emb.pow(2).sum()) / users.size(0)
+        reg_loss = 0.01 * reg  # L2 regularization
         return loss + reg_loss
 
     @torch.no_grad()
