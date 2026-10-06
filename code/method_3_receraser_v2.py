@@ -79,11 +79,30 @@ def load_data(dataset='ml-1m'):
 # ============================================================================
 
 def load_or_train_wmf(dataset='ml-1m', emb_dim=64, max_epochs_wmf=100, batch_size=512, lr=0.05):
-    """Load pretrained embeddings từ file, hoặc train nếu chưa có"""
-    # Load from pretrain_wmf.py output path
-    pretrained_dir = os.path.join(PROJ, '..', 'data', dataset)
-    emb_path = os.path.join(pretrained_dir, f'wmf_embeddings.npz')
+    """Load pretrained embeddings từ file của tác giả, hoặc train nếu chưa có"""
+    import pickle
 
+    # Try loading from author's pretrained embeddings first
+    pretrained_dir = os.path.join(PROJ, '..', 'data', dataset)
+    user_pretrain_path = os.path.join(pretrained_dir, 'user_pretrain.pk')
+    item_pretrain_path = os.path.join(pretrained_dir, 'item_pretrain.pk')
+
+    if os.path.exists(user_pretrain_path) and os.path.exists(item_pretrain_path):
+        print(f"  Loading pretrained embeddings from author's files...")
+        with open(user_pretrain_path, 'rb') as f:
+            user_emb = pickle.load(f)
+        with open(item_pretrain_path, 'rb') as f:
+            item_emb = pickle.load(f)
+
+        # Convert to numpy arrays
+        user_emb = np.array(user_emb)
+        item_emb = np.array(item_emb)
+
+        print(f"  Loaded: user_emb={user_emb.shape}, item_emb={item_emb.shape}")
+        return user_emb, item_emb
+
+    # Fallback: try loading from wmf_embeddings.npz
+    emb_path = os.path.join(pretrained_dir, f'wmf_embeddings.npz')
     if os.path.exists(emb_path):
         print(f"  Loading pretrained embeddings from: {emb_path}")
         data = np.load(emb_path)
