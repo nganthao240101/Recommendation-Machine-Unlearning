@@ -478,6 +478,49 @@ def train_model(model, partitioner, shard_data, n_items, device, batch_size=512,
             print(f"    Epoch {epoch+1}: loss={total_loss/n_batches:.4f}")
 
 
+def train_aggregator(model, train_data, n_users, n_items, device, batch_size=512, lr=0.05, max_epochs=50):
+    """Train attention aggregator (Phase 2)"""
+    optimizer = torch.optim.Adagrad(model.parameters(), lr=lr, initial_accumulator_value=1e-8)
+
+    # Create samples from full training data
+    samples = []
+    for user, items in train_data.items():
+        for pos_item in items:
+            neg_item = random.randint(0, n_items - 1)
+            while neg_item in items:
+                neg_item = random.randint(0, n_items - 1)
+            samples.append((user, pos_item, neg_item))
+
+    if not samples:
+        return
+
+    for epoch in range(max_epochs):
+        random.shuffle(samples)
+        total_loss = 0
+        n_batches = max(1, len(samples) // batch_size)
+
+        for i in range(n_batches):
+            start = i * batch_size
+            end = min(start + batch_size, len(samples))
+            batch = samples[start:end]
+
+            if not batch:
+                continue
+
+            users = torch.LongTensor([s[0] for s in batch]).to(device)
+            pos_items = torch.LongTensor([s[1] for s in batch]).to(device)
+            neg_items = torch.LongTensor([s[2] for s in batch]).to(device)
+
+            optimizer.zero_grad()
+            loss = model(users, pos_items, neg_items, shard=0, use_aggregation=True)
+            loss.backward()
+            optimizer.step()
+            total_loss += loss.item()
+
+        if (epoch + 1) % 10 == 0:
+            print(f"    Agg Epoch {epoch+1}: loss={total_loss/n_batches:.4f}")
+
+
 # ============================================================================
 # EVALUATION
 # ============================================================================
@@ -623,6 +666,13 @@ def run_receraser_v2(dataset='ml-1m', emb_dim=64, n_shards=8, partition_type=1,
                 print(f"  Training shard {shard_id}...")
                 train_model(model, partitioner, partitioner.shard_data[shard_id], n_items, device,
                            batch_size=batch_size, lr=lr_finetune, max_epochs=max_epochs_local)
+
+        # Phase 2: Train aggregator (like original code)
+        if use_attention:
+            print(f"  Training aggregator (attention)...")
+            train_aggregator(model, train_data, n_users, n_items, device,
+                           batch_size=batch_size, lr=lr_finetune, max_epochs=max_epochs_local)
+
         # Save model after training
         save_model(model, checkpoint_path)
 
