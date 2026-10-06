@@ -108,7 +108,7 @@ def load_or_train_wmf(dataset='ml-1m', emb_dim=64, max_epochs_wmf=100, batch_siz
 
 
 def load_or_train_receraser(dataset='ml-1m', emb_dim=64, n_shards=8, partition_type=3,
-                           max_epochs_wmf=100, max_epochs_local=200, batch_size=512, lr=0.01,
+                           max_epochs_wmf=100, max_epochs_local=50, batch_size=512, lr=0.01,
                            lr_finetune=0.001):
     """Load RecEraser model từ file, hoặc train nếu chưa có"""
     partition_names = {1: 'InP', 2: 'UBP', 3: 'Random'}
@@ -648,7 +648,7 @@ if __name__ == '__main__':
     parser.add_argument('--partition_type', type=int, default=1, choices=[1, 2, 3],
                        help='1=InP, 2=UBP, 3=Random')
     parser.add_argument('--max_epochs_wmf', type=int, default=100)
-    parser.add_argument('--max_epochs_local', type=int, default=200)
+    parser.add_argument('--max_epochs_local', type=int, default=50)
     parser.add_argument('--unlearn_ratio', type=float, default=0.1)
     parser.add_argument('--batch_size', type=int, default=512)
     parser.add_argument('--lr', type=float, default=0.01)
