@@ -18,6 +18,7 @@ import time
 import json
 import random
 import argparse
+import pickle
 import numpy as np
 import torch
 import torch.nn as nn
@@ -90,13 +91,13 @@ def load_or_train_wmf(dataset='ml-1m', emb_dim=64, max_epochs_wmf=100, batch_siz
     if os.path.exists(user_pretrain_path) and os.path.exists(item_pretrain_path):
         print(f"  Loading pretrained embeddings from author's files...")
         with open(user_pretrain_path, 'rb') as f:
-            user_emb = pickle.load(f)
+            uidW = pickle.load(f)
         with open(item_pretrain_path, 'rb') as f:
-            item_emb = pickle.load(f)
+            iidW = pickle.load(f)
 
-        # Convert to numpy arrays
-        user_emb = np.array(user_emb)
-        item_emb = np.array(item_emb)
+        # Convert dict to numpy arrays (uidW/iidW are already numpy arrays)
+        user_emb = np.array(uidW)
+        item_emb = np.array(iidW)
 
         print(f"  Loaded: user_emb={user_emb.shape}, item_emb={item_emb.shape}")
         return user_emb, item_emb
