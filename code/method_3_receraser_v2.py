@@ -304,15 +304,26 @@ class DataPartitioner:
 # ============================================================================
 
 class RecEraserModel(nn.Module):
-    def __init__(self, n_users, n_items, emb_dim, num_local=8):
+    def __init__(self, n_users, n_items, emb_dim, num_local=8, use_attention=True):
         super().__init__()
         self.n_users = n_users
         self.n_items = n_items
         self.emb_dim = emb_dim
         self.num_local = num_local
+        self.use_attention = use_attention
+        self.attention_size = 32
 
         self.user_embedding = nn.Embedding(n_users, num_local * emb_dim)
         self.item_embedding = nn.Embedding(n_items, num_local * emb_dim)
+
+        # Attention parameters (like original code)
+        self.WA = nn.Parameter(torch.empty(emb_dim, self.attention_size))
+        self.BA = nn.Parameter(torch.zeros(self.attention_size))
+        self.HA = nn.Parameter(torch.ones(self.attention_size, 1) * 0.1)
+
+        self.WB = nn.Parameter(torch.empty(emb_dim, self.attention_size))
+        self.BB = nn.Parameter(torch.zeros(self.attention_size))
+        self.HB = nn.Parameter(torch.ones(self.attention_size, 1) * 0.1)
 
         # Transformation parameters
         self.trans_W = nn.Parameter(torch.empty(num_local, emb_dim, emb_dim))
@@ -340,12 +351,41 @@ class RecEraserModel(nn.Module):
     def _get_shard_emb(self, emb, shard):
         return emb.view(-1, self.num_local, self.emb_dim)[:, shard, :]
 
-    def forward(self, users, pos_items, neg_items, shard):
+    def _attention_aggregate(self, embs):
+        """Attention aggregation - combine all shard embeddings"""
+        # embs: [B, num_local, D]
+        # Score: H^T . ReLU(emb @ W + B)
+        hidden = torch.einsum('bkd,dc->bkc', embs, self.WA) + self.BA  # [B, K, A]
+        hidden = torch.relu(hidden)
+        score = torch.einsum('bkc,ca->bka', hidden, self.HA)  # [B, K, 1]
+        attn = torch.softmax(score, dim=1)
+        agg = (attn * embs).sum(dim=1)  # [B, D]
+        return agg, attn
+
+    def forward(self, users, pos_items, neg_items, shard, use_aggregation=False):
         if users.size(0) == 0:
             return torch.tensor(0.0, device=users.device, requires_grad=True)
-        u_emb = self._get_shard_emb(self.user_embedding(users), shard)
-        pos_emb = self._get_shard_emb(self.item_embedding(pos_items), shard)
-        neg_emb = self._get_shard_emb(self.item_embedding(neg_items), shard)
+
+        if use_aggregation:
+            # Use attention aggregation
+            u_es = self.user_embedding(users).view(-1, self.num_local, self.emb_dim)
+            pos_es = self.item_embedding(pos_items).view(-1, self.num_local, self.emb_dim)
+            neg_es = self.item_embedding(neg_items).view(-1, self.num_local, self.emb_dim)
+
+            # Apply transformation
+            u_es = torch.einsum('bkd,kde->bke', u_es, self.trans_W) + self.trans_B
+            pos_es = torch.einsum('bkd,kde->bke', pos_es, self.trans_W) + self.trans_B
+            neg_es = torch.einsum('bkd,kde->bke', neg_es, self.trans_W) + self.trans_B
+
+            # Aggregate
+            u_emb, _ = self._attention_aggregate(u_es)
+            pos_emb, _ = self._attention_aggregate(pos_es)
+            neg_emb, _ = self._attention_aggregate(neg_es)
+        else:
+            # Use hard-routing (single shard)
+            u_emb = self._get_shard_emb(self.user_embedding(users), shard)
+            pos_emb = self._get_shard_emb(self.item_embedding(pos_items), shard)
+            neg_emb = self._get_shard_emb(self.item_embedding(neg_items), shard)
 
         pos_scores = (u_emb * pos_emb).sum(dim=1)
         neg_scores = (u_emb * neg_emb).sum(dim=1)
@@ -360,9 +400,21 @@ class RecEraserModel(nn.Module):
         return loss + reg_loss
 
     @torch.no_grad()
-    def predict(self, users, items, shard):
-        u_emb = self._get_shard_emb(self.user_embedding(users), shard)
-        i_emb = self._get_shard_emb(self.item_embedding(items), shard)
+    def predict(self, users, items, shard, use_aggregation=False):
+        if use_aggregation:
+            # Use attention aggregation
+            u_es = self.user_embedding(users).view(-1, self.num_local, self.emb_dim)
+            i_es = self.item_embedding(items).view(-1, self.num_local, self.emb_dim)
+
+            u_es = torch.einsum('bkd,kde->bke', u_es, self.trans_W) + self.trans_B
+            i_es = torch.einsum('bkd,kde->bke', i_es, self.trans_W) + self.trans_B
+
+            u_emb, _ = self._attention_aggregate(u_es)
+            i_emb, _ = self._attention_aggregate(i_es)
+        else:
+            # Use hard-routing (single shard)
+            u_emb = self._get_shard_emb(self.user_embedding(users), shard)
+            i_emb = self._get_shard_emb(self.item_embedding(items), shard)
         return (u_emb * i_emb).sum(dim=1)
 
 
@@ -434,6 +486,9 @@ def evaluate_model(model, partitioner, train_data, test_data, n_users, n_items, 
     model.eval()
     rec_log, ndcg_log = [], []
 
+    # Check if model uses attention aggregation
+    use_agg = hasattr(model, 'use_attention') and model.use_attention
+
     with torch.no_grad():
         for user in range(n_users):
             if user not in test_data or not test_data[user]:
@@ -445,7 +500,7 @@ def evaluate_model(model, partitioner, train_data, test_data, n_users, n_items, 
             scores = []
             for i in range(0, n_items, 256):
                 batch_items = torch.LongTensor(list(range(i, min(i+256, n_items)))).to(device)
-                score = model.predict(user_t, batch_items, shard_id).cpu().numpy()
+                score = model.predict(user_t, batch_items, shard_id, use_aggregation=use_agg).cpu().numpy()
                 scores.extend(score.tolist())
 
             scores = np.array(scores)
@@ -476,7 +531,8 @@ def evaluate_model(model, partitioner, train_data, test_data, n_users, n_items, 
 
 def run_receraser_v2(dataset='ml-1m', emb_dim=64, n_shards=8, partition_type=1,
                     max_epochs_wmf=100, max_epochs_local=50, unlearn_ratio=0.1,
-                    batch_size=512, lr=0.01, lr_finetune=0.001, output_suffix=''):
+                    batch_size=512, lr=0.01, lr_finetune=0.001,
+                    use_attention=True, output_suffix=''):
     """
     RecEraser với WMF pretrained embeddings
 
@@ -487,6 +543,7 @@ def run_receraser_v2(dataset='ml-1m', emb_dim=64, n_shards=8, partition_type=1,
     """
     partition_names = {1: 'InP', 2: 'UBP', 3: 'Random'}
     partition_name = partition_names.get(partition_type, 'Unknown')
+    attention_str = 'attn' if use_attention else 'mean'
 
     print(f"\n{'='*70}")
     print(f"RECERASER V2 - {partition_name} PARTITION")
@@ -548,10 +605,11 @@ def run_receraser_v2(dataset='ml-1m', emb_dim=64, n_shards=8, partition_type=1,
 
     partition_names = {1: 'InP', 2: 'UBP', 3: 'Random'}
     partition_name = partition_names.get(partition_type, 'Random')
+    attention_str = 'attn' if use_attention else 'mean'
     checkpoint_dir = os.path.join(PROJ, 'checkpoints')
-    checkpoint_path = os.path.join(checkpoint_dir, f'receraser_{dataset}_d{emb_dim}_k{n_shards}_{partition_name}.pt')
+    checkpoint_path = os.path.join(checkpoint_dir, f'receraser_{dataset}_d{emb_dim}_k{n_shards}_{partition_name}_{attention_str}.pt')
 
-    model = RecEraserModel(n_users, n_items, emb_dim, num_local=n_shards).to(device)
+    model = RecEraserModel(n_users, n_items, emb_dim, num_local=n_shards, use_attention=use_attention).to(device)
 
     # Check if model already exists
     if os.path.exists(checkpoint_path):
@@ -667,6 +725,7 @@ if __name__ == '__main__':
     parser.add_argument('--batch_size', type=int, default=512)
     parser.add_argument('--lr', type=float, default=0.01)
     parser.add_argument('--lr_finetune', type=float, default=0.001)
+    parser.add_argument('--use_attention', type=int, default=1, help='1: use attention aggregation, 0: use mean aggregation')
     parser.add_argument('--output_suffix', type=str, default='')
 
     args = parser.parse_args()
@@ -682,5 +741,6 @@ if __name__ == '__main__':
         batch_size=args.batch_size,
         lr=args.lr,
         lr_finetune=args.lr_finetune,
+        use_attention=bool(args.use_attention),
         output_suffix=args.output_suffix
     )
