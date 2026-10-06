@@ -107,6 +107,39 @@ def load_or_train_wmf(dataset='ml-1m', emb_dim=64, max_epochs_wmf=100, batch_siz
             raise FileNotFoundError(f"Failed to create pretrained embeddings at {emb_path}")
 
 
+def load_or_train_receraser(dataset='ml-1m', emb_dim=64, n_shards=8, partition_type=3,
+                           max_epochs_wmf=100, max_epochs_local=50, batch_size=512, lr=0.05):
+    """Load RecEraser model từ file, hoặc train nếu chưa có"""
+    partition_names = {1: 'InP', 2: 'UBP', 3: 'Random'}
+    partition_name = partition_names.get(partition_type, 'Random')
+
+    checkpoint_dir = os.path.join(PROJ, 'checkpoints')
+    os.makedirs(checkpoint_dir, exist_ok=True)
+    checkpoint_path = os.path.join(checkpoint_dir, f'receraser_{dataset}_d{emb_dim}_k{n_shards}_{partition_name}.pt')
+
+    if os.path.exists(checkpoint_path):
+        print(f"  Loading RecEraser model from: {checkpoint_path}")
+        # Load embeddings first
+        user_emb, item_emb = load_or_train_wmf(dataset, emb_dim, max_epochs_wmf, batch_size, lr)
+        return user_emb, item_emb, checkpoint_path
+    else:
+        print(f"  RecEraser model not found, will train from scratch")
+        return None, None, checkpoint_path
+
+
+def save_model(model, path):
+    """Save model to file"""
+    os.makedirs(os.path.dirname(path), exist_ok=True)
+    torch.save(model.state_dict(), path)
+    print(f"  Saved model to: {path}")
+
+
+def load_model(model, path, device):
+    """Load model from file"""
+    model.load_state_dict(torch.load(path, map_location=device))
+    print(f"  Loaded model from: {path}")
+
+
 # ============================================================================
 # DATA PARTITIONER - 3 CÁCH CHIA SHARD
 # ============================================================================
@@ -498,15 +531,27 @@ def run_receraser_v2(dataset='ml-1m', emb_dim=64, n_shards=8, partition_type=1,
     print("STEP 3: TRAIN RECERASER")
     print(f"{'='*70}")
 
-    model = RecEraserModel(n_users, n_items, emb_dim, num_local=n_shards).to(device)
-    model.load_pretrained_embeddings(user_emb, item_emb, device)
+    partition_names = {1: 'InP', 2: 'UBP', 3: 'Random'}
+    partition_name = partition_names.get(partition_type, 'Random')
+    checkpoint_dir = os.path.join(PROJ, 'checkpoints')
+    checkpoint_path = os.path.join(checkpoint_dir, f'receraser_{dataset}_d{emb_dim}_k{n_shards}_{partition_name}.pt')
 
-    print(f"  Training RecEraser on all shards...")
-    for shard_id in range(n_shards):
-        if partitioner.shard_data[shard_id]:
-            print(f"  Training shard {shard_id}...")
-            train_model(model, partitioner, partitioner.shard_data[shard_id], n_items, device,
-                       batch_size=batch_size, lr=lr, max_epochs=max_epochs_local)
+    model = RecEraserModel(n_users, n_items, emb_dim, num_local=n_shards).to(device)
+
+    # Check if model already exists
+    if os.path.exists(checkpoint_path):
+        print(f"  Loading model from checkpoint: {checkpoint_path}")
+        load_model(model, checkpoint_path, device)
+    else:
+        print(f"  Training RecEraser on all shards (first time)...")
+        model.load_pretrained_embeddings(user_emb, item_emb, device)
+        for shard_id in range(n_shards):
+            if partitioner.shard_data[shard_id]:
+                print(f"  Training shard {shard_id}...")
+                train_model(model, partitioner, partitioner.shard_data[shard_id], n_items, device,
+                           batch_size=batch_size, lr=lr, max_epochs=max_epochs_local)
+        # Save model after training
+        save_model(model, checkpoint_path)
 
     # =========================================================================
     # STEP 4: Evaluate BEFORE unlearn
@@ -528,6 +573,7 @@ def run_receraser_v2(dataset='ml-1m', emb_dim=64, n_shards=8, partition_type=1,
     affected_shards = partitioner.get_affected_shards(unlearn_users)
     print(f"  Affected shards: {affected_shards}")
 
+    # Measure only retrain time
     t0 = time.time()
     for shard_id in affected_shards:
         filtered_data = partitioner.filter_shard_data(shard_id, unlearn_users)
@@ -536,6 +582,10 @@ def run_receraser_v2(dataset='ml-1m', emb_dim=64, n_shards=8, partition_type=1,
                    batch_size=batch_size, lr=lr, max_epochs=max_epochs_local)
 
     unlearn_time = time.time() - t0
+
+    # Save model after unlearn for next time
+    save_model(model, checkpoint_path)
+    print(f"  Saved model after unlearn")
 
     # =========================================================================
     # STEP 6: Evaluate AFTER unlearn
