@@ -95,9 +95,27 @@ def load_or_train_wmf(dataset='ml-1m', emb_dim=64, max_epochs_wmf=100, batch_siz
         with open(item_pretrain_path, 'rb') as f:
             iidW = pickle.load(f)
 
-        # Convert dict to numpy arrays (uidW/iidW are already numpy arrays)
-        user_emb = np.array(uidW)
-        item_emb = np.array(iidW)
+        # Handle both dict and array formats
+        if isinstance(uidW, dict):
+            # Dict format: {user_id: embedding}
+            n_users = max(uidW.keys()) + 1 if uidW else 0
+            n_items = max(iidW.keys()) + 1 if iidW else 0
+
+            # Get embedding dimension from first value
+            first_emb = next(iter(uidW.values()))
+            emb_dim = len(first_emb) if hasattr(first_emb, '__len__') else first_emb.shape[0]
+
+            user_emb = np.zeros((n_users, emb_dim), dtype=np.float32)
+            for uid, emb in uidW.items():
+                user_emb[uid] = np.array(emb).flatten()
+
+            item_emb = np.zeros((n_items, emb_dim), dtype=np.float32)
+            for iid, emb in iidW.items():
+                item_emb[iid] = np.array(emb).flatten()
+        else:
+            # Already numpy array
+            user_emb = np.array(uidW)
+            item_emb = np.array(iidW)
 
         print(f"  Loaded: user_emb={user_emb.shape}, item_emb={item_emb.shape}")
         return user_emb, item_emb
