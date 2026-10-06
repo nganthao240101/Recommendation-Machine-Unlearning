@@ -760,9 +760,9 @@ def run_ours(dataset='ml-1m', emb_dim=64, n_shards=8,
     # Filter out unlearned users from test set for fair comparison (BEFORE and AFTER same set)
     test_data_retained = {u: items for u, items in test_data.items() if u not in unlearn_users}
 
-    # Evaluate BEFORE unlearn on RETAINED users only (theo bài báo)
-    results_before = method.evaluate(train_data, test_data_retained, user_to_shard, device)
-    print(f"\n  Before (RETAINED) - R@10: {results_before['recall'][0]:.4f}, "
+    # Evaluate BEFORE unlearn on FULL test set
+    results_before = method.evaluate(train_data, test_data, user_to_shard, device)
+    print(f"\n  Before (FULL) - R@10: {results_before['recall'][0]:.4f}, "
           f"NDCG@10: {results_before['ndcg'][0]:.4f}")
 
     print(f"\n{'='*70}")
