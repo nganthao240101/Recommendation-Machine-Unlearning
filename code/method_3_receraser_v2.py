@@ -108,7 +108,8 @@ def load_or_train_wmf(dataset='ml-1m', emb_dim=64, max_epochs_wmf=100, batch_siz
 
 
 def load_or_train_receraser(dataset='ml-1m', emb_dim=64, n_shards=8, partition_type=3,
-                           max_epochs_wmf=100, max_epochs_local=100, batch_size=512, lr=0.1):
+                           max_epochs_wmf=100, max_epochs_local=200, batch_size=512, lr=0.01,
+                           lr_finetune=0.001):
     """Load RecEraser model từ file, hoặc train nếu chưa có"""
     partition_names = {1: 'InP', 2: 'UBP', 3: 'Random'}
     partition_name = partition_names.get(partition_type, 'Random')
@@ -549,7 +550,7 @@ def run_receraser_v2(dataset='ml-1m', emb_dim=64, n_shards=8, partition_type=1,
             if partitioner.shard_data[shard_id]:
                 print(f"  Training shard {shard_id}...")
                 train_model(model, partitioner, partitioner.shard_data[shard_id], n_items, device,
-                           batch_size=batch_size, lr=lr, max_epochs=max_epochs_local)
+                           batch_size=batch_size, lr=lr_finetune, max_epochs=max_epochs_local)
         # Save model after training
         save_model(model, checkpoint_path)
 
@@ -581,7 +582,7 @@ def run_receraser_v2(dataset='ml-1m', emb_dim=64, n_shards=8, partition_type=1,
         filtered_data = partitioner.filter_shard_data(shard_id, unlearn_users)
         print(f"  Retraining shard {shard_id}...")
         train_model(model, partitioner, filtered_data, n_items, device,
-                   batch_size=batch_size, lr=lr, max_epochs=max_epochs_local)
+                   batch_size=batch_size, lr=lr_finetune, max_epochs=max_epochs_local)
 
     unlearn_time = time.time() - t0
 
@@ -647,10 +648,11 @@ if __name__ == '__main__':
     parser.add_argument('--partition_type', type=int, default=1, choices=[1, 2, 3],
                        help='1=InP, 2=UBP, 3=Random')
     parser.add_argument('--max_epochs_wmf', type=int, default=100)
-    parser.add_argument('--max_epochs_local', type=int, default=100)
+    parser.add_argument('--max_epochs_local', type=int, default=200)
     parser.add_argument('--unlearn_ratio', type=float, default=0.1)
     parser.add_argument('--batch_size', type=int, default=512)
-    parser.add_argument('--lr', type=float, default=0.1)
+    parser.add_argument('--lr', type=float, default=0.01)
+    parser.add_argument('--lr_finetune', type=float, default=0.001)
     parser.add_argument('--output_suffix', type=str, default='')
 
     args = parser.parse_args()
@@ -665,5 +667,6 @@ if __name__ == '__main__':
         unlearn_ratio=args.unlearn_ratio,
         batch_size=args.batch_size,
         lr=args.lr,
+        lr_finetune=args.lr_finetune,
         output_suffix=args.output_suffix
     )
