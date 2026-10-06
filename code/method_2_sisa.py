@@ -25,6 +25,25 @@ sys.path.insert(0, PROJ)
 
 
 # ============================================================================
+# CHECKPOINT HELPERS
+# ============================================================================
+
+def save_models(models, path):
+    """Save list of models to file"""
+    os.makedirs(os.path.dirname(path) if os.path.dirname(path) else '.', exist_ok=True)
+    torch.save([m.state_dict() for m in models], path)
+    print(f"    [SISA] Saved models to {path}")
+
+
+def load_models(models, path, device):
+    """Load list of models from file"""
+    state_dicts = torch.load(path, map_location=device)
+    for i, state_dict in enumerate(state_dicts):
+        models[i].load_state_dict(state_dict)
+    print(f"    [SISA] Loaded models from {path}")
+
+
+# ============================================================================
 # CUSTOM DATA LOADER
 # ============================================================================
 
@@ -504,9 +523,28 @@ def run_sisa(model_name='BPRMF', dataset='ml-1m', emb_dim=64, n_shards=8,
     method = SISAMethod(model_class, n_users, n_items, emb_dim, n_shards,
                        batch_size=batch_size, lr=lr, max_epochs=max_epochs)
 
+    # Checkpoint path
+    checkpoint_dir = os.path.join(PROJ, '..', 'checkpoints')
+    checkpoint_path = os.path.join(checkpoint_dir, f'sisa_{dataset}_d{emb_dim}_k{n_shards}.pt')
+
     print(f"\n--- Phase 1: Train BEFORE unlearning ---")
     t0 = time.time()
-    method.train(train_data, device)
+
+    # Check if checkpoint exists
+    if os.path.exists(checkpoint_path):
+        print(f"  Loading models from checkpoint: {checkpoint_path}")
+        method.partitioner.partition_users(train_data, n_users)
+        method.partitioner.build_shard_data(train_data)
+        method.models = []
+        for shard_id in range(n_shards):
+            model = model_class(n_users, n_items, emb_dim).to(device)
+            method.models.append(model)
+        load_models(method.models, checkpoint_path, device)
+    else:
+        method.train(train_data, device)
+        save_models(method.models, checkpoint_path)
+        print(f"  Saved models to checkpoint: {checkpoint_path}")
+
     train_time = time.time() - t0
 
     # Filter out unlearned users from test set for fair comparison (BEFORE and AFTER same set)
@@ -520,6 +558,9 @@ def run_sisa(model_name='BPRMF', dataset='ml-1m', emb_dim=64, n_shards=8,
     t0 = time.time()
     method.unlearn(unlearn_users, train_data, device, retrain_epochs=retrain_epochs)
     unlearn_time = time.time() - t0
+
+    # Save model after unlearn for next time
+    save_models(method.models, checkpoint_path)
 
     # Evaluate AFTER unlearn on RETAINED users only (cùng tập với before - fair comparison)
     results_after = method.evaluate(train_data, test_data_retained, device)
