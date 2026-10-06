@@ -750,11 +750,11 @@ def run_ours(dataset='ml-1m', emb_dim=64, n_shards=8,
         for shard_id in range(n_shards):
             model = BPRMF(n_users, n_items, emb_dim).to(device)
             method.models.append(model)
-        load_models(method.models, checkpoint_path, device)
+        load_models(method.shard_models.models, checkpoint_path, device)
         user_to_shard = method.assignment.user_to_shard
     else:
         user_to_shard = method.train(train_data, device)
-        save_models(method.models, checkpoint_path)
+        save_models(method.shard_models.models, checkpoint_path)
         print(f"  Saved models to checkpoint: {checkpoint_path}")
 
     train_time = time.time() - t0
@@ -775,7 +775,7 @@ def run_ours(dataset='ml-1m', emb_dim=64, n_shards=8,
     unlearn_time = time.time() - t0
 
     # Save model after unlearn for next time
-    save_models(method.models, checkpoint_path)
+    save_models(method.shard_models.models, checkpoint_path)
 
     # Evaluate AFTER unlearn on RETAINED users only (cùng tập với before - fair comparison)
     results_after = method.evaluate(train_data, test_data_retained, user_to_shard, device)
