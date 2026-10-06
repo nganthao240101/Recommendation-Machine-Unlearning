@@ -195,14 +195,20 @@ class DataPartitioner:
         centroids_idx = random.sample(range(n_users), self.n_shards)
         centroids = user_emb_valid[centroids_idx]
 
-        # K-means iterations
-        for iteration in range(20):
+        # K-means iterations - increase to 50 for better convergence
+        for iteration in range(50):
             # Assign users to nearest centroid
             distances = np.zeros((n_users, self.n_shards))
             for k in range(self.n_shards):
                 distances[:, k] = np.linalg.norm(user_emb_valid - centroids[k], axis=1)
 
             new_assignments = np.argmin(distances, axis=1)
+
+            # Check convergence
+            if iteration > 0 and np.array_equal(new_assignments, prev_assignments):
+                print(f"    [UBP] Converged at iteration {iteration}")
+                break
+            prev_assignments = new_assignments.copy()
 
             # Update centroids
             for k in range(self.n_shards):
@@ -240,13 +246,19 @@ class DataPartitioner:
         centroids_idx = random.sample(range(n_users), self.n_shards)
         centroids = user_repr_valid[centroids_idx]
 
-        # K-means iterations
-        for iteration in range(20):
+        # K-means iterations - increase to 50 for better convergence
+        for iteration in range(50):
             distances = np.zeros((n_users, self.n_shards))
             for k in range(self.n_shards):
                 distances[:, k] = np.linalg.norm(user_repr_valid - centroids[k], axis=1)
 
             new_assignments = np.argmin(distances, axis=1)
+
+            # Check convergence
+            if iteration > 0 and np.array_equal(new_assignments, prev_assignments):
+                print(f"    [InP] Converged at iteration {iteration}")
+                break
+            prev_assignments = new_assignments.copy()
 
             for k in range(self.n_shards):
                 mask = new_assignments == k
