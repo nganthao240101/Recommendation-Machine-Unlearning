@@ -745,7 +745,7 @@ def run_ours(dataset='ml-1m', emb_dim=64, n_shards=8,
         # Need to rebuild partitioner and models
         method.signature_builder.build_signature(train_data)
         method.assignment.assign_users(method.signature_builder.user_signatures)
-        method.assignment.build_shard_data(train_data)
+        method.assignment.build_shard_data(train_data, method.assignment.user_to_shard)
         method.models = []
         for shard_id in range(n_shards):
             model = BPRMF(n_users, n_items, emb_dim).to(device)
