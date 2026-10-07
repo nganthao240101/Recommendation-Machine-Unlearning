@@ -294,28 +294,34 @@ def evaluate_model(model, train_data, test_data, n_users, n_items, device, Ks=[1
 
 
 def evaluate_sisa(models, train_data, test_data, n_users, n_items, device, user_to_shard, Ks=[10, 20, 50]):
-    """Evaluate SISA - chỉ dùng model của shard mà user được assign (KHÔNG average)."""
+    """Evaluate SISA - dùng MEAN aggregation từ tất cả models."""
     pre_log = {k: [] for k in Ks}
     rec_log = {k: [] for k in Ks}
     ndcg_log = {k: [] for k in Ks}
+
+    n_shards = len(models)
 
     for user in range(n_users):
         if user not in test_data or not test_data[user]:
             continue
 
-        # Chỉ dùng model của shard mà user được assign
-        shard_id = user_to_shard[user]
-        model = models[shard_id]
-
         with torch.no_grad():
             user_t = torch.LongTensor([user]).to(device)
             all_items = list(range(n_items))
-            scores = []
-            for i in range(0, n_items, 256):
-                batch_items = torch.LongTensor(all_items[i:i+256]).to(device)
-                s = model.predict(user_t, batch_items).cpu().numpy()
-                scores.extend(s.tolist())
-            scores = np.array(scores)
+
+            # Mean aggregation: tính score từ tất cả models rồi trung bình
+            scores_sum = np.zeros(n_items)
+            for shard_id in range(n_shards):
+                model = models[shard_id]
+                scores = []
+                for i in range(0, n_items, 256):
+                    batch_items = torch.LongTensor(all_items[i:i+256]).to(device)
+                    s = model.predict(user_t, batch_items).cpu().numpy()
+                    scores.extend(s.tolist())
+                scores_sum += np.array(scores)
+
+            # Mean aggregation
+            scores = scores_sum / n_shards
 
         train_items = set(train_data.get(user, []))
         for item in train_items:
