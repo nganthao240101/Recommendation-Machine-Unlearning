@@ -491,9 +491,9 @@ def run_full_retrain(model_name='BPRMF', dataset='ml-1m',
     # Filter out unlearned users from test set for fair comparison (BEFORE and AFTER same set)
     test_data_retained = {u: items for u, items in test_data.items() if u not in unlearn_users}
 
-    # Evaluate before on RETAINED test set (for fair comparison)
-    results_before = method.evaluate(train_data, test_data_retained, device)
-    print(f"  Before (RETAINED) - R@10: {results_before['recall'][0]:.4f}, NDCG@10: {results_before['ndcg'][0]:.4f}")
+    # BEFORE: Evaluate on FULL test set (all users)
+    results_before = method.evaluate(train_data, test_data, device)
+    print(f"  Before (FULL) - R@10: {results_before['recall'][0]:.4f}, NDCG@10: {results_before['ndcg'][0]:.4f}")
 
     # Unlearn
     print(f"\n--- Phase 2: Unlearn (oracle full retrain) ---")
