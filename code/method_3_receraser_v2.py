@@ -574,6 +574,7 @@ def evaluate_model(model, partitioner, train_data, test_data, n_users, n_items, 
 
 def run_receraser_v2(dataset='ml-1m', emb_dim=64, n_shards=8, partition_type=1,
                     max_epochs_wmf=100, max_epochs_local=50, unlearn_ratio=0.1,
+                    unlearn_mode='random',
                     batch_size=512, lr=0.01, lr_finetune=0.001,
                     use_attention=True, output_suffix=''):
     """
@@ -610,9 +611,24 @@ def run_receraser_v2(dataset='ml-1m', emb_dim=64, n_shards=8, partition_type=1,
     random.seed(42)
     all_users = list(train_data.keys())
     n_unlearn = int(len(all_users) * unlearn_ratio)
-    unlearn_users = set(random.sample(all_users, n_unlearn))
 
-    print(f"\nUnlearn users: {len(unlearn_users)} ({unlearn_ratio*100}%)")
+    if unlearn_mode == 'most':
+        user_interactions = [(u, len(train_data.get(u, []))) for u in all_users]
+        user_interactions.sort(key=lambda x: x[1], reverse=True)
+        unlearn_users = set([u for u, _ in user_interactions[:n_unlearn]])
+        print(f"\nUnlearn mode: MOST interactions ({n_unlearn} users)")
+        print(f"  Max: user {user_interactions[0][0]} ({user_interactions[0][1]} interactions)")
+    elif unlearn_mode == 'fewest':
+        user_interactions = [(u, len(train_data.get(u, []))) for u in all_users]
+        user_interactions.sort(key=lambda x: x[1])
+        unlearn_users = set([u for u, _ in user_interactions[:n_unlearn]])
+        print(f"\nUnlearn mode: FEWEST interactions ({n_unlearn} users)")
+        print(f"  Min: user {user_interactions[0][0]} ({user_interactions[0][1]} interactions)")
+    else:
+        unlearn_users = set(random.sample(all_users, n_unlearn))
+        print(f"\nUnlearn mode: RANDOM ({n_unlearn} users)")
+
+    print(f"Unlearn users: {len(unlearn_users)}")
 
     # Retained test set
     test_data_retained = {u: items for u, items in test_data.items() if u not in unlearn_users}
@@ -772,6 +788,9 @@ if __name__ == '__main__':
     parser.add_argument('--max_epochs_wmf', type=int, default=100)
     parser.add_argument('--max_epochs_local', type=int, default=50)
     parser.add_argument('--unlearn_ratio', type=float, default=0.1)
+    parser.add_argument('--unlearn_mode', type=str, default='random',
+                       choices=['random', 'fewest', 'most'],
+                       help='random: ngau nhien, fewest: it interaction nhat, most: nhieu interaction nhat')
     parser.add_argument('--batch_size', type=int, default=512)
     parser.add_argument('--lr', type=float, default=0.01)
     parser.add_argument('--lr_finetune', type=float, default=0.001)
@@ -788,6 +807,7 @@ if __name__ == '__main__':
         max_epochs_wmf=args.max_epochs_wmf,
         max_epochs_local=args.max_epochs_local,
         unlearn_ratio=args.unlearn_ratio,
+        unlearn_mode=args.unlearn_mode,
         batch_size=args.batch_size,
         lr=args.lr,
         lr_finetune=args.lr_finetune,
