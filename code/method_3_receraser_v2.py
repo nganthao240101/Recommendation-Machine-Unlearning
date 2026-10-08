@@ -670,8 +670,8 @@ def run_receraser_v2(dataset='ml-1m', emb_dim=64, n_shards=8, partition_type=1,
 
     model = RecEraserModel(n_users, n_items, emb_dim, num_local=n_shards, use_attention=use_attention).to(device)
 
-    # Check if model already exists
-    if os.path.exists(checkpoint_path):
+    # Check if model already exists (disabled due to corruption issues)
+    if False and os.path.exists(checkpoint_path):
         print(f"  Loading model from checkpoint: {checkpoint_path}")
         load_model(model, checkpoint_path, device)
     else:

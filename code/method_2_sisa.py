@@ -538,8 +538,8 @@ def run_sisa(model_name='BPRMF', dataset='ml-1m', emb_dim=64, n_shards=8,
     print(f"\n--- Phase 1: Train BEFORE unlearning ---")
     t0 = time.time()
 
-    # Check if checkpoint exists
-    if os.path.exists(checkpoint_path):
+    # Check if checkpoint exists (disabled due to corruption issues)
+    if False and os.path.exists(checkpoint_path):
         print(f"  Loading models from checkpoint: {checkpoint_path}")
         method.partitioner.partition_users(train_data, n_users)
         method.partitioner.build_shard_data(train_data)

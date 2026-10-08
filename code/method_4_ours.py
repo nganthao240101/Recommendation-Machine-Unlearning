@@ -739,8 +739,8 @@ def run_ours(dataset='ml-1m', emb_dim=64, n_shards=8,
     print(f"{'='*70}")
     t0 = time.time()
 
-    # Check if checkpoint exists
-    if os.path.exists(checkpoint_path):
+    # Check if checkpoint exists (disabled due to corruption issues)
+    if False and os.path.exists(checkpoint_path):
         print(f"  Loading models from checkpoint: {checkpoint_path}")
         # Need to rebuild partitioner and models
         method.signature_builder.build_signature(train_data)
