@@ -746,10 +746,11 @@ def run_ours(dataset='ml-1m', emb_dim=64, n_shards=8,
         method.signature_builder.build_signature(train_data)
         method.assignment.assign_users(method.signature_builder.user_signatures)
         method.build_shard_data(train_data, method.assignment.user_to_shard)
-        method.models = []
+        # Create models first
+        method.shard_models.models = []
         for shard_id in range(n_shards):
             model = BPRMF(n_users, n_items, emb_dim).to(device)
-            method.models.append(model)
+            method.shard_models.models.append(model)
         load_models(method.shard_models.models, checkpoint_path, device)
         user_to_shard = method.assignment.user_to_shard
     else:
