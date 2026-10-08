@@ -690,7 +690,7 @@ def run_receraser_v2(dataset='ml-1m', emb_dim=64, n_shards=8, partition_type=1,
                            batch_size=batch_size, lr=lr_finetune, max_epochs=max_epochs_local)
 
         # Save model after training
-        save_model(model, checkpoint_path)
+        # save_model(model, checkpoint_path)  # Disabled due to disk space
 
     # =========================================================================
     # STEP 4: Evaluate BEFORE unlearn
@@ -725,7 +725,7 @@ def run_receraser_v2(dataset='ml-1m', emb_dim=64, n_shards=8, partition_type=1,
     unlearn_time = time.time() - t0
 
     # Save model after unlearn for next time
-    save_model(model, checkpoint_path)
+    # save_model(model, checkpoint_path)  # Disabled due to disk space
     print(f"  Saved model after unlearn")
 
     # =========================================================================

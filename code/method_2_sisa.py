@@ -550,7 +550,7 @@ def run_sisa(model_name='BPRMF', dataset='ml-1m', emb_dim=64, n_shards=8,
         load_models(method.models, checkpoint_path, device)
     else:
         method.train(train_data, device)
-        save_models(method.models, checkpoint_path)
+        # save_models(method.models, checkpoint_path)  # Disabled due to disk space
         print(f"  Saved models to checkpoint: {checkpoint_path}")
 
     train_time = time.time() - t0
@@ -568,7 +568,7 @@ def run_sisa(model_name='BPRMF', dataset='ml-1m', emb_dim=64, n_shards=8,
     unlearn_time = time.time() - t0
 
     # Save model after unlearn for next time
-    save_models(method.models, checkpoint_path)
+    # save_models(method.models, checkpoint_path)  # Disabled due to disk space
 
     # Evaluate AFTER unlearn on RETAINED users only (cùng tập với before - fair comparison)
     results_after = method.evaluate(train_data, test_data_retained, device)
