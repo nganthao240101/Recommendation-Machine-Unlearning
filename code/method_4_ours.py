@@ -470,10 +470,12 @@ def evaluate_mean_aggregation(shard_models, train_data, test_data,
             all_items = list(range(n_items))
 
             scores_sum = np.zeros(n_items)
+            valid_shards = 0
             for shard_id in range(n_shards):
                 model = shard_models.get_model(shard_id)
                 if model is None:
                     continue
+                valid_shards += 1
                 scores = []
                 for i in range(0, n_items, 256):
                     batch_items = torch.LongTensor(all_items[i:i+256]).to(device)
@@ -481,7 +483,11 @@ def evaluate_mean_aggregation(shard_models, train_data, test_data,
                     scores.extend(s.tolist())
                 scores_sum += np.array(scores)
 
-            scores = scores_sum / n_shards
+            # Avoid division by zero
+            if valid_shards > 0:
+                scores = scores_sum / valid_shards
+            else:
+                scores = scores_sum
 
             train_items = set(train_data.get(user, []))
             for item in train_items:
@@ -494,7 +500,7 @@ def evaluate_mean_aggregation(shard_models, train_data, test_data,
             hit_num = len(set(rank_list) & item_set)
             rec = hit_num / len(item_pos) if len(item_pos) > 0 else 0
             dcg = sum(1.0 / np.log2(i + 2) for i, item in enumerate(rank_list) if item in item_set)
-            idcg = sum(1.0 / np.log2(i + 2) for i in range(len(item_pos)))
+            idcg = sum(1.0 / np.log2(i + 2.0) for i in range(len(item_pos)))
             ndcg = dcg / idcg if idcg > 0 else 0
 
             for k in Ks:
@@ -581,7 +587,7 @@ def evaluate_hard_routing(shard_models, user_to_shard, train_data, test_data,
                     if item in item_set:
                         dcg += 1.0 / np.log2(i + 2.0)
 
-                idcg = sum(1.0 / np.log2(i + 2.0) for i in range(min(len(item_pos), k)))
+                idcg = sum(1.0 / np.log2(i + 2) for i in range(min(len(item_pos), k)))
                 ndcg = dcg / idcg if idcg > 0 else 0
 
                 pre_log[k].append(pre)
