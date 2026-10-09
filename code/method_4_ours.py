@@ -444,6 +444,78 @@ def train_shard_model(model, shard_data, n_items, device,
 
 
 # ============================================================================
+# EVALUATION - MEAN AGGREGATION
+# ============================================================================
+
+def evaluate_mean_aggregation(shard_models, train_data, test_data,
+                             n_users, n_items, device, Ks=[10, 20, 50]):
+    """
+    Đánh giá với MEAN AGGREGATION:
+    y_xv = (1/K) * sum(f_{M_i}(x, v))
+    """
+    print("    [Evaluation] Using MEAN AGGREGATION (all shards)")
+
+    pre_log = {k: [] for k in Ks}
+    rec_log = {k: [] for k in Ks}
+    ndcg_log = {k: [] for k in Ks}
+
+    n_shards = len(shard_models.models)
+
+    with torch.no_grad():
+        for user in range(n_users):
+            if user not in test_data or not test_data[user]:
+                continue
+
+            user_t = torch.LongTensor([user]).to(device)
+            all_items = list(range(n_items))
+
+            scores_sum = np.zeros(n_items)
+            for shard_id in range(n_shards):
+                model = shard_models.get_model(shard_id)
+                if model is None:
+                    continue
+                scores = []
+                for i in range(0, n_items, 256):
+                    batch_items = torch.LongTensor(all_items[i:i+256]).to(device)
+                    s = model.predict_user_items(user, batch_items).cpu().numpy()
+                    scores.extend(s.tolist())
+                scores_sum += np.array(scores)
+
+            scores = scores_sum / n_shards
+
+            train_items = set(train_data.get(user, []))
+            for item in train_items:
+                scores[item] = -np.inf
+
+            rank_list = heapq.nlargest(max(Ks), range(len(scores)), key=scores.__getitem__)
+            item_pos = test_data.get(user, [])
+            item_set = set(item_pos)
+
+            hit_num = len(set(rank_list) & item_set)
+            rec = hit_num / len(item_pos) if len(item_pos) > 0 else 0
+            dcg = sum(1.0 / np.log2(i + 2) for i, item in enumerate(rank_list) if item in item_set)
+            idcg = sum(1.0 / np.log2(i + 2) for i in range(len(item_pos)))
+            ndcg = dcg / idcg if idcg > 0 else 0
+
+            for k in Ks:
+                rank_k = heapq.nlargest(k, range(len(scores)), key=scores.__getitem__)
+                hit_num_k = len(set(rank_k) & item_set)
+                rec_k = hit_num_k / len(item_pos) if len(item_pos) > 0 else 0
+                pre_k = hit_num_k / k
+                rec_log[k].append(rec_k)
+                pre_log[k].append(pre_k)
+
+            rec_log[max(Ks)].append(rec)
+            ndcg_log[max(Ks)].append(ndcg)
+
+    return {
+        'precision': [np.mean(pre_log[k]) for k in Ks],
+        'recall': [np.mean(rec_log[k]) for k in Ks],
+        'ndcg': [np.mean(ndcg_log[k]) for k in Ks]
+    }
+
+
+# ============================================================================
 # EVALUATION - HARD-ROUTING
 # ============================================================================
 
@@ -646,7 +718,13 @@ class OursMethod:
         print("    [Unlearn] Done! Using HARD-ROUTING for inference.")
         return affected_shards
 
-    def evaluate(self, train_data, test_data, user_to_shard, device, Ks=[10, 20, 50]):
+    def evaluate(self, train_data, test_data, user_to_shard, device, Ks=[10, 20, 50], use_mean=False):
+        if use_mean:
+            return evaluate_mean_aggregation(
+                self.shard_models,
+                train_data, test_data,
+                self.n_users, self.n_items, device, Ks
+            )
         return evaluate_hard_routing(
             self.shard_models, user_to_shard,
             train_data, test_data,
@@ -661,7 +739,7 @@ class OursMethod:
 def run_ours(dataset='ml-1m', emb_dim=64, n_shards=8,
             batch_size=512, lr=0.05, max_epochs=100,
             unlearn_ratio=0.1, unlearn_mode='random', unlearn_user_id=None,
-            retrain_epochs=50, signature_dim=64, output_suffix=''):
+            retrain_epochs=50, signature_dim=64, use_mean=False, output_suffix=''):
     """
     Chạy Ours method với 3 components đúng theo bài báo
     """
@@ -672,6 +750,7 @@ def run_ours(dataset='ml-1m', emb_dim=64, n_shards=8,
     print(f"  - Batch size: {batch_size}")
     print(f"  - Learning rate: {lr}")
     print(f"  - Embedding dim: {emb_dim}")
+    print(f"  - Use mean aggregation: {use_mean}")
     print(f"  - N shards: {n_shards}")
     print(f"  - Max epochs per shard: {max_epochs}")
     print(f"  - Signature dim: {signature_dim}")
@@ -765,7 +844,7 @@ def run_ours(dataset='ml-1m', emb_dim=64, n_shards=8,
     test_data_retained = {u: items for u, items in test_data.items() if u not in unlearn_users}
 
     # BEFORE: Evaluate on RETAINED test set (same as AFTER - fair comparison)
-    results_before = method.evaluate(train_data, test_data_retained, user_to_shard, device)
+    results_before = method.evaluate(train_data, test_data_retained, user_to_shard, device, use_mean=use_mean)
     print(f"\n  Before (RETAINED) - R@10: {results_before['recall'][0]:.4f}, "
           f"NDCG@10: {results_before['ndcg'][0]:.4f}")
 
@@ -781,7 +860,7 @@ def run_ours(dataset='ml-1m', emb_dim=64, n_shards=8,
     # save_models(method.shard_models.models, checkpoint_path)
 
     # Evaluate AFTER unlearn on RETAINED users only (cùng tập với before - fair comparison)
-    results_after = method.evaluate(train_data, test_data_retained, user_to_shard, device)
+    results_after = method.evaluate(train_data, test_data_retained, user_to_shard, device, use_mean=use_mean)
     print(f"\n  After (RETAINED) - R@10: {results_after['recall'][0]:.4f}, "
           f"NDCG@10: {results_after['ndcg'][0]:.4f}")
     print(f"  Unlearn time: {unlearn_time:.2f}s")
@@ -849,6 +928,7 @@ if __name__ == '__main__':
     parser.add_argument('--n_shards', type=int, default=8)
     parser.add_argument('--max_epochs', type=int, default=100)
     parser.add_argument('--signature_dim', type=int, default=64)
+    parser.add_argument('--use_mean', type=int, default=0, help='1: use mean aggregation, 0: use hard-routing')
     parser.add_argument('--unlearn_ratio', type=float, default=0.1)
     parser.add_argument('--unlearn_mode', type=str, default='random',
                        choices=['random', 'fewest', 'most', 'single'],
@@ -868,6 +948,7 @@ if __name__ == '__main__':
         lr=args.learning_rate,
         max_epochs=args.max_epochs,
         signature_dim=args.signature_dim,
+        use_mean=bool(args.use_mean),
         unlearn_ratio=args.unlearn_ratio,
         unlearn_mode=args.unlearn_mode,
         unlearn_user_id=args.unlearn_user_id,
