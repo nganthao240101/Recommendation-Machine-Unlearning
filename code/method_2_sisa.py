@@ -555,12 +555,12 @@ def run_sisa(model_name='BPRMF', dataset='ml-1m', emb_dim=64, n_shards=8,
 
     train_time = time.time() - t0
 
-    # Filter out unlearned users from test set for fair comparison (BEFORE and AFTER same set)
+    # Filter out unlearned users from test set
     test_data_retained = {u: items for u, items in test_data.items() if u not in unlearn_users}
 
-    # BEFORE: Evaluate on RETAINED test set (same as AFTER - fair comparison)
-    results_before = method.evaluate(train_data, test_data_retained, device)
-    print(f"  Before (RETAINED) - R@10: {results_before['recall'][0]:.4f}, NDCG@10: {results_before['ndcg'][0]:.4f}")
+    # BEFORE: Evaluate on FULL test set (all users)
+    results_before = method.evaluate(train_data, test_data, device)
+    print(f"  Before (FULL) - R@10: {results_before['recall'][0]:.4f}, NDCG@10: {results_before['ndcg'][0]:.4f}")
 
     print(f"\n--- Phase 2: Unlearn (retrain affected shards only) ---")
     t0 = time.time()
@@ -571,8 +571,10 @@ def run_sisa(model_name='BPRMF', dataset='ml-1m', emb_dim=64, n_shards=8,
     # save_models(method.models, checkpoint_path)  # Disabled due to disk space
 
     # Evaluate AFTER unlearn on RETAINED users only (cùng tập với before - fair comparison)
-    results_after = method.evaluate(train_data, test_data_retained, device)
-    print(f"  After (RETAINED) - R@10: {results_after['recall'][0]:.4f}, NDCG@10: {results_after['ndcg'][0]:.4f}")
+    # AFTER: Evaluate on RETAINED test set (train on RETAINED data)
+    train_data_retained = {u: items for u, items in train_data.items() if u not in unlearn_users}
+    results_after = method.evaluate(train_data_retained, test_data_retained, device)
+    print(f"  After (RETAINED, retrain) - R@10: {results_after['recall'][0]:.4f}, NDCG@10: {results_after['ndcg'][0]:.4f}")
     print(f"  Unlearn time: {unlearn_time:.2f}s")
 
     results = {

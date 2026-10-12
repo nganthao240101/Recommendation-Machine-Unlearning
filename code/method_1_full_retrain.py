@@ -507,8 +507,10 @@ def run_full_retrain(model_name='BPRMF', dataset='ml-1m',
     unlearn_time = time.time() - t0
 
     # Evaluate after (chỉ trên retained users - cùng tập với before)
-    results_after = method.evaluate(train_data, test_data_retained, device)
-    print(f"  After - R@10: {results_after['recall'][0]:.4f}, NDCG@10: {results_after['ndcg'][0]:.4f}")
+    # AFTER: Train on RETAINED data, evaluate on RETAINED test
+    train_data_retained = {u: items for u, items in train_data.items() if u not in unlearn_users}
+    results_after = method.evaluate(train_data_retained, test_data_retained, device)
+    print(f"  After (RETAINED, retrain) - R@10: {results_after['recall'][0]:.4f}, NDCG@10: {results_after['ndcg'][0]:.4f}")
     print(f"  Unlearn time: {unlearn_time:.2f}s")
 
     # Results

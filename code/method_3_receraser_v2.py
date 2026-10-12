@@ -700,9 +700,8 @@ def run_receraser_v2(dataset='ml-1m', emb_dim=64, n_shards=8, partition_type=1,
     print(f"{'='*70}")
 
     # BEFORE: Evaluate on FULL test set (all users)
-    # BEFORE: Evaluate on RETAINED test set (same as AFTER - fair comparison)
-    recall_before, ndcg_before = evaluate_model(model, partitioner, train_data, test_data_retained, n_users, n_items, device)
-    print(f"  Before (RETAINED) - R@10: {recall_before:.4f}, NDCG@10: {ndcg_before:.4f}")
+    recall_before, ndcg_before = evaluate_model(model, partitioner, train_data, test_data, n_users, n_items, device)
+    print(f"  Before (FULL) - R@10: {recall_before:.4f}, NDCG@10: {ndcg_before:.4f}")
 
     # =========================================================================
     # STEP 5: Unlearn (retrain affected shards)
@@ -735,8 +734,10 @@ def run_receraser_v2(dataset='ml-1m', emb_dim=64, n_shards=8, partition_type=1,
     print("STEP 6: EVALUATE AFTER UNLEARN")
     print(f"{'='*70}")
 
-    recall_after, ndcg_after = evaluate_model(model, partitioner, train_data, test_data_retained, n_users, n_items, device)
-    print(f"  After (RETAINED) - R@10: {recall_after:.4f}, NDCG@10: {ndcg_after:.4f}")
+    # AFTER: Train on RETAINED data, evaluate on RETAINED test
+    train_data_retained = {u: items for u, items in train_data.items() if u not in unlearn_users}
+    recall_after, ndcg_after = evaluate_model(model, partitioner, train_data_retained, test_data_retained, n_users, n_items, device)
+    print(f"  After (RETAINED, retrain) - R@10: {recall_after:.4f}, NDCG@10: {ndcg_after:.4f}")
     print(f"  Unlearn time: {unlearn_time:.2f}s")
 
     # =========================================================================
