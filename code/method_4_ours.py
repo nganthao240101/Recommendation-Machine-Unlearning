@@ -515,9 +515,9 @@ def evaluate_mean_aggregation(shard_models, train_data, test_data,
             ndcg_log[max(Ks)].append(ndcg)
 
     return {
-        'precision': [np.mean(pre_log[k]) for k in Ks],
-        'recall': [np.mean(rec_log[k]) for k in Ks],
-        'ndcg': [np.mean(ndcg_log[k]) for k in Ks]
+        'precision': [np.nanmean(pre_log[k]) if pre_log[k] else 0 for k in Ks],
+        'recall': [np.nanmean(rec_log[k]) if rec_log[k] else 0 for k in Ks],
+        'ndcg': [np.nanmean(ndcg_log[k]) if ndcg_log[k] else 0 for k in Ks]
     }
 
 
@@ -595,9 +595,9 @@ def evaluate_hard_routing(shard_models, user_to_shard, train_data, test_data,
                 ndcg_log[k].append(ndcg)
 
     return {
-        'precision': [np.mean(pre_log[k]) for k in Ks],
-        'recall': [np.mean(rec_log[k]) for k in Ks],
-        'ndcg': [np.mean(ndcg_log[k]) for k in Ks]
+        'precision': [np.nanmean(pre_log[k]) if pre_log[k] else 0 for k in Ks],
+        'recall': [np.nanmean(rec_log[k]) if rec_log[k] else 0 for k in Ks],
+        'ndcg': [np.nanmean(ndcg_log[k]) if ndcg_log[k] else 0 for k in Ks]
     }
 
 
