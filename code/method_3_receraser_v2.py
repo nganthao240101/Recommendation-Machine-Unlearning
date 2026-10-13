@@ -641,8 +641,13 @@ def run_receraser_v2(dataset='ml-1m', emb_dim=64, n_shards=8, partition_type=1,
     print("STEP 1: TRAIN WMF FOR PRETRAINED EMBEDDINGS")
     print(f"{'='*70}")
 
-    # Load pretrained embeddings (hoặc train nếu chưa có)
-    user_emb, item_emb = load_or_train_wmf(dataset, emb_dim, max_epochs_wmf, batch_size, lr)
+    # Skip WMF if max_epochs_wmf=0
+    if max_epochs_wmf == 0:
+        print("  Skipping WMF pretrained embeddings (max_epochs_wmf=0)")
+        user_emb, item_emb = None, None
+    else:
+        # Load pretrained embeddings (hoặc train nếu chưa có)
+        user_emb, item_emb = load_or_train_wmf(dataset, emb_dim, max_epochs_wmf, batch_size, lr)
 
     # =========================================================================
     # STEP 2: Partition users dựa trên embeddings
@@ -676,7 +681,8 @@ def run_receraser_v2(dataset='ml-1m', emb_dim=64, n_shards=8, partition_type=1,
         load_model(model, checkpoint_path, device)
     else:
         print(f"  Training RecEraser on all shards (first time)...")
-        model.load_pretrained_embeddings(user_emb, item_emb, device)
+        if user_emb is not None and item_emb is not None:
+            model.load_pretrained_embeddings(user_emb, item_emb, device)
         for shard_id in range(n_shards):
             if partitioner.shard_data[shard_id]:
                 print(f"  Training shard {shard_id}...")
