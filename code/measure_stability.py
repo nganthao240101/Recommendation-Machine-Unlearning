@@ -67,33 +67,19 @@ def make_unlearn_users(train_data, all_users, unlearn_ratio, unlearn_mode):
     return set(random.sample(all_users, n_unlearn))
 
 
-def kmeans_ubp(user_emb, n_shards, seed):
-    """Re-implementation của Rec UBP (k-means trên user embeddings)."""
-    random.seed(seed)
-    np.random.seed(seed)
-    n = user_emb.shape[0]
-    if n <= n_shards:
-        return np.arange(n) % n_shards
-    idx = random.sample(range(n), n_shards)
-    centroids = user_emb[idx].copy()
-    prev = None
-    for it in range(50):
-        d = np.zeros((n, n_shards))
-        for k in range(n_shards):
-            d[:, k] = np.linalg.norm(user_emb - centroids[k], axis=1)
-        new = np.argmin(d, axis=1)
-        if it > 0 and np.array_equal(new, prev):
-            break
-        prev = new
-        for k in range(n_shards):
-            m = new == k
-            if m.sum() > 0:
-                centroids[k] = user_emb[m].mean(axis=0)
-    return new
+def rec_ubp_assign(train_data, n_users, user_emb, n_shards, seed, T=10):
+    """Rec UBP (phiên bản Balanced, đúng RecEraser paper) - trả về user_to_shard.
+
+    Dùng DataPartitioner._partition_ubp_paper (cản cân bằng + E_score2),
+    không phải k-means trần (bị lệch). Gắn với code mà method_3 hiện chạy.
+    """
+    from method_3_receraser_v2 import DataPartitioner
+    p = DataPartitioner(n_shards=n_shards, partition_type=2, seed=seed, T=T)
+    return p.partition_users(train_data, n_users, user_emb, None)
 
 
 def analyze(method_name, A_full, A_ret, unlearn_users, retained_ids, n_shards,
-            similarity_aware, deletion_stable_expected):
+            similarity_aware, deletion_stable_expected, verbose=True):
     """Tính instability + naive/effective affected."""
     ret = np.array(retained_ids)
     moved = ret[A_full[ret] != A_ret[ret]]          # user retained đổi shard
@@ -109,15 +95,16 @@ def analyze(method_name, A_full, A_ret, unlearn_users, retained_ids, n_shards,
     bal_full = np.bincount(A_full, minlength=n_shards)
     bal_ret = np.bincount(A_ret[ret], minlength=n_shards)
 
-    print(f"\n  [{method_name}]")
-    print(f"    similarity-aware      = {similarity_aware}")
-    print(f"    deletion-stable       = {deletion_stable_expected}")
-    print(f"    Instability (retained đổi shard) = {instability:.2f}%  ({len(moved)} users)")
-    print(f"    Naive affected shards = {len(naive)}/{n_shards}")
-    print(f"    Effective affected    = {len(eff)}/{n_shards}   (naive + displaced)")
-    print(f"    Extra shards touched by displacement = {len(eff) - len(naive)}")
-    print(f"    Shard load FULL  min/max = {bal_full.min()}/{bal_full.max()}")
-    print(f"    Shard load RETD  min/max = {bal_ret.min()}/{bal_ret.max()}")
+    if verbose:
+        print(f"\n  [{method_name}]")
+        print(f"    similarity-aware      = {similarity_aware}")
+        print(f"    deletion-stable       = {deletion_stable_expected}")
+        print(f"    Instability (retained đổi shard) = {instability:.2f}%  ({len(moved)} users)")
+        print(f"    Naive affected shards = {len(naive)}/{n_shards}")
+        print(f"    Effective affected    = {len(eff)}/{n_shards}   (naive + displaced)")
+        print(f"    Extra shards touched by displacement = {len(eff) - len(naive)}")
+        print(f"    Shard load FULL  min/max = {bal_full.min()}/{bal_full.max()}")
+        print(f"    Shard load RETD  min/max = {bal_ret.min()}/{bal_ret.max()}")
     return {
         'method': method_name,
         'instability': instability,
@@ -181,26 +168,24 @@ def main():
                        retained_ids, K, similarity_aware=False, deletion_stable_expected=True))
 
     # ------------------------------------------------------------------
-    # Rec UBP (k-means) - similarity-aware nhưng KHÔNG deletion-stable
+    # Rec UBP (balanced, đúng paper) - similarity-aware nhưng KHÔNG deletion-stable
     # ------------------------------------------------------------------
-    emb_path = None
     base = os.path.dirname(os.path.dirname(__file__))
     candidate = os.path.join(base, 'data', args.dataset, 'wmf_embeddings.npz')
     if os.path.exists(candidate):
-        emb_path = candidate
-    if emb_path:
-        print(f"\n  [Rec UBP] loading embeddings from {emb_path}")
-        w = np.load(emb_path)
-        user_emb = w['user_embeddings'][:N]
+        print(f"\n  [Rec UBP] loading embeddings from {candidate}")
+        w = np.load(candidate)
+        user_emb_full = w['user_embeddings'][:N]
 
-        A_full_rec = kmeans_ubp(user_emb, K, seed=42).astype(np.int64)
+        # BEFORE: partition trên FULL
+        A_full_rec = rec_ubp_assign(train_data, N, user_emb_full, K, seed=42).astype(np.int64)
 
-        user_emb_ret = user_emb[retained_ids]
-        A_ret_pos = kmeans_ubp(user_emb_ret, K, seed=42).astype(np.int64)
-        A_ret_rec = np.full(N, -1, dtype=np.int64)
-        A_ret_rec[retained_ids] = A_ret_pos
-        rows.append(analyze("Rec UBP (k-means)", A_full_rec, A_ret_rec, unlearn,
-                            retained_ids, K, similarity_aware=True, deletion_stable_expected=False))
+        # AFTER (retained): re-partition CHỈ trên retained users (xóa rồi re-cluster),
+        # dùng embedding index theo user-id (user_emb_full) để partitioner index đúng.
+        A_ret_rec = rec_ubp_assign(train_ret, N, user_emb_full, K, seed=42).astype(np.int64)
+        rows.append(analyze("Rec UBP (balanced)", A_full_rec, A_ret_rec, unlearn,
+                            retained_ids, K, similarity_aware=True,
+                            deletion_stable_expected=False))
     else:
         print(f"\n  [Rec UBP] no WMF embeddings found at {candidate}; skip Rec UBP.")
 

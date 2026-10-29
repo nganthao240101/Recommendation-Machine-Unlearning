@@ -192,35 +192,43 @@ class DataPartitioner:
         """UBP (RecEraser paper, data_partition_2): k-means user-only + cản cân bằng.
 
         Cân bằng: mỗi shard <= max_data = 1.2*N/K (như 'max_data' trong code gốc).
+        Chỉ gán các user CÓ trong train_data (để re-partition on retained đúng nghĩa:
+        user bị unlearn KHÔNG được gán).
         """
         print(f"    [UBP] {self.n_shards} shards (user embeddings, balanced, T={self.T})")
-        uidW = np.asarray(user_emb[:n_users])
-        users_all = list(train_data.keys())
-        max_data = 1.2 * len(users_all) / self.n_shards
-
-        if n_users <= self.n_shards:
+        uidW = np.asarray(user_emb)               # toàn bộ embedding matrix (shape N x D)
+        users_all = [u for u in train_data.keys() if u < len(uidW)]
+        n_active = len(users_all)
+        if n_active == 0:
             self.user_to_shard = np.zeros(n_users, dtype=np.int32)
-            for u in range(n_users):
-                self.user_to_shard[u] = u % self.n_shards
+            return self.user_to_shard
+        max_data = 1.2 * n_active / self.n_shards
+
+        if n_active <= self.n_shards:
+            self.user_to_shard = np.zeros(n_users, dtype=np.int32)
+            for idx, u in enumerate(users_all):
+                self.user_to_shard[u] = idx % self.n_shards
             return self.user_to_shard
 
-        # Init centroids
-        centroids_idx = random.sample(users_all[:n_users], self.n_shards)
+        # Init centroids (chọn k user từ tập active)
+        centroids_idx = random.sample(users_all, min(self.n_shards, n_active))
         centro = np.array([uidW[c] for c in centroids_idx])
 
         assign = np.zeros(n_users, dtype=np.int32)
+        # Chỉ gán user_active (không gán user không có trong train_data)
+        active_arr = np.array(users_all, dtype=np.int64)
+
         for _ in range(self.T):
             C = [set() for _ in range(self.n_shards)]
-            # điểm gán: squared-error của TỪNG user tới từng centroid
-            d = np.zeros((n_users, self.n_shards))
+            # squared-error của TỪNG user active tới từng centroid
+            d = np.zeros((n_active, self.n_shards))
             for k in range(self.n_shards):
-                d[:, k] = np.sum((uidW - centro[k]) ** 2, axis=1)
-            for uid in range(n_users):
-                k = int(np.argmin(d[uid]))
+                d[:, k] = np.sum((uidW[active_arr] - centro[k]) ** 2, axis=1)
+            for t, uid in enumerate(users_all):
+                k = int(np.argmin(d[t]))
                 if len(C[k]) < max_data:
                     C[k].add(uid); assign[uid] = k
                 else:
-                    # shard đầy -> đưa sang shard trống nhất (còn chỗ)
                     for k2 in range(self.n_shards):
                         if len(C[k2]) < max_data:
                             C[k2].add(uid); assign[uid] = k2; break
