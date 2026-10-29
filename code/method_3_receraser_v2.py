@@ -17,6 +17,7 @@ import sys
 import time
 import json
 import random
+import pickle
 import argparse
 import numpy as np
 import torch
@@ -63,15 +64,17 @@ class SimpleDataLoader:
         print(f"  Loaded: {self.n_users} users, {self.n_items} items")
 
 
-def load_data(dataset='ml-1m'):
+def data_dir_for(dataset='ml-1m'):
+    """Trở về đường dẫn data/<dataset> (dùng cho cache C/C_U/C_I + wmf_embeddings)."""
     data_path = os.environ.get('RECUNLEARN_DATA_PATH', None)
     if data_path:
         dataset_name = os.environ.get('RECUNLEARN_DATASET', dataset)
-        data_dir = os.path.join(data_path, dataset_name)
-    else:
-        base_dir = os.path.dirname(PROJ)
-        data_dir = os.path.join(base_dir, 'data', dataset)
-    return SimpleDataLoader(data_dir)
+        return os.path.join(data_path, dataset_name)
+    return os.path.join(os.path.dirname(PROJ), 'data', dataset)
+
+
+def load_data(dataset='ml-1m'):
+    return SimpleDataLoader(data_dir_for(dataset))
 
 
 # ============================================================================
@@ -146,7 +149,7 @@ def load_model(model, path, device):
 # ============================================================================
 
 class DataPartitioner:
-    def __init__(self, n_shards=8, partition_type=1, seed=42, T=10):
+    def __init__(self, n_shards=8, partition_type=1, seed=42, T=10, cache_path=None):
         """
         partition_type:
           1: InP (Interaction-based Partition, RecEraser paper — user+item emb, balanced)
@@ -174,6 +177,61 @@ class DataPartitioner:
             return self._partition_inp_paper(train_data, n_users, user_emb, item_emb)
         else:
             raise ValueError(f"Unknown partition_type: {self.partition_type}")
+
+    # ------------------------------------------------------------------
+    # CACHE (giữ giống bộ utility cũ: C / C_U / C_I .pk, định danh theo type + k)
+    # ------------------------------------------------------------------
+    @staticmethod
+    def _cache_path(data_dir, partition_type, n_shards, which):
+        """which in {'','U','I'} -> cùng naming bộ utility cũ (vd: C_U_type-1_num-8.pk):
+           ''->C_type-1_num-8.pk, U->C_U_type-1_num-8.pk, I->C_I_type-1_num-8.pk"""
+        suffix = f'C_{which}' if which else 'C'
+        return os.path.join(data_dir, f'{suffix}_type-{partition_type}_num-{n_shards}.pk')
+
+    def save_cache(self, data_dir, train_data):
+        """Lưu C / C_U / C_I như utility gốc (pickle, cùng định danh)."""
+        C, users, items = self._shard_cui(train_data)
+        for which, obj in [('', C), ('U', users), ('I', items)]:
+            with open(self._cache_path(data_dir, self.partition_type, self.n_shards, which), 'wb') as f:
+                pickle.dump(obj, f)
+        print(f"    [Cache] saved C/C_U/C_I type-{self.partition_type} num-{self.n_shards} -> {data_dir}")
+
+    def load_cache(self, data_dir, train_data):
+        """Đọc cache. True nếu cache hợp lệ (đúng số user), không thì False."""
+        try:
+            with open(self._cache_path(data_dir, self.partition_type, self.n_shards, 'U'), 'rb') as f:
+                users = pickle.load(f)
+            with open(self._cache_path(data_dir, self.partition_type, self.n_shards, ''), 'rb') as f:
+                C = pickle.load(f)
+            # tái dựng user_to_shard từ C (để không phụ thuộc định dạng C cụ thể)
+            self.user_to_shard = np.zeros(max(train_data.keys()) + 1 if train_data else 0, dtype=np.int32)
+            for k, shard in enumerate(C):
+                for u in (shard if isinstance(shard, dict) else []):
+                    if u in train_data and u < len(self.user_to_shard):
+                        self.user_to_shard[u] = k
+            print(f"    [Cache] loaded partition type-{self.partition_type} num-{self.n_shards} from {data_dir}")
+            return True
+        except Exception:
+            return False
+
+    def _shard_cui(self, train_data):
+        """Trả về (C, users, items) cùng định dạng utility gốc:
+          C: list[shard] của dict {user: [items]}
+          users: list[shard] của list user ids
+          items: list[shard] của list item ids (dùnh)
+        """
+        C = [{} for _ in range(self.n_shards)]
+        for u, items in train_data.items():
+            k = int(self.user_to_shard[u])
+            C[k][u] = list(items)
+        users = [list(shard.keys()) for shard in C]
+        items = []
+        for shard in C:
+            s = set()
+            for it in shard.values():
+                s.update(it)
+            items.append(list(s))
+        return C, users, items
 
     def _partition_random(self, n_users):
         """Random partition (modulo, luôn cân bằng)"""
@@ -680,30 +738,35 @@ def run_receraser_v2(dataset='ml-1m', emb_dim=64, n_shards=8, partition_type=1,
     print(f"Test users (retained): {len(test_data_retained)}")
 
     # =========================================================================
-    # STEP 1: Train WMF để lấy pretrained embeddings
+    # STEP 1+2: Partition users (cache C/C_U/C_I như utility cũ)
+    #   Nếu có cache -> LOAD (không cần WMF, không re-cluster).
+    #   Nếu chưa -> train WMF (nếu cần), partition, rồi SAVE cache.
     # =========================================================================
     print(f"\n{'='*70}")
-    print("STEP 1: TRAIN WMF FOR PRETRAINED EMBEDDINGS")
+    print("STEP 1+2: PARTITION USERS (with C/C_U/C_I cache)")
     print(f"{'='*70}")
 
-    # Skip WMF if max_epochs_wmf=0
-    if max_epochs_wmf == 0:
-        print("  Skipping WMF pretrained embeddings (max_epochs_wmf=0)")
-        user_emb, item_emb = None, None
-    else:
-        # Load pretrained embeddings (hoặc train nếu chưa có)
-        user_emb, item_emb = load_or_train_wmf(dataset, emb_dim, max_epochs_wmf, batch_size, lr)
-
-    # =========================================================================
-    # STEP 2: Partition users dựa trên embeddings
-    # =========================================================================
-    print(f"\n{'='*70}")
-    print("STEP 2: PARTITION USERS")
-    print(f"{'='*70}")
-
+    cache_dir = data_dir_for(dataset)
     partitioner = DataPartitioner(n_shards=n_shards, partition_type=partition_type, seed=42)
-    partitioner.partition_users(train_data, n_users, user_emb, item_emb)
-    partitioner.build_shard_data(train_data)
+
+    if partitioner.load_cache(cache_dir, train_data):
+        print("  Using cached partition (skipping WMF + re-clustering)")
+        partitioner.build_shard_data(train_data)
+        user_emb, item_emb = None, None   # không cần nữa
+    else:
+        # Chưa có cache: cần WMF (nếu partition_type != 3)
+        if partition_type == 3:
+            user_emb, item_emb = None, None
+            print("  [Random] không cần WMF")
+        elif max_epochs_wmf == 0:
+            user_emb, item_emb = None, None
+            print("  Skipping WMF (max_epochs_wmf=0); partition sẽ run không có embedding")
+        else:
+            user_emb, item_emb = load_or_train_wmf(dataset, emb_dim, max_epochs_wmf, batch_size, lr)
+
+        partitioner.partition_users(train_data, n_users, user_emb, item_emb)
+        partitioner.save_cache(cache_dir, train_data)
+        partitioner.build_shard_data(train_data)
 
     # =========================================================================
     # STEP 3: Train RecEraser với pretrained embeddings
