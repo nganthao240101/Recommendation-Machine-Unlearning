@@ -250,6 +250,33 @@ def main():
     results['C4 Ours (hard)'] = (c4['recall'][0], c4_time, K)
     print(f"  C4 R@10={c4['recall'][0]:.4f}  time={c4_time:.0f}s")
 
+    # ------------------------------------------------------------------
+    # C6: Rec SAME-CAPACITY (UBP/k-means partition + K standalone BPRMF + MEAN)
+    #   -> loại bỏ attention, WMF-in-model, và 8× tham số.
+    #   -> chỉ còn khác biệt "partition" (UBP) so với SISA(user%K)/Ours(signature).
+    #   -> capacity = K BPRMF 1-dim (cùng lớp với C3/C4), công bằng.
+    #   (UBP cần user-embedding cho k-means -> dùng WMF pretrain CHỈ để partition)
+    # ------------------------------------------------------------------
+    print(f"\n=== C6: Rec same-capacity (UBP partition, K BPRMF, MEAN) ===")
+    wmf_path = os.path.join(os.path.dirname(os.path.dirname(__file__)),
+                            'data', args.dataset, 'wmf_embeddings.npz')
+    if os.path.exists(wmf_path):
+        w = np.load(wmf_path)
+        user_emb, item_emb = w['user_embeddings'], w['item_embeddings']
+        rpart = RecPartitioner(n_shards=K, partition_type=2, seed=42)
+        rpart.partition_users(train_r, n_users, user_emb, item_emb)
+        rpart.build_shard_data(train_r)
+        t0 = time.time()
+        c6m = [train_full_single(n_users, n_items, args.emb_dim, rpart.shard_data[sid], test_r,
+                                 device, args.max_epochs, seed=sid) for sid in range(K)]
+        c6_time = time.time() - t0
+        c6 = evaluate_mean_ensemble(c6m, train_r, test_r, n_users, n_items, device)
+        results['C6 Rec (same-cap)'] = (c6['recall'][0], c6_time, K)
+        print(f"  C6 R@10={c6['recall'][0]:.4f}  time={c6_time:.0f}s")
+    else:
+        print(f"  [skip C6 - không có WMF embeddings tại {wmf_path}; "
+              f"chạy pretrain_wmf.py trước]")
+
     # C5 Rec
     if not args.skip_rec:
         print(f"\n=== C5: Rec (K shards, random, ATTENTION, no WMF) ===")
@@ -282,6 +309,21 @@ def main():
     if r5 is not None:
         print(f"  Rec attn vs SISA mean (C5 - C3) = {r5 - r3:+.4f}  (attention vs mean)")
     print(f"  Ours hard vs SISA mean (C4 - C3) = {r4 - r3:+.4f}  (hard-routing vs mean)")
+
+    # So sánh cùng capacity (4 method thật: Full / SISA / Rec / Ours)
+    r6 = results.get('C6 Rec (same-cap)', (None,))[0]
+    print("\nPHÂN TÍCH CÙNG CAPACITY (K BPRMF, không attention/WMF-in-model):")
+    print(f"  Full Single (1 model)   : {r1:.4f}")
+    if r6 is not None:
+        print(f"  Rec UBP same-capacity : {r6:.4f}   (so Full {r6 - r1:+.4f})")
+    print(f"  SISA (user%K, MEAN)     : {r3:.4f}   (so Full {r3 - r1:+.4f})")
+    print(f"  Ours (signature, HARD)  : {r4:.4f}   (so Full {r4 - r1:+.4f})")
+    if r6 is not None:
+        print(f"  Rec vs SISA           : {r6 - r3:+.4f}   (UBP vs modulo)")
+        print(f"  Ours vs Rec same-cap  : {r4 - r6:+.4f}")
+    print("-" * 60)
+    print("  => So sánh này đã loại bỏ 8× tham số + attention + WMF-in-model của Rec;")
+    print("     còn lại đúng hiệu ứng PARTITION (UBP vs modulo vs signature).")
     print("=" * 68)
     if r3 < r2:
         print("  KẾT LUẬN: Shard data (C3) < Full-ensemble (C2) => lợi thế utility đến từ")
