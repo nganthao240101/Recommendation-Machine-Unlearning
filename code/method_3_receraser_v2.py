@@ -146,130 +146,167 @@ def load_model(model, path, device):
 # ============================================================================
 
 class DataPartitioner:
-    def __init__(self, n_shards=8, partition_type=1, seed=42):
+    def __init__(self, n_shards=8, partition_type=1, seed=42, T=10):
         """
         partition_type:
-          1: InP (Interaction-based Partition)
-          2: UBP (User-based Partition)
-          3: Random
+          1: InP (Interaction-based Partition, RecEraser paper — user+item emb, balanced)
+          2: UBP (User-based Partition, RecEraser paper — user-only emb, balanced)
+          3: Random (modulo, always balanced)
+        T: số iteration k-means (InP và UBP; không dùng cho Random)
         """
         self.n_shards = n_shards
         self.partition_type = partition_type
         self.seed = seed
+        self.T = T
         self.user_to_shard = None
         self.shard_data = None
 
     def partition_users(self, train_data, n_users, user_emb=None, item_emb=None):
-        """Chia users vào các shards"""
+        """Chia users vào các shards (RecEraser paper: UBP/InP balanced + Random modulo)"""
         random.seed(self.seed)
         np.random.seed(self.seed)
 
         if self.partition_type == 3:
-            # Random partition
             return self._partition_random(n_users)
         elif self.partition_type == 2:
-            # UBP: User-based partition (dựa trên user embeddings)
-            return self._partition_ubp(n_users, user_emb)
+            return self._partition_ubp_paper(train_data, n_users, user_emb)
         elif self.partition_type == 1:
-            # InP: Interaction-based partition (dựa trên user-item embeddings)
-            return self._partition_inp(train_data, n_users, user_emb, item_emb)
+            return self._partition_inp_paper(train_data, n_users, user_emb, item_emb)
         else:
             raise ValueError(f"Unknown partition_type: {self.partition_type}")
 
     def _partition_random(self, n_users):
-        """Random partition (như bài báo gốc)"""
+        """Random partition (modulo, luôn cân bằng)"""
         self.user_to_shard = np.zeros(n_users, dtype=np.int32)
         for uid in range(n_users):
             self.user_to_shard[uid] = uid % self.n_shards
-        print(f"    [Partition] Random: {self.n_shards} shards")
+        print(f"    [Random] {self.n_shards} shards (modulo, balanced)")
         return self.user_to_shard
 
-    def _partition_ubp(self, n_users, user_emb):
-        """UBP: User-based partition - dựa trên similarity của user embeddings"""
-        print(f"    [Partition] UBP: {self.n_shards} shards (using user embeddings)")
+    @staticmethod
+    def _e_score2(a, b):
+        """E_score2 = squared L2 (độ "sai" giữa 2 vector embedding), như code gốc."""
+        return float(np.sum(np.power(np.asarray(a) - np.asarray(b), 2)))
 
-        # K-means clustering trên user embeddings
-        user_emb_valid = user_emb[:n_users]
+    def _partition_ubp_paper(self, train_data, n_users, user_emb):
+        """UBP (RecEraser paper, data_partition_2): k-means user-only + cản cân bằng.
 
-        # Random init centroids
-        centroids_idx = random.sample(range(n_users), self.n_shards)
-        centroids = user_emb_valid[centroids_idx]
+        Cân bằng: mỗi shard <= max_data = 1.2*N/K (như 'max_data' trong code gốc).
+        """
+        print(f"    [UBP] {self.n_shards} shards (user embeddings, balanced, T={self.T})")
+        uidW = np.asarray(user_emb[:n_users])
+        users_all = list(train_data.keys())
+        max_data = 1.2 * len(users_all) / self.n_shards
 
-        # K-means iterations - increase to 50 for better convergence
-        for iteration in range(50):
-            # Assign users to nearest centroid
-            distances = np.zeros((n_users, self.n_shards))
+        if n_users <= self.n_shards:
+            self.user_to_shard = np.zeros(n_users, dtype=np.int32)
+            for u in range(n_users):
+                self.user_to_shard[u] = u % self.n_shards
+            return self.user_to_shard
+
+        # Init centroids
+        centroids_idx = random.sample(users_all[:n_users], self.n_shards)
+        centro = np.array([uidW[c] for c in centroids_idx])
+
+        assign = np.zeros(n_users, dtype=np.int32)
+        for _ in range(self.T):
+            C = [set() for _ in range(self.n_shards)]
+            # điểm gán: squared-error của TỪNG user tới từng centroid
+            d = np.zeros((n_users, self.n_shards))
             for k in range(self.n_shards):
-                distances[:, k] = np.linalg.norm(user_emb_valid - centroids[k], axis=1)
-
-            new_assignments = np.argmin(distances, axis=1)
-
-            # Check convergence
-            if iteration > 0 and np.array_equal(new_assignments, prev_assignments):
-                print(f"    [UBP] Converged at iteration {iteration}")
+                d[:, k] = np.sum((uidW - centro[k]) ** 2, axis=1)
+            for uid in range(n_users):
+                k = int(np.argmin(d[uid]))
+                if len(C[k]) < max_data:
+                    C[k].add(uid); assign[uid] = k
+                else:
+                    # shard đầy -> đưa sang shard trống nhất (còn chỗ)
+                    for k2 in range(self.n_shards):
+                        if len(C[k2]) < max_data:
+                            C[k2].add(uid); assign[uid] = k2; break
+            # cập nhật centroids (mean user emb của từng shard)
+            centro_new = centro.copy()
+            for k in range(self.n_shards):
+                if C[k]:
+                    centro_new[k] = uidW[list(C[k])].mean(axis=0)
+            if np.allclose(centro_new, centro, atol=1e-6):
                 break
-            prev_assignments = new_assignments.copy()
+            centro = centro_new
 
-            # Update centroids
-            for k in range(self.n_shards):
-                mask = new_assignments == k
-                if mask.sum() > 0:
-                    centroids[k] = user_emb_valid[mask].mean(axis=0)
-
-        self.user_to_shard = new_assignments
-
-        # Print statistics
-        shard_counts = np.bincount(self.user_to_shard, minlength=self.n_shards)
-        print(f"    [UBP] Shard sizes: min={shard_counts.min()}, max={shard_counts.max()}")
-
+        self.user_to_shard = assign.astype(np.int32)
+        counts = np.bincount(self.user_to_shard, minlength=self.n_shards)
+        print(f"    [UBP] shard sizes min/max = {counts.min()}/{counts.max()}")
         return self.user_to_shard
 
-    def _partition_inp(self, train_data, n_users, user_emb, item_emb):
-        """InP: Interaction-based partition - dựa trên user-item interaction similarity"""
-        print(f"    [Partition] InP: {self.n_shards} shards (using user-item embeddings)")
+    def _partition_inp_paper(self, train_data, n_users, user_emb, item_emb):
+        """InP (RecEraser paper, data_partition_1): gán INTERACTION theo user+item emb.
 
-        # Tạo user representation từ user và item embeddings
-        user_emb_valid = user_emb[:n_users]
+        Khác UBP: mỗi (u,i) được gán vào shard; user i thuộc shard nào = shard của
+        interaction chính nó. Có cản cân bằng (mỗi shard <= max_data interactions).
+        Đây mới đúng tư tưởng 'interaction-based' của RecEraser.
+        """
+        print(f"    [InP] {self.n_shards} shards (user+item emb, balanced, T={self.T})")
+        uidW = np.asarray(user_emb[:n_users])
+        iidW = np.asarray(item_emb)
+        ni = iidW.shape[0]
 
-        # Với mỗi user, lấy trung bình item embeddings của các items user đã tương tác
-        user_repr = np.zeros((n_users, user_emb.shape[1]))
-        for uid, items in train_data.items():
-            if uid < n_users and len(items) > 0:
-                valid_items = [i for i in items if i < item_emb.shape[0]]
-                if valid_items:
-                    user_repr[uid] = item_emb[valid_items].mean(axis=0)
+        # danh sách interactions (u, i)
+        data = []
+        for u, items in train_data.items():
+            if u < n_users:
+                for i in items:
+                    if i < ni:
+                        data.append((u, i))
+        if not data:
+            return self._partition_random(n_users)
 
-        # K-means clustering
-        user_repr_valid = user_repr[:n_users]
+        N = len(data)
+        max_data = 1.2 * N / self.n_shards
 
-        # Random init centroids
-        centroids_idx = random.sample(range(n_users), self.n_shards)
-        centroids = user_repr_valid[centroids_idx]
+        # centroids = (user_emb, item_emb) của k interactions chọn ngẫu nhiên
+        centroids = random.sample(data, self.n_shards)
+        centro_u = np.array([uidW[c[0]] for c in centroids])
+        centro_i = np.array([iidW[c[1]] for c in centroids])
 
-        # K-means iterations - increase to 50 for better convergence
-        for iteration in range(50):
-            distances = np.zeros((n_users, self.n_shards))
+        user_to_shard = np.zeros(n_users, dtype=np.int32)
+
+        # Vectorized: su[i, k] = ||uidW[u_i] - centro_u[k]||^2
+        u_arr = np.array([uidW[data[t][0]] for t in range(N)])  # (N, D)
+        i_arr = np.array([iidW[data[t][1]] for t in range(N)])  # (N, D)
+
+        for _ in range(self.T):
+            C = [set() for _ in range(self.n_shards)]
+            su = np.zeros((N, self.n_shards))
+            si = np.zeros((N, self.n_shards))
             for k in range(self.n_shards):
-                distances[:, k] = np.linalg.norm(user_repr_valid - centroids[k], axis=1)
-
-            new_assignments = np.argmin(distances, axis=1)
-
-            # Check convergence
-            if iteration > 0 and np.array_equal(new_assignments, prev_assignments):
-                print(f"    [InP] Converged at iteration {iteration}")
+                su[:, k] = np.sum((u_arr - centro_u[k]) ** 2, axis=1)
+                si[:, k] = np.sum((i_arr - centro_i[k]) ** 2, axis=1)
+            score = -su * si
+            # argsort dọc axis=1: order[t] = shard nên đặt data[t] vào (score cao nhất)
+            order = np.argsort(score, axis=1)
+            for t in range(N):
+                u = data[t][0]
+                for k in order[t]:
+                    if u not in C[k] and len(C[k]) < max_data:
+                        C[k].add(u); user_to_shard[u] = int(k); break
+                else:
+                    for k in range(self.n_shards):
+                        if u not in C[k] and len(C[k]) < max_data:
+                            C[k].add(u); user_to_shard[u] = int(k); break
+            new_cu, new_ci = centro_u.copy(), centro_i.copy()
+            for k in range(self.n_shards):
+                if C[k]:
+                    new_cu[k] = uidW[list(C[k])].mean(axis=0)
+                    items_k = [i for u in C[k] for i in train_data.get(u, []) if i < ni]
+                    if items_k:
+                        new_ci[k] = iidW[items_k].mean(axis=0)
+            if np.allclose(new_cu, centro_u, atol=1e-6) and np.allclose(new_ci, centro_i, atol=1e-6):
                 break
-            prev_assignments = new_assignments.copy()
+            centro_u, centro_i = new_cu, new_ci
 
-            for k in range(self.n_shards):
-                mask = new_assignments == k
-                if mask.sum() > 0:
-                    centroids[k] = user_repr_valid[mask].mean(axis=0)
-
-        self.user_to_shard = new_assignments
-
-        shard_counts = np.bincount(self.user_to_shard, minlength=self.n_shards)
-        print(f"    [InP] Shard sizes: min={shard_counts.min()}, max={shard_counts.max()}")
-
+        self.user_to_shard = user_to_shard.astype(np.int32)
+        counts = np.bincount(self.user_to_shard, minlength=self.n_shards)
+        print(f"    [InP] shard sizes min/max = {counts.min()}/{counts.max()}")
         return self.user_to_shard
 
     def build_shard_data(self, train_data):
