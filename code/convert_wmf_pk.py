@@ -47,6 +47,11 @@ def main():
     ipk = os.path.join(ddir, 'item_pretrain.pk')
     out = os.path.join(ddir, 'wmf_embeddings.npz')
 
+    # Nếu .npz đã có -> skip (không cần đọc .pk nữa; .pk có thể là dict, không array)
+    if os.path.exists(out) and not args.check:
+        print(f"[skip] {out} đã tồn tại.")
+        return
+
     if not (os.path.exists(upk) and os.path.exists(ipk)):
         print(f"[LỖI] Không tìm thấy .pk tại:\n  {upk}\n  {ipk}")
         print("       -> dataset này dùng WMF khác (hãy chạy pretrain_wmf.py).")
@@ -57,8 +62,17 @@ def main():
     with open(ipk, 'rb') as f:
         item_emb = pickle.load(f)
 
-    user_emb = np.asarray(user_emb, dtype=np.float32)
-    item_emb = np.asarray(item_emb, dtype=np.float32)
+    # .pk có thể là ndarray HOẶC dict {id: emb}; chuẩn hóa về (N, D)
+    if isinstance(user_emb, dict):
+        idx = sorted(int(k) for k in user_emb)
+        user_emb = np.array([user_emb[i] for i in idx], dtype=np.float32)
+    else:
+        user_emb = np.asarray(user_emb, dtype=np.float32)
+    if isinstance(item_emb, dict):
+        idx = sorted(int(k) for k in item_emb)
+        item_emb = np.array([item_emb[i] for i in idx], dtype=np.float32)
+    else:
+        item_emb = np.asarray(item_emb, dtype=np.float32)
     print(f"[read] user_emb {user_emb.shape}  item_emb {item_emb.shape}  (dtype float32)")
 
     # (tùy chọn) đối chiếu với train.txt
