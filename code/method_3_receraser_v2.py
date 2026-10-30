@@ -600,9 +600,19 @@ def train_model(model, partitioner, shard_data, n_items, device, batch_size=512,
             print(f"    Epoch {epoch+1}: loss={total_loss/n_batches:.4f}")
 
 
-def train_aggregator(model, train_data, n_users, n_items, device, batch_size=512, lr=0.05, max_epochs=50):
-    """Train attention aggregator (Phase 2)"""
-    optimizer = torch.optim.Adagrad(model.parameters(), lr=lr, initial_accumulator_value=1e-8)
+def train_aggregator(model, train_data, n_users, n_items, device, batch_size=512, lr=0.005, max_epochs=50):
+    """Train attention aggregator (Phase 2).
+
+    Chống NaN (đặc biệt trên dataset to/sparse như yelp):
+      - Adagrad `initial_accumulator_value=1.0` (chuẩn) thay vì 1e-8
+        (1e-8 -> update đầu cực lớn -> embedding "bay" -> reg/loss NaN).
+      - lr nhỏ (0.005), clip gradient, và SKIP batch NaN (không để NaN lan
+        sang optimizer / parameters).
+      - Giữ nguyên cơ chế ATTENTION (không phải mean).
+    """
+    # initial_accumulator_value=1.0: bước Adagrad đầu "đúng mức" (tránh NaN do update đầu)
+    optimizer = torch.optim.Adagrad(model.parameters(), lr=lr, initial_accumulator_value=1.0)
+    n_nan_skipped = 0
 
     # Create samples from full training data
     samples = []
@@ -635,12 +645,20 @@ def train_aggregator(model, train_data, n_users, n_items, device, batch_size=512
 
             optimizer.zero_grad()
             loss = model(users, pos_items, neg_items, shard=0, use_aggregation=True)
+
+            # SKIP batch NaN (bỏ update, không để NaN lan)
+            if torch.isnan(loss) or torch.isinf(loss):
+                n_nan_skipped += 1
+                continue
+
             loss.backward()
+            torch.nn.utils.clip_grad_norm_(model.parameters(), 1.0)   # chặn gradient "bay"
             optimizer.step()
             total_loss += loss.item()
 
         if (epoch + 1) % 10 == 0:
-            print(f"    Agg Epoch {epoch+1}: loss={total_loss/n_batches:.4f}")
+            print(f"    Agg Epoch {epoch+1}: loss={total_loss/max(1,n_batches):.4f}"
+                  + (f"  (skipped {n_nan_skipped} NaN batches)" if n_nan_skipped else ""))
 
 
 # ============================================================================
