@@ -273,23 +273,33 @@ class DataPartitioner:
         centro = np.array([uidW[c] for c in centroids_idx])
 
         assign = np.zeros(n_users, dtype=np.int32)
-        # Chỉ gán user_active (không gán user không có trong train_data)
         active_arr = np.array(users_all, dtype=np.int64)
 
         for _ in range(self.T):
             C = [set() for _ in range(self.n_shards)]
-            # squared-error của TỪNG user active tới từng centroid
+            # điểm gán = -E_score2 (squared error) của TỪNG user tới TỪNG centroid
             d = np.zeros((n_active, self.n_shards))
             for k in range(self.n_shards):
                 d[:, k] = np.sum((uidW[active_arr] - centro[k]) ** 2, axis=1)
-            for t, uid in enumerate(users_all):
-                k = int(np.argmin(d[t]))
-                if len(C[k]) < max_data:
-                    C[k].add(uid); assign[uid] = k
-                else:
-                    for k2 in range(self.n_shards):
-                        if len(C[k2]) < max_data:
-                            C[k2].add(uid); assign[uid] = k2; break
+            score = -d   # Scores[i,j] = -score_u (đúng data_partition_2)
+
+            # ===== Đúng code gốc: sort TOÀN BỘ cặp (user,shard) theo điểm giảm dần,
+            # rồi lần lượt gán; user nào chưa được gán thì fall-through xuống shard
+            # (điểm thấp hơn) còn chỗ. (KHÔNG phải "shard trống nhất".) =====
+            flat = np.argsort(-score, axis=None)   # sắp theo điểm giảm
+            placed = np.zeros(n_active, dtype=bool)
+            counts = np.zeros(self.n_shards, dtype=np.int32)
+            for fidx in flat:
+                t = fidx // self.n_shards
+                k = int(fidx % self.n_shards)
+                if placed[t]:
+                    continue
+                if counts[k] < max_data:
+                    counts[k] += 1
+                    C[k].add(int(active_arr[t]))
+                    assign[int(active_arr[t])] = k
+                    placed[t] = True
+
             # cập nhật centroids (mean user emb của từng shard)
             centro_new = centro.copy()
             for k in range(self.n_shards):
@@ -339,6 +349,7 @@ class DataPartitioner:
         # Vectorized: su[i, k] = ||uidW[u_i] - centro_u[k]||^2
         u_arr = np.array([uidW[data[t][0]] for t in range(N)])  # (N, D)
         i_arr = np.array([iidW[data[t][1]] for t in range(N)])  # (N, D)
+        u_of = np.array([data[t][0] for t in range(N)])         # user của interaction t
 
         for _ in range(self.T):
             C = [set() for _ in range(self.n_shards)]
@@ -347,18 +358,25 @@ class DataPartitioner:
             for k in range(self.n_shards):
                 su[:, k] = np.sum((u_arr - centro_u[k]) ** 2, axis=1)
                 si[:, k] = np.sum((i_arr - centro_i[k]) ** 2, axis=1)
-            score = -su * si
-            # argsort dọc axis=1: order[t] = shard nên đặt data[t] vào (score cao nhất)
-            order = np.argsort(score, axis=1)
-            for t in range(N):
-                u = data[t][0]
-                for k in order[t]:
-                    if u not in C[k] and len(C[k]) < max_data:
-                        C[k].add(u); user_to_shard[u] = int(k); break
-                else:
-                    for k in range(self.n_shards):
-                        if u not in C[k] and len(C[k]) < max_data:
-                            C[k].add(u); user_to_shard[u] = int(k); break
+            score = -su * si   # Scores[i,j] = -score_u*score_i (đúng data_partition_1)
+
+            # ===== Đúng code gốc: sort TOÀN BỘ cặp (interaction,shard) theo điểm giảm,
+            # duyệt lần lượt; đặt user ĐÚNG 1 LẦN (fl), shard đầy -> fall-through. =====
+            flat = np.argsort(-score, axis=None)   # thứ tự toàn cục, điểm cao nhất trước
+            placed = np.zeros(n_users, dtype=bool)
+            counts = np.zeros(self.n_shards, dtype=np.int32)
+            for fidx in flat:
+                t = fidx // self.n_shards
+                k = int(fidx % self.n_shards)
+                u = int(u_of[t])
+                if placed[u]:
+                    continue
+                if counts[k] < max_data:
+                    counts[k] += 1
+                    C[k].add(u)
+                    user_to_shard[u] = k
+                    placed[u] = True
+
             new_cu, new_ci = centro_u.copy(), centro_i.copy()
             for k in range(self.n_shards):
                 if C[k]:
