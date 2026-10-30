@@ -204,11 +204,17 @@ def main():
     print("\nPHÂN TÍCH:")
     for r in rows:
         note = []
+        if r['instability'] > 0:
+            note.append(f"KHÔNG deletion-stable ({r['instability']:.1f}% user retained đổi shard)")
         if r['effective_affected'] > r['naive_affected']:
-            note.append(f"+{r['extra']} shards bị ẩn do re-partition")
+            note.append(f"+{r['extra']} shards bị ẩn do re-partition (naive {r['naive_affected']} -> eff {r['effective_affected']})")
         if r['similarity_aware'] and r['deletion_stable']:
             note.append("DUY NHẤT: vừa similarity-aware VỪA deletion-stable")
-        print(f"  {r['method']}: " + (", ".join(note) if note else "stable (không đổi shard)"))
+        if not note and r['deletion_stable'] and not r['similarity_aware']:
+            note.append("stable (không similarity-aware)")
+        if not note:
+            note.append("không đổi shard")
+        print(f"  {r['method']}: " + ", ".join(note))
     print(f"\nTotal time: {time.time()-t0:.1f}s")
 
 
