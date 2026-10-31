@@ -532,9 +532,10 @@ def main():
                 user_emb_expanded = np.concatenate([user_emb_np] * args.part_num, axis=1)
                 item_emb_expanded = np.concatenate([item_emb_np] * args.part_num, axis=1)
 
-                # Load into model
-                model.user_embedding.weight.data = torch.FloatTensor(user_emb_expanded)
-                model.item_embedding.weight.data = torch.FloatTensor(item_emb_expanded)
+                # Load into model (fix: đưa tensor lên đúng device của model,
+                # tránh 'cpu vs cuda:0' khi chạy GPU - bug môi trường của code gốc)
+                model.user_embedding.weight.data = torch.FloatTensor(user_emb_expanded).to(device)
+                model.item_embedding.weight.data = torch.FloatTensor(item_emb_expanded).to(device)
 
                 print(f'Loaded WMF embeddings: user {user_emb_np.shape}, item {item_emb_np.shape}')
                 print(f'Expanded to {args.part_num} shards: user {user_emb_expanded.shape}')
