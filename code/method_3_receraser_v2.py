@@ -114,7 +114,7 @@ def load_or_train_receraser(dataset='ml-1m', emb_dim=64, n_shards=8, partition_t
                            max_epochs_wmf=100, max_epochs_local=50, batch_size=512, lr=0.01,
                            lr_finetune=0.001):
     """Load RecEraser model từ file, hoặc train nếu chưa có"""
-    partition_names = {1: 'InP', 2: 'UBP', 3: 'Random'}
+    partition_names = {1: 'InP', 2: 'UBP', 3: 'Random', 4: 'UBP-unbal', 5: 'InP-unbal'}
     partition_name = partition_names.get(partition_type, 'Random')
 
     checkpoint_dir = os.path.join(PROJ, 'checkpoints')
@@ -175,8 +175,73 @@ class DataPartitioner:
             return self._partition_ubp_paper(train_data, n_users, user_emb)
         elif self.partition_type == 1:
             return self._partition_inp_paper(train_data, n_users, user_emb, item_emb)
+        elif self.partition_type == 4:
+            # UBP KHÔNG CẢN CÂN BẰNG (restore version "cũ", cho kết quả ~0.1092)
+            return self._partition_ubp_unbalanced(n_users, user_emb)
+        elif self.partition_type == 5:
+            # InP KHÔNG CẢN CÂN BẰNG (restore version "cũ")
+            return self._partition_inp_unbalanced(train_data, n_users, user_emb, item_emb)
         else:
             raise ValueError(f"Unknown partition_type: {self.partition_type}")
+
+    # ------------------------------------------------------------------
+    # UNBALANCED (restore "version cũ" - k-means thuần, KHÔNG cản max_data)
+    #   Đây là partition từng cho Rec ~0.1092 (ml-1m, K=8, UBP). So với
+    #   version 1:1 "cân bằng" (type 2) chỉ ở điểm KHÔNG có cap cân bằng.
+    #   KHÔNG sửa các method cân bằng (type 1/2) - chỉ thêm.
+    # ------------------------------------------------------------------
+    def _partition_ubp_unbalanced(self, n_users, user_emb):
+        """UBP k-means THUẦN (không cản cân bằng) - như version cc15223."""
+        print(f"    [UBP-unbal] {self.n_shards} shards (k-means, KHÔNG cản cân bằng)")
+        user_emb_valid = user_emb[:n_users]
+        centroids = user_emb_valid[random.sample(range(n_users), self.n_shards)]
+        prev = None
+        for it in range(50):
+            d = np.zeros((n_users, self.n_shards))
+            for k in range(self.n_shards):
+                d[:, k] = np.linalg.norm(user_emb_valid - centroids[k], axis=1)
+            new = np.argmin(d, axis=1)
+            if it > 0 and prev is not None and np.array_equal(new, prev):
+                print(f"    [UBP-unbal] Converged at iteration {it}")
+                break
+            prev = new.copy()
+            for k in range(self.n_shards):
+                m = new == k
+                if m.sum() > 0:
+                    centroids[k] = user_emb_valid[m].mean(axis=0)
+        self.user_to_shard = new.astype(np.int32)
+        c = np.bincount(self.user_to_shard, minlength=self.n_shards)
+        print(f"    [UBP-unbal] shard sizes min/max = {c.min()}/{c.max()}  (lệch = bình thường)")
+        return self.user_to_shard
+
+    def _partition_inp_unbalanced(self, train_data, n_users, user_emb, item_emb):
+        """InP k-means THUẦN (không cản cân bằng) - như version cc15223."""
+        print(f"    [InP-unbal] {self.n_shards} shards (k-means, KHÔNG cản cân bằng)")
+        rep = np.zeros((n_users, user_emb.shape[1]))
+        for uid, items in train_data.items():
+            if uid < n_users and items:
+                valid = [i for i in items if i < item_emb.shape[0]]
+                if valid:
+                    rep[uid] = item_emb[valid].mean(axis=0)
+        centroids = rep[random.sample(range(n_users), self.n_shards)]
+        prev = None
+        for it in range(50):
+            d = np.zeros((n_users, self.n_shards))
+            for k in range(self.n_shards):
+                d[:, k] = np.linalg.norm(rep - centroids[k], axis=1)
+            new = np.argmin(d, axis=1)
+            if it > 0 and prev is not None and np.array_equal(new, prev):
+                print(f"    [InP-unbal] Converged at iteration {it}")
+                break
+            prev = new.copy()
+            for k in range(self.n_shards):
+                m = new == k
+                if m.sum() > 0:
+                    centroids[k] = rep[m].mean(axis=0)
+        self.user_to_shard = new.astype(np.int32)
+        c = np.bincount(self.user_to_shard, minlength=self.n_shards)
+        print(f"    [InP-unbal] shard sizes min/max = {c.min()}/{c.max()}  (lệch = bình thường)")
+        return self.user_to_shard
 
     # ------------------------------------------------------------------
     # CACHE (giữ giống bộ utility cũ: C / C_U / C_I .pk, định danh theo type + k)
@@ -725,7 +790,7 @@ def run_receraser_v2(dataset='ml-1m', emb_dim=64, n_shards=8, partition_type=1,
       2: UBP (User-based Partition)
       3: Random
     """
-    partition_names = {1: 'InP', 2: 'UBP', 3: 'Random'}
+    partition_names = {1: 'InP', 2: 'UBP', 3: 'Random', 4: 'UBP-unbal', 5: 'InP-unbal'}
     partition_name = partition_names.get(partition_type, 'Unknown')
     attention_str = 'attn' if use_attention else 'mean'
 
@@ -812,7 +877,7 @@ def run_receraser_v2(dataset='ml-1m', emb_dim=64, n_shards=8, partition_type=1,
     print("STEP 3: TRAIN RECERASER")
     print(f"{'='*70}")
 
-    partition_names = {1: 'InP', 2: 'UBP', 3: 'Random'}
+    partition_names = {1: 'InP', 2: 'UBP', 3: 'Random', 4: 'UBP-unbal', 5: 'InP-unbal'}
     partition_name = partition_names.get(partition_type, 'Random')
     attention_str = 'attn' if use_attention else 'mean'
     checkpoint_dir = os.path.join(PROJ, 'checkpoints')
@@ -935,8 +1000,8 @@ if __name__ == '__main__':
     parser.add_argument('--dataset', type=str, default='ml-1m')
     parser.add_argument('--emb_dim', type=int, default=64)
     parser.add_argument('--n_shards', type=int, default=8)
-    parser.add_argument('--partition_type', type=int, default=1, choices=[1, 2, 3],
-                       help='1=InP, 2=UBP, 3=Random')
+    parser.add_argument('--partition_type', type=int, default=1, choices=[1, 2, 3, 4, 5],
+                       help='1=InP, 2=UBP, 3=Random, 4=UBP-unbalanced, 5=InP-unbalanced')
     parser.add_argument('--max_epochs_wmf', type=int, default=100)
     parser.add_argument('--max_epochs_local', type=int, default=50)
     parser.add_argument('--unlearn_ratio', type=float, default=0.1)
