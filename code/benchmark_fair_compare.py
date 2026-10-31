@@ -167,10 +167,18 @@ def train_ours(n_users, n_items, emb_dim, train, test, device, K, max_epochs,
 
 
 def train_rec(n_users, n_items, emb_dim, train, test, device, K, max_epochs,
-              batch_size=512, lr=0.05, use_attention=True):
-    """Rec thật (no WMF): random partition, RecEraserModel attention/mean."""
-    part = RecPartitioner(n_shards=K, partition_type=3, seed=42)
-    part.partition_users(train, n_users, None, None)
+              batch_size=512, lr=0.05, use_attention=True, partition_type=3,
+              user_emb=None, item_emb=None):
+    """Rec (no WMF-in-model): RecEraserModel attention/mean, CÙNG capacity.
+
+    - partition_type=3 (random, default) hoặc 2 (UBP; cần user_emb/item_emb
+      CHỈ để partition, không nạp vào model).
+    - model khởi tạo embedding RANDOM (xavier) -> KHÔNG có 8× WMF params
+      -> so công bằng cùng K với SISA/Ours.
+    - use_attention=True -> aggregator CHÚ Ý (attention), KHÔNG mean.
+    """
+    part = RecPartitioner(n_shards=K, partition_type=partition_type, seed=42)
+    part.partition_users(train, n_users, user_emb, item_emb)
     part.build_shard_data(train)
     model = RecEraserModel(n_users, n_items, emb_dim, num_local=K, use_attention=use_attention).to(device)
     for sid in range(K):
@@ -193,6 +201,8 @@ def main():
     p.add_argument('--unlearn_mode', default='random', choices=['random', 'fewest', 'most'])
     p.add_argument('--signature_dim', type=int, default=64)
     p.add_argument('--skip_rec', action='store_true', help='skip Rec (attention) if slow')
+    p.add_argument('--rec_attn', action='store_true',
+                   help='run C7: Rec with ATTENTION aggregator (no WMF-in-model, same capacity)')
     args = p.parse_args()
 
     K = args.n_shards
@@ -289,6 +299,34 @@ def main():
         results['C5 Rec (attn)'] = (c5_recall, c5_time, K)
         print(f"  C5 R@10={c5_recall:.4f}  time={c5_time:.0f}s")
 
+    # ------------------------------------------------------------------
+    # C7: Rec ATTENTION (UBP partition, KHÔNG WMF-in-model, CÙNG capacity K)
+    #   -> Rec dùng AGGREGATOR ATTENTION THẬT (không mean), embedding RANDOM
+    #      (KHÔNG có 8× WMF) -> so công bằng "attention vs mean/SISA/Ours".
+    #   -> UBP partition cần WMF pretrain CHỈ để chia shard (không nạp model).
+    # ------------------------------------------------------------------
+    if args.rec_attn:
+        print(f"\n=== C7: Rec ATTENTION (UBP, no WMF-in-model, same capacity K) ===")
+        wmf_path = os.path.join(os.path.dirname(os.path.dirname(__file__)),
+                                'data', args.dataset, 'wmf_embeddings.npz')
+        r_user_emb, r_item_emb = None, None
+        if os.path.exists(wmf_path):
+            w = np.load(wmf_path)
+            r_user_emb, r_item_emb = w['user_embeddings'], w['item_embeddings']
+            print(f"  [C7] dùng WMF pretrain CHỈ để UBP partition (không nạp vào model)")
+        else:
+            print(f"  [C7] KHÔNG có WMF -> Rec attention dùng RANDOM partition (không UBP)")
+        t0 = time.time()
+        c7m, c7part = train_rec(n_users, n_items, args.emb_dim, train_r, test_r, device, K,
+                                args.max_epochs, use_attention=True,
+                                partition_type=2 if r_user_emb is not None else 3,
+                                user_emb=r_user_emb, item_emb=r_item_emb)
+        c7_time = time.time() - t0
+        c7 = rec_eval(c7m, c7part, train_r, test_r, n_users, n_items, device)
+        c7_recall = c7[0] if isinstance(c7, tuple) else c7['recall'][0]
+        results['C7 Rec (attn, same-cap)'] = (c7_recall, c7_time, K)
+        print(f"  C7 R@10={c7_recall:.4f}  time={c7_time:.0f}s")
+
     # BẢNG TỔNG HỢP
     print("\n" + "=" * 68)
     print(f"{'CONFIG':<20} {'R@10':>8} {'Time(s)':>8} {'#model':>7}")
@@ -321,6 +359,15 @@ def main():
     if r6 is not None:
         print(f"  Rec vs SISA           : {r6 - r3:+.4f}   (UBP vs modulo)")
         print(f"  Ours vs Rec same-cap  : {r4 - r6:+.4f}")
+
+    # C7 Rec ATTENTION (nếu bật --rec_attn): so với SISA(mean)/Ours(hard)
+    r7 = results.get('C7 Rec (attn, same-cap)', (None,))[0]
+    if r7 is not None:
+        print("\nREC ATTENTION (C7, no WMF-in-model, same capacity) so SISA/Ours:")
+        print(f"  Rec ATTENTION vs SISA (C7 - C3) = {r7 - r3:+.4f}   (attention vs mean)")
+        print(f"  Rec ATTENTION vs Ours (C7 - C4) = {r7 - r4:+.4f}   (attention vs hard-routing)")
+        print(f"  Rec ATTENTION vs Rec MEAN same-cap (C7 - C6) = "
+              f"{(r7 - results.get('C6 Rec (same-cap)', (None,))[0]) if results.get('C6 Rec (same-cap)', (None,))[0] is not None else float('nan'):+.4f}  (attention vs mean, cùng UBP)")
     print("-" * 60)
     print("  => So sánh này đã loại bỏ 8× tham số + attention + WMF-in-model của Rec;")
     print("     còn lại đúng hiệu ứng PARTITION (UBP vs modulo vs signature).")
