@@ -203,6 +203,8 @@ def main():
     p.add_argument('--skip_rec', action='store_true', help='skip Rec (attention) if slow')
     p.add_argument('--rec_attn', action='store_true',
                    help='run C7: Rec with ATTENTION aggregator (no WMF-in-model, same capacity)')
+    p.add_argument('--rec_matrix', action='store_true',
+                   help='run Rec matrix: InP/UBP/Random x mean/attention (same capacity)')
     args = p.parse_args()
 
     K = args.n_shards
@@ -326,6 +328,75 @@ def main():
         c7_recall = c7[0] if isinstance(c7, tuple) else c7['recall'][0]
         results['C7 Rec (attn, same-cap)'] = (c7_recall, c7_time, K)
         print(f"  C7 R@10={c7_recall:.4f}  time={c7_time:.0f}s")
+
+    # ------------------------------------------------------------------
+    # REC MATRIX (--rec_matrix): InP / UBP / Random  x  mean / attention
+    #   "mean"  = K BPRMF độc lập + mean ensemble (KHÔNG WMF-in-model)
+    #   "attn"  = RecEraserModel attention aggregator (KHÔNG WMF-in-model)
+    #   InP/UBP cần WMF pretrain CHỈ để partition (k-means); Random không cần.
+    #   Toàn bộ CÙNG capacity K -> so công bằng partition x aggregation.
+    # ------------------------------------------------------------------
+    if args.rec_matrix:
+        print(f"\n=== REC MATRIX: {['InP','UBP','Random']} x {['mean','attention']} (same capacity K={K}) ===")
+        wmf_path = os.path.join(os.path.dirname(os.path.dirname(__file__)),
+                                'data', args.dataset, 'wmf_embeddings.npz')
+        mx_user_emb, mx_item_emb = None, None
+        if os.path.exists(wmf_path):
+            w = np.load(wmf_path)
+            mx_user_emb, mx_item_emb = w['user_embeddings'], w['item_embeddings']
+            print(f"  [matrix] dùng WMF pretrain CHỈ để InP/UBP partition (không nạp model)")
+        else:
+            print(f"  [matrix] KHÔNG có WMF -> InP/UBP mean-skip; chỉ chạy Random mean/attn")
+        # partition_type: 1=InP, 2=UBP, 3=Random
+        ptype_map = [('InP', 1, True), ('UBP', 2, True), ('Random', 3, False)]
+        for pshort, pt, needs_wmf in ptype_map:
+            use_part = (not needs_wmf) or (mx_user_emb is not None)
+            for agg in ('mean', 'attn'):
+                key = f"RM {pshort}-{agg}"
+                if not use_part:
+                    results[key] = (None, 0.0, K)
+                    print(f"  {key:<18} SKIP (thiếu WMF để partition {pshort})")
+                    continue
+                t0 = time.time()
+                if agg == 'mean':
+                    # K BPRMF độc lập trên partition + mean ensemble (giống C6)
+                    rpart = RecPartitioner(n_shards=K, partition_type=pt, seed=42)
+                    rpart.partition_users(train_r, n_users, mx_user_emb, mx_item_emb)
+                    rpart.build_shard_data(train_r)
+                    m_ens = [train_full_single(n_users, n_items, args.emb_dim, rpart.shard_data[sid],
+                                                test_r, device, args.max_epochs, seed=sid)
+                             for sid in range(K)]
+                    mx_res = evaluate_mean_ensemble(m_ens, train_r, test_r, n_users, n_items, device)
+                    mx_recall = mx_res['recall'][0]
+                else:
+                    # RecEraserModel attention aggregator (random emb, không WMF-in-model)
+                    m_rec, rp = train_rec(n_users, n_items, args.emb_dim, train_r, test_r, device, K,
+                                          args.max_epochs, use_attention=True,
+                                          partition_type=pt, user_emb=mx_user_emb, item_emb=mx_item_emb)
+                    mx = rec_eval(m_rec, rp, train_r, test_r, n_users, n_items, device)
+                    mx_recall = mx[0] if isinstance(mx, tuple) else mx['recall'][0]
+                mx_time = time.time() - t0
+                results[key] = (mx_recall, mx_time, K)
+                print(f"  {key:<18} R@10={mx_recall:.4f}  time={mx_time:.0f}s")
+
+        # In bảng matrix riêng + các delta so với SISA(mean)
+        r3sisa = results['C3 SISA'][0]
+        print("\n--- REC MATRIX (R@10, same capacity) ---")
+        for pshort, _pt, _nw in ptype_map:
+            v_mean = results.get(f"RM {pshort}-mean", (None,))[0]
+            v_attn = results.get(f"RM {pshort}-attn", (None,))[0]
+            row = []
+            for agg, v in (('mean', v_mean), ('attn', v_attn)):
+                row.append(f"{agg:<6}=" + (f"{v:.4f}" if v is not None else "skip"))
+            # attn - mean (chỉ khi cả 2 có số)
+            if v_attn is not None and v_mean is not None:
+                dm = f"{v_attn - v_mean:+.4f}"
+            else:
+                dm = "n/a"
+            # best (mean/attn) - SISA
+            cands = [v for v in (v_mean, v_attn) if v is not None]
+            bd = (f"{max(cands) - r3sisa:+.4f}" if cands else "n/a")
+            print(f"  {pshort:<6} " + "  ".join(row) + f"   | attn-mean = {dm}  | best-vs-SISA = {bd}")
 
     # BẢNG TỔNG HỢP
     print("\n" + "=" * 68)
