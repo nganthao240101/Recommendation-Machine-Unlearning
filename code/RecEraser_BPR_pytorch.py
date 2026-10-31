@@ -512,42 +512,50 @@ def main():
             # Load WMF pretrained embeddings and initialize model
             print('No checkpoint found. Loading WMF pretrained embeddings...')
 
-            # Load WMF embeddings
-            wmf_path = args.data_path + args.dataset
+            # Load WMF embeddings.
+            # FIX an toàn: đọc .pk từ ĐÚNG thư mục data_generator đang dùng (nơi
+            # model được build), KHÔNG phải args.data_path+args.dataset (2 nguồn
+            # riêng -> dễ lệch dataset, crash 'size must match').
+            import pickle
+            wmf_path = getattr(data_generator, 'path', None) or (args.data_path + args.dataset)
             user_pretrain_path = os.path.join(wmf_path, 'user_pretrain.pk')
             item_pretrain_path = os.path.join(wmf_path, 'item_pretrain.pk')
 
+            # GUARD kích thước: .pk phải có ĐÚNG n_users/n_items của model (từ
+            # data_generator). Nếu lệch (VD .pk của dataset khác, hoặc size cũ)
+            # -> CHẠM vào random-init, KHÔNG crash.
+            n_users = data_generator.n_users
+            n_items = data_generator.n_items
+
             if os.path.exists(user_pretrain_path) and os.path.exists(item_pretrain_path):
-                import pickle
                 with open(user_pretrain_path, 'rb') as f:
                     uidW = pickle.load(f)
                 with open(item_pretrain_path, 'rb') as f:
                     iidW = pickle.load(f)
 
-                # Convert to tensor and expand for all shards
-                user_emb_np = uidW  # Shape: [n_users, emb_dim]
-                item_emb_np = iidW  # Shape: [n_items, emb_dim]
+                user_emb_np = np.asarray(uidW, dtype=np.float32)
+                item_emb_np = np.asarray(iidW, dtype=np.float32)
 
-                # Expand for all shards: [n_users, num_local * emb_dim]
-                user_emb_expanded = np.concatenate([user_emb_np] * args.part_num, axis=1)
-                item_emb_expanded = np.concatenate([item_emb_np] * args.part_num, axis=1)
+                if user_emb_np.ndim == 2 and user_emb_np.shape[0] == n_users \
+                        and item_emb_np.ndim == 2 and item_emb_np.shape[0] == n_items:
+                    # Expand for all shards: [n, num_local * emb_dim]
+                    user_emb_expanded = np.concatenate([user_emb_np] * args.part_num, axis=1)
+                    item_emb_expanded = np.concatenate([item_emb_np] * args.part_num, axis=1)
 
-                # Load WMF vào embedding.
-                # FIX device (bug môi trường code gốc): pattern `.weight.data = ...`
-                # rất mong manh -> vẫn 'cpu vs cuda:0' trên dataset lớn (yelp).
-                # Dùng `copy_()` in-place: copy vào Parameter ĐANG Ở `device`, giữ
-                # nguyên device của Parameter -> KHÔNG lệch device, KHÔNG OOM-thả.
-                with torch.no_grad():
-                    model.user_embedding.weight.copy_(
-                        torch.as_tensor(user_emb_expanded, dtype=torch.float32, device=device))
-                    model.item_embedding.weight.copy_(
-                        torch.as_tensor(item_emb_expanded, dtype=torch.float32, device=device))
-                # in ra để BẠN xem bằng mắt: 2 weight cùng 1 device với model
-                print(f'  [device] user_emb={model.user_embedding.weight.device}, '
-                      f'item_emb={model.item_embedding.weight.device}, model on={device}')
-
-                print(f'Loaded WMF embeddings: user {user_emb_np.shape}, item {item_emb_np.shape}')
-                print(f'Expanded to {args.part_num} shards: user {user_emb_expanded.shape}')
+                    # FIX device: copy_() in-place giữ đúng device của Parameter
+                    with torch.no_grad():
+                        model.user_embedding.weight.copy_(
+                            torch.as_tensor(user_emb_expanded, dtype=torch.float32, device=device))
+                        model.item_embedding.weight.copy_(
+                            torch.as_tensor(item_emb_expanded, dtype=torch.float32, device=device))
+                    print(f'Loaded WMF embeddings: user {user_emb_np.shape}, item {item_emb_np.shape}')
+                    print(f'  [device] user_emb={model.user_embedding.weight.device}, '
+                          f'item_emb={model.item_embedding.weight.device}, model on={device}')
+                else:
+                    print(f'WARNING: WMF .pk shape user={user_emb_np.shape}, item={item_emb_np.shape} '
+                          f'!= model ({n_users},{n_items}) at {wmf_path}')
+                    print('  -> dùng RANDOM init (không crash); để sửa: chạy '
+                          'code/make_array_pk.py --dataset <ds> (đúng n_users từ data)')
             else:
                 print(f'WARNING: WMF pretrained embeddings not found at {wmf_path}')
                 print('Using random initialization')
