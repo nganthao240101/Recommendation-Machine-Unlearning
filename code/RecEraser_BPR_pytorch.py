@@ -532,10 +532,19 @@ def main():
                 user_emb_expanded = np.concatenate([user_emb_np] * args.part_num, axis=1)
                 item_emb_expanded = np.concatenate([item_emb_np] * args.part_num, axis=1)
 
-                # Load into model (fix: đưa tensor lên đúng device của model,
-                # tránh 'cpu vs cuda:0' khi chạy GPU - bug môi trường của code gốc)
-                model.user_embedding.weight.data = torch.FloatTensor(user_emb_expanded).to(device)
-                model.item_embedding.weight.data = torch.FloatTensor(item_emb_expanded).to(device)
+                # Load WMF vào embedding.
+                # FIX device (bug môi trường code gốc): pattern `.weight.data = ...`
+                # rất mong manh -> vẫn 'cpu vs cuda:0' trên dataset lớn (yelp).
+                # Dùng `copy_()` in-place: copy vào Parameter ĐANG Ở `device`, giữ
+                # nguyên device của Parameter -> KHÔNG lệch device, KHÔNG OOM-thả.
+                with torch.no_grad():
+                    model.user_embedding.weight.copy_(
+                        torch.as_tensor(user_emb_expanded, dtype=torch.float32, device=device))
+                    model.item_embedding.weight.copy_(
+                        torch.as_tensor(item_emb_expanded, dtype=torch.float32, device=device))
+                # in ra để BẠN xem bằng mắt: 2 weight cùng 1 device với model
+                print(f'  [device] user_emb={model.user_embedding.weight.device}, '
+                      f'item_emb={model.item_embedding.weight.device}, model on={device}')
 
                 print(f'Loaded WMF embeddings: user {user_emb_np.shape}, item {item_emb_np.shape}')
                 print(f'Expanded to {args.part_num} shards: user {user_emb_expanded.shape}')
