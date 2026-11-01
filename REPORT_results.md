@@ -197,6 +197,72 @@ grep -H "Train time\|Unlearn time" logs/m_ex1_*.log logs/y_ex1_*.log
 
 ---
 
+# ⏱️ PERFORMANCE TRƯỚC & SAU UNLEARN (EX1 + REC MATRIX)
+
+## Bảng thời gian (ml-1m, giây)
+
+| Nhóm | Method / Config | TRƯỚC (train lần đầu) | SAU (unlearn / retrain) | Ghi |
+|------|----------------|:---:|:---:|-----|
+| **EX1** | Full Retrain | ⏳ (log cũ không in; có từ commit `ae4f735`) | ✅ **1532** (retrain cả model) | |
+| **EX1** | **Ours** | ⏳ | ✅ **779** (6/8 shard, đúng scope) | rẻ hơn Full ~49% |
+| **EX1** | SISA | ⏳ | ✅ **800** (8/8 shard) | |
+| *(bỏ theo yêu cầu)* | ~~Rec EX1 (UBP, **WMF-in-model**)~~ | — | ~~678~~ | **không đưa vào bảng chính** (K× capacity, không cùng nền) |
+| **Rec_matrix** | InP-mean | N/A* | ✅ **1386** (train trên data-retained) | *không có pha "train trước" (fair: train trực tiếp trên data đã xóa) |
+| | InP-attn | N/A* | ✅ **2002** | attention dài hơn mean (aggregator) |
+| | UBP-mean | N/A* | ✅ **1074** | |
+| | UBP-attn | N/A* | ✅ **946** | |
+| | Random-mean | N/A* | ✅ **830** | |
+| | Random-attn | N/A* | ✅ **951** | |
+
+**\*** Rec_matrix = **fair same-capacity, không WMF-in-model**: chỉ train **1 lần trên data đã loại user bị xóa (1% RANDOM)** rồi eval → **chỉ có 1 "time" (tổng)**, **không có tách before/after** như EX1. **EX1** mới có thật "before (train lần đầu)" + "after (unlearn/retrain)".
+
+## Nhận xét so sánh (thời gian, trước/sau unlearn)
+
+1. **EX1 (Full/Ours/SISA):** Ours (779s) ≈ SISA (800s) **rẻ hơn Full (1532s) ~49%** sau unlearn. (Rec WMF-in-model bị loại khỏi bảng chính; nếu muốn so "Rec thật (có WMF)" thì Rec sau unlearn 678s — **nhưng Rec "hiện rẻ, thật đắt"** do giấu shard (effective affected 8/8, EX6 instability 84%).
+2. **Rec_matrix (fair, cùng capacity, không WMF-in-model):**
+   - **InP-attn (2002s) là CHẬM NHẤT** (aggregator attention + partition InP k-means) — **đắt gấp ~2.5× Ours (779s)**.
+   - **Random-mean (830s) ≈ Ours (779s)**; UBP-mean (1074s) cao hơn.
+   - → **Mỗi config Rec fair đều có time riêng** (không có "unlearn-phase"), nên so với EX1 chỉ được ở **vị "rẻ hơn Full-trần"**, không so 1:1.
+3. **Kết luận performance:** Ours **stable (0%) + rẻ (779s) + đúng scope**; Rec fair "đẹp utility" (InP-mean 0.0996 ≈ Full) nhưng **đắt nhất khi chạy attention (InP-attn 2002s)** và **không deletion-stable (84%)** — tức "thắng utility" bằng cách trả giá **thời gian + ổn định + scope**.
+
+## ⚠️ Để đủ cột "TRƯỚC (train lần đầu)" cho Full/Ours/SISA — chạy lại (log cũ không in)
+
+Commit `ae4f735` đã thêm dòng `print("Train time (before unlearn): ...")` cho 4 method. Chạy lại 3 method EX1 (ml-1m, **không** Rec WMF-in-model) để lấy 3 số "before":
+
+```bash
+cd /workspace/Recommendation-Machine-Unlearning
+git pull    # nhận ae4f735 (in "Train time (before unlearn)")
+K=8; E=50; R=0.01; M=most; D=64
+export CUDA_VISIBLE_DEVICES=0
+nohup bash -c '
+cd /workspace/Recommendation-Machine-Unlearning
+K=8; E=50; R=0.01; M=most; D=64
+echo "=== FULL $(date +%H:%M) ==="
+python code/method_1_full_retrain.py --dataset ml-1m --emb_dim 64 \
+  --max_epochs $E --unlearn_ratio $R --unlearn_mode $M \
+  > logs/m_ex1_full2.log 2>&1; echo "full exit=$?"
+echo "=== OURS $(date +%H:%M) ==="
+python code/method_4_ours.py --dataset ml-1m --emb_dim 64 --n_shards $K \
+  --signature_dim $D --max_epochs $E --unlearn_ratio $R --unlearn_mode $M \
+  > logs/m_ex1_ours2.log 2>&1; echo "ours exit=$?"
+echo "=== SISA $(date +%H:%M) ==="
+python code/method_2_sisa.py --dataset ml-1m --emb_dim 64 --n_shards $K \
+  --max_epochs $E --unlearn_ratio $R --unlearn_mode $M \
+  > logs/m_ex1_sisa2.log 2>&1; echo "sisa exit=$?"
+echo "XONG $(date +%H:%M)"
+' > logs/m_ex1_before.log 2>&1 &
+echo "Chạy NỀN (3 method, tuần tự, GPU). Theo dõi: tail -f logs/m_ex1_before.log"
+```
+
+Xem 2 cột (before + sau) khi xong:
+```bash
+grep -HnE "Train time (before unlearn)|After \(RETAINED|Unlearn time" \
+  logs/m_ex1_full2.log logs/m_ex1_ours2.log logs/m_ex1_sisa2.log
+```
+→ 6 con số (3 method × {before, unlearn}) + sau (After R@10) → **gộp vào bảng "TRƯỚC & SAU UNLEARN" trên, đủ 3 cột (Before R@10 / After R@10 / Time trước / Time sau)**.
+
+---
+
 # CÒN THIẾP (⏳, để bảng đủ 2 dataset)
 
 | Việc | Trạng thái | Lệnh |
