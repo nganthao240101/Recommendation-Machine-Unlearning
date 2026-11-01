@@ -161,6 +161,42 @@ grep -H "Train time\|Unlearn time" logs/m_ex1_*.log logs/y_ex1_*.log
 
 ---
 
+# 🧮 TỔNG HỢP TRƯỚC & SAU UNLEARN (EX1 bỏ Rec-WMF-in-model + Rec_matrix)
+
+**Gộp theo yêu cầu:** lấy **Full / Ours / SISA** từ **EX1** (có "trước+sau" thật, xóa 1% MOST, train-on-retained) **BỎ Rec WMF-in-model (0.0582)**; thêm **Rec_matrix** (InP/UBP/Random × mean/attn, cùng capacity, KHÔNG WMF-in-model) làm các phương án Rec "công bằng". So trước/sau unlearn.
+
+**⚠️ 2 protocol, đọc đúng:**
+- **EX1** (Full/Ours/SISA): "Before" = chưa xóa, "After" = sau unlearn + retrain, đo **cùng RETAINED test**. Xóa **1% MOST**.
+- **Rec_matrix**: **chỉ có "After"** (train trên retained, không pha unlearn riêng). Xóa **1% RANDOM**. → **không có cột "Before" cho Rec_matrix** (không bịa).
+- Số "After" của EX1 (MOST) vs Rec_matrix (RANDOM) **khác tập xóa** → so "cùng capacity" chứ **không phải cùng một run unlearn**.
+
+## Bảng tổng hợp (ml-1m, R@10)
+
+| Nhóm | Method / Config | Trước unlearn (Before) | Sau unlearn (After, RETAINED) | Ghi |
+|------|----------------|:---:|:---:|-----|
+| **EX1** | Full Retrain | 0.1045 (RET test) / 0.1038 (FULL) | **0.1009** | retrain cả model; drop thật ~3.6% |
+| **EX1** | **Ours** | 0.0681 | **0.0765** | kept-retained; (Before FULL-test < After do đổi test set) |
+| **EX1** | SISA | 0.0686 | **0.0751** | kept-retained |
+| *(bỏ)* | ~~Rec WMF-in-model~~ | ~~0.0578~~ | ~~0.0582~~ | **không dùng** (K× capacity, không cùng nền) |
+| **Rec_matrix** | InP-mean | — (chưa có Before) | **0.0996** | ≈ Full trần (partition tốt) |
+| **Rec_matrix** | InP-attn | — | 0.0983 | |
+| **Rec_matrix** | UBP-mean | — | 0.0689 | ≈ Ours/SISA |
+| **Rec_matrix** | UBP-attn | — | 0.0699 | |
+| **Rec_matrix** | Random-mean | — | 0.0666 | **< Ours (0.0765)** |
+| **Rec_matrix** | Random-attn | — | 0.0796 | attention cứu random |
+
+## Nhận xét so sánh (trước/sau, nói thật)
+
+1. **EX1 (Full/Ours/SISA) có đủ "trước + sau":** Ours/SISA **Before (0.068) thấp hơn After (0.076)** — **KHÔNG phải "unlearn làm tăng"**, mà do **After đo trên RETAINED test (bỏ user khó bị xóa)**; **Full mới là trường hợp "sau" thực sự giảm (0.1045→0.1009)** vì retrain cả model. Để so trước/sau **sạch cùng test set**, cần thêm **Before (RETAINED test)** cho Ours/SISA (hiện chưa có).
+2. **Rec_matrix chỉ so được "sau" với "sau" (cùng capacity):**
+   - **InP-mean 0.0996 ≈ Full trần** → Rec "thắng" **nhờ partition InP**, không nhờ unlearn mechanism.
+   - **UBP (0.069–0.070) ≈ Ours (0.0765) / SISA (0.0751)** → ngang.
+   - **Random-mean 0.0666 < Ours 0.0765** → **Ours (signature) thắng Rec khi Rec rớt xuống partition random**.
+   - **Attention chỉ cứu Random (+0.013), trung tính/hại với InP (−0.0014).**
+3. **Kết luận hợp nhất:** Ours **nhanh (779s), stable (0%), đúng scope**; Rec "đẹp" chỉ khi **partition tốt (InP)** — mà InP lại là thứ Ours **không có** (Ours = signature, deletion-stable). → trade-off: **Rec-đẹp-inP (partition may) vs Ours (ổn định + đúng scope, không cần partition may)**.
+
+---
+
 # CÒN THIẾP (⏳, để bảng đủ 2 dataset)
 
 | Việc | Trạng thái | Lệnh |
