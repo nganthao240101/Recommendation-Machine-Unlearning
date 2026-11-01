@@ -877,6 +877,7 @@ def run_receraser_v2(dataset='ml-1m', emb_dim=64, n_shards=8, partition_type=1,
     print("STEP 3: TRAIN RECERASER")
     print(f"{'='*70}")
 
+    t0 = time.time()
     partition_names = {1: 'InP', 2: 'UBP', 3: 'Random', 4: 'UBP-unbal', 5: 'InP-unbal'}
     partition_name = partition_names.get(partition_type, 'Random')
     attention_str = 'attn' if use_attention else 'mean'
@@ -907,6 +908,9 @@ def run_receraser_v2(dataset='ml-1m', emb_dim=64, n_shards=8, partition_type=1,
 
         # Save model after training
         # save_model(model, checkpoint_path)  # Disabled due to disk space
+
+    train_time = time.time() - t0
+    print(f"  Train time (before unlearn): {train_time:.2f}s")
 
     # =========================================================================
     # STEP 4: Evaluate BEFORE unlearn

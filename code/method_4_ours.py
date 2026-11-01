@@ -845,6 +845,7 @@ def run_ours(dataset='ml-1m', emb_dim=64, n_shards=8,
         print(f"  Skipped saving checkpoint due to disk space")
 
     train_time = time.time() - t0
+    print(f"  Train time (before unlearn): {train_time:.2f}s")
 
     # Filter out unlearned users from test set
     test_data_retained = {u: items for u, items in test_data.items() if u not in unlearn_users}
