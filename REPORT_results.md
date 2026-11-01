@@ -165,9 +165,12 @@ grep -H "Train time\|Unlearn time" logs/m_ex1_*.log logs/y_ex1_*.log
 
 **Gộp theo yêu cầu:** lấy **Full / Ours / SISA** từ **EX1** (có "trước+sau" thật, xóa 1% MOST, train-on-retained) **BỎ Rec WMF-in-model (0.0582)**; thêm **Rec_matrix** (InP/UBP/Random × mean/attn, cùng capacity, KHÔNG WMF-in-model) làm các phương án Rec "công bằng". So trước/sau unlearn.
 
+**✅ Mới (commit `10083b2`):** Rec_matrix giờ **đo được theo đúng protocol EX1** (Before(FULL) → unlearn → After(RETAINED) + **Unlearn time**) nhờ flag **`--no_wmf_in_model`** trên `method_3_receraser_v2.py` (random-init, WMF **chỉ** dùng cho partition InP/UBP, **không** nạp vào model). → 3 dòng "chưa có Before" dưới sẽ được **điền bằng số đo mới** khi chạy. Bảng dưới vẫn giữ số "after-only (fair)" đã có; **phần đo EX1-style là ⏳**.
+
 **⚠️ 2 protocol, đọc đúng:**
 - **EX1** (Full/Ours/SISA): "Before" = chưa xóa, "After" = sau unlearn + retrain, đo **cùng RETAINED test**. Xóa **1% MOST**.
-- **Rec_matrix**: **chỉ có "After"** (train trên retained, không pha unlearn riêng). Xóa **1% RANDOM**. → **không có cột "Before" cho Rec_matrix** (không bịa).
+- **Rec_matrix (fair, `--rec_matrix`)**: chỉ có "After" (train trên retained, không pha unlearn). Xóa **1% RANDOM**.
+- **Rec_matrix (EX1-style, `--no_wmf_in_model`)**: đủ **Before → unlearn → After + Unlearn time** (đúng protocol EX1) → so trước/sau công bằng với Full/Ours/SISA. **Số đang ⏳ (chưa chạy)**.
 - Số "After" của EX1 (MOST) vs Rec_matrix (RANDOM) **khác tập xóa** → so "cùng capacity" chứ **không phải cùng một run unlearn**.
 
 ## Bảng tổng hợp (ml-1m, R@10)
@@ -178,12 +181,13 @@ grep -H "Train time\|Unlearn time" logs/m_ex1_*.log logs/y_ex1_*.log
 | **EX1** | **Ours** | 0.0681 | **0.0765** | kept-retained; (Before FULL-test < After do đổi test set) |
 | **EX1** | SISA | 0.0686 | **0.0751** | kept-retained |
 | *(bỏ)* | ~~Rec WMF-in-model~~ | ~~0.0578~~ | ~~0.0582~~ | **không dùng** (K× capacity, không cùng nền) |
-| **Rec_matrix** | InP-mean | — (chưa có Before) | **0.0996** | ≈ Full trần (partition tốt) |
-| **Rec_matrix** | InP-attn | — | 0.0983 | |
-| **Rec_matrix** | UBP-mean | — | 0.0689 | ≈ Ours/SISA |
-| **Rec_matrix** | UBP-attn | — | 0.0699 | |
-| **Rec_matrix** | Random-mean | — | 0.0666 | **< Ours (0.0765)** |
-| **Rec_matrix** | Random-attn | — | 0.0796 | attention cứu random |
+| **Rec_matrix (fair, after-only)** | InP-mean | — | **0.0996** | ≈ Full trần (partition tốt) |
+|  | InP-attn | — | 0.0983 | |
+|  | UBP-mean | — | 0.0689 | ≈ Ours/SISA |
+|  | UBP-attn | — | 0.0699 | |
+|  | Random-mean | — | 0.0666 | **< Ours (0.0765)** |
+|  | Random-attn | — | 0.0796 | attention cứu random |
+| **Rec_matrix (EX1-style, ⏳)** | InP/UBP/Random × mean/attn | ⏳ (Before) | ⏳ (After) + Unlearn time | chạy `--no_wmf_in_model` (lệnh dưới) |
 
 ## Nhận xét so sánh (trước/sau, nói thật)
 
@@ -261,6 +265,39 @@ grep -HnE "Train time (before unlearn)|After \(RETAINED|Unlearn time" \
 ```
 → 6 con số (3 method × {before, unlearn}) + sau (After R@10) → **gộp vào bảng "TRƯỚC & SAU UNLEARN" trên, đủ 3 cột (Before R@10 / After R@10 / Time trước / Time sau)**.
 
+## ⏳ Chạy Rec_matrix theo EX1 (before/after + unlearn time, cùng capacity) — flag mới `--no_wmf_in_model`
+
+Flag `--no_wmf_in_model` (commit `10083b2`) cho RecEraser chạy **đúng protocol EX1** (train FULL → Before(FULL) → unlearn retrain shard → After(RETAINED) + `Unlearn time`), nhưng **random-init (KHÔNG nạp WMF-in-model)** → cùng capacity K với SISA/Ours; WMF chỉ còn dùng cho **partition InP/UBP** (nếu có `.npz`). Chạy **cả 3 partition × 2 aggregation = 6 config** (Random mean = `use_attention 0` + partition 3, UBP mean = ... — **mỗi config 1 lần chạy**, vì `method_3` chỉ chạy 1 (partition,aggregation)/lần):
+
+```bash
+cd /workspace/Recommendation-Machine-Unlearning
+git pull    # nhận 10083b2 (flag --no_wmf_in_model) + ae4f735 (print Train time)
+nohup bash -c '
+cd /workspace/Recommendation-Machine-Unlearning
+K=8; E=50; D=64; R=0.01; M=most
+export CUDA_VISIBLE_DEVICES=0
+echo "=== REC EX1-STYLE (InP/UBP/Random x mean/attn, no WMF-in-model) $(date +%H:%M) ==="
+# (mean = --use_attention 0; attn = --use_attention 1; Random = --partition_type 3)
+for pt in 1 2 3; do
+  for attn in 0 1; do
+    python code/method_3_receraser_v2.py --dataset ml-1m --emb_dim 64 --n_shards $K \
+      --partition_type $pt --max_epochs_wmf 100 --max_epochs_local $E --use_attention $attn \
+      --no_wmf_in_model --unlearn_ratio $R --unlearn_mode $M \
+      > logs/m_ex1_rec_nofair_pt${pt}_attn${attn}.log 2>&1; echo "  pt=$pt attn=$attn exit=$?"
+  done
+done
+echo "XONG $(date +%H:%M)"
+' > logs/m_rec_ex1style.out 2>&1 &
+echo "Chạy NỀN (6 config Rec EX1-style, tuần tự, GPU). Theo dõi: tail -f logs/m_rec_ex1style.out"
+```
+
+Xem 3 cột (Before / After / Unlearn time) cho 6 config khi xong:
+```bash
+grep -HnE "Before \(FULL|After \(RETAINED|Unlearn time|no_wmf_in_model" \
+  logs/m_ex1_rec_nofair_pt*.log
+```
+→ **gộp vào bảng "TRƯỚC & SAU UNLEARN" trên, đủ 6 config Rec (EX1-style) có Before + After + Unlearn time**, so ngang Full/Ours/SISA (mặc dù Rec mean dùng `--use_attention 0` cho "mean aggregation" — **khác Rec-matrix 'mean' (K BPRMF + ensemble)** ở aggregator; ghi chú này khi viết Discussion).
+
 ---
 
 # CÒN THIẾP (⏳, để bảng đủ 2 dataset)
@@ -268,7 +305,8 @@ grep -HnE "Train time (before unlearn)|After \(RETAINED|Unlearn time" \
 | Việc | Trạng thái | Lệnh |
 |------|:---:|------|
 | Yelp EX1 (Ours/SISA/Rec) | ⏳ GPU nối tiếp | `tail -f logs/y_ex1_gpu.out` (đợi `XONG`) |
-| Yelp Rec matrix (6 ô) | ⏳ chạy SAU EX1 (1 GPU = 1 job) | `--rec_matrix --dataset yelp2018` |
+| Yelp Rec matrix (6 ô, after-only fair) | ⏳ chạy SAU EX1 (1 GPU = 1 job) | `--rec_matrix --dataset yelp2018` |
+| **Rec EX1-style (Before+After+Unlearn time, cùng capacity, `--no_wmf_in_model`)** | ⏳ chưa chạy | khối "REC EX1-STYLE" ở trên (6 config) |
 | "Quên thật" (memorization rate) | ❌ chưa có metric | *tuỳ chọn* |
 
 **Lệnh lấy số yelp khi xong:**
