@@ -781,7 +781,8 @@ def run_receraser_v2(dataset='ml-1m', emb_dim=64, n_shards=8, partition_type=1,
                     max_epochs_wmf=100, max_epochs_local=50, unlearn_ratio=0.1,
                     unlearn_mode='random',
                     batch_size=512, lr=0.01, lr_finetune=0.001,
-                    use_attention=True, output_suffix=''):
+                    use_attention=True, output_suffix='',
+                    no_wmf_in_model=False):
     """
     RecEraser với WMF pretrained embeddings
 
@@ -803,6 +804,8 @@ def run_receraser_v2(dataset='ml-1m', emb_dim=64, n_shards=8, partition_type=1,
     print(f"N shards: {n_shards}")
     print(f"WMF epochs: {max_epochs_wmf}")
     print(f"Local epochs: {max_epochs_local}")
+    if no_wmf_in_model:
+        print(f"[no_wmf_in_model] embedding RANDOM-init, WMF CHỈ dùng để partition (same capacity)")
 
     device = 'cuda' if torch.cuda.is_available() else 'cpu'
     print(f"Device: {device}")
@@ -892,8 +895,11 @@ def run_receraser_v2(dataset='ml-1m', emb_dim=64, n_shards=8, partition_type=1,
         load_model(model, checkpoint_path, device)
     else:
         print(f"  Training RecEraser on all shards (first time)...")
-        if user_emb is not None and item_emb is not None:
+        if user_emb is not None and item_emb is not None and not no_wmf_in_model:
             model.load_pretrained_embeddings(user_emb, item_emb, device)
+            print(f"  [WMF] loaded pretrained embeddings into model")
+        elif no_wmf_in_model:
+            print(f"  [no_wmf_in_model] skipping WMF-in-model (random init, same capacity)")
         for shard_id in range(n_shards):
             if partitioner.shard_data[shard_id]:
                 print(f"  Training shard {shard_id}...")
@@ -1017,6 +1023,9 @@ if __name__ == '__main__':
     parser.add_argument('--lr_finetune', type=float, default=0.001)
     parser.add_argument('--use_attention', type=int, default=1, help='1: use attention aggregation, 0: use mean aggregation')
     parser.add_argument('--output_suffix', type=str, default='')
+    parser.add_argument('--no_wmf_in_model', action='store_true',
+                        help='skip load_pretrained_embeddings (random-init, same capacity); '
+                             'WMF still used only for InP/UBP partition')
 
     args = parser.parse_args()
 
@@ -1033,5 +1042,6 @@ if __name__ == '__main__':
         lr=args.lr,
         lr_finetune=args.lr_finetune,
         use_attention=bool(args.use_attention),
-        output_suffix=args.output_suffix
+        output_suffix=args.output_suffix,
+        no_wmf_in_model=args.no_wmf_in_model
     )
