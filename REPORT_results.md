@@ -98,6 +98,36 @@ Mọi config trong **1 bảng**: 4 method chính (EX1) + **Rec matrix (InP/UBP/R
 
 ---
 
+# ⏱️ PERFORMANCE TRƯỚC VÀ SAU UNLEARN (4 method)
+
+2 loại thời gian (đừng trộn):
+- **Train time (TRƯỚC unlearn):** chi phí deploy — huấn luyện model lần đầu (8 shard + aggregator). Code mới (commit `ae4f735`) in `Train time (before unlearn)`; **các log cũ chưa có số này → phải chạy lại** để lấy.
+- **Unlearn time (SAU unlearn):** chi phí mỗi khi có xóa — retrain shard bị ảnh hưởng. Đã có trong log (ml-1m).
+
+| Method | ml-1m Train (trước) | ml-1m Unlearn (sau) | yelp Train (trước) | yelp Unlearn (sau) |
+|--------|:---:|:---:|:---:|:---:|
+| Full Retrain | ⏳ (chạy lại) | ✅ 1532s (retrain cả model) | ⏳ | ✅ 3358s |
+| **Ours** | ⏳ (chạy lại) | ✅ **779s** (6/8 shard, đúng scope) | ⏳ | ⏳ |
+| SISA | ⏳ (chạy lại) | ✅ 800s (8/8 shard) | ⏳ | ⏳ |
+| Rec (UBP, WMF-in, attn) | ⏳ (chạy lại) | ✅ 678s (tuyên bố 3/8 — thật effective 8/8 → ước ~1811s) | ⏳ | ⏳ |
+
+**Nhận xét (performance):**
+- Sau unlearn: Ours ≈ SISA ≈ Rec (678–800s) **rẻ hơn Full 2× (1532s)**.
+- Chi phí "đúng nghĩa" của Rec cao hơn số in (do giấu shard: re-cluster UBP + retrain effective 8/8), ước tính **~1811s ≈ Full**. Ours **nói đúng chi phí** (naive = effective).
+- Rec (EX1) bao gồm cả **WMF-in-model (K× capacity)** → train time của Rec thường cao nhất (WMF 100ep + local + aggregator).
+
+**Lệnh lấy đủ 2 cột (train + unlearn) — chạy lại EX1 ngắn (4 method × 2 dataset):**
+```bash
+cd /workspace/Recommendation-Machine-Unlearning
+git pull   # nhận ae4f735 (in "Train time (before unlearn)")
+# ml-1m: Full/Ours/SISA/Rec (mỗi cái ~15–30p GPU, tuần tự)
+# yelp: 4 method (nối tiếp, 1 GPU = 1 job)
+# Xem số:
+grep -H "Train time\|Unlearn time" logs/m_ex1_*.log logs/y_ex1_*.log
+```
+
+---
+
 # 🔬 SO SÁNH CHI TIẾT — REC MATRIX vs CÁC METHOD (cùng capacity, ml-1m)
 
 **Mặt bằng:** K=8, không WMF-in-model (random-init), unlearn random 1%, đo RETAINED → mọi config **ngang capacity**, so "cơ chế + partition + aggregation" công bằng. Ours (C4) = 0.0673 làm tham chiếu.
