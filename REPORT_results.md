@@ -187,7 +187,15 @@ grep -H "Train time\|Unlearn time" logs/m_ex1_*.log logs/y_ex1_*.log
 |  | UBP-attn | — | 0.0699 | |
 |  | Random-mean | — | 0.0666 | **< Ours (0.0765)** |
 |  | Random-attn | — | 0.0796 | attention cứu random |
-| **Rec_matrix (EX1-style, ⏳)** | InP/UBP/Random × mean/attn | ⏳ (Before) | ⏳ (After) + Unlearn time | chạy `--no_wmf_in_model` (lệnh dưới) |
+| **Rec_matrix (EX1-style ✅, no-WMF-in-model, 1% MOST)** | InP-mean | 0.0640 | 0.0652 (+0.0012) · 357s | |
+|  | InP-**attn** | 0.0524 | **0.0481** (−0.0043) · 416s | **tệ nhất** |
+|  | UBP-mean | 0.0634 | **0.0665** (+0.0031) · 405s | Rec tốt nhất (EX1-style) |
+|  | UBP-attn | 0.0590 | 0.0618 (+0.0028) · 382s | |
+|  | Random-mean | 0.0620 | 0.0634 (+0.0014) · 395s | |
+|  | Random-attn | 0.0643 | 0.0651 (+0.0008) · 383s | |
+
+> Tham chiếu EX1 cùng tập xóa (MOST): **Ours 0.0765 · SISA 0.0751 · Full 0.1009**.
+> ⚠️ EX1-style Rec "mean" = **mean-aggregator trong RecEraserModel** (KHÁC fair-matrix "mean" = K BPRMF ensemble) + **unlearn MOST** (fair-matrix = RANDOM). **Không so 0.0652 (EX1) với 0.0996 (fair-matrix InP).**
 
 ## Nhận xét so sánh (trước/sau, nói thật)
 
@@ -198,6 +206,41 @@ grep -H "Train time\|Unlearn time" logs/m_ex1_*.log logs/y_ex1_*.log
    - **Random-mean 0.0666 < Ours 0.0765** → **Ours (signature) thắng Rec khi Rec rớt xuống partition random**.
    - **Attention chỉ cứu Random (+0.013), trung tính/hại với InP (−0.0014).**
 3. **Kết luận hợp nhất:** Ours **nhanh (779s), stable (0%), đúng scope**; Rec "đẹp" chỉ khi **partition tốt (InP)** — mà InP lại là thứ Ours **không có** (Ours = signature, deletion-stable). → trade-off: **Rec-đẹp-inP (partition may) vs Ours (ổn định + đúng scope, không cần partition may)**.
+
+## 🔍 Nhận xét Rec EX1-style (no-WMF-in-model, cùng tập xóa MOST với Ours/SISA)
+
+4 điểm (có số, đọc đúng):
+
+1. **Attention KHÔNG giúp (giống InP) — khác fair-matrix.** Trong EX1-style, **mean ≥ attention ở hầu hết config**: InP-mean 0.0652 > InP-**attn 0.0481 (tệ nhất)**; UBP-mean 0.0665 > UBP-attn 0.0618; Random mean≈attn (0.0634/0.0651). → Với **cùng 1 RecEraserModel + unlearn MOST**, **mean-aggregator đủ và rẻ hơn attention**. (fair-matrix "attn cứu random +0.013" là do **cơ chế ensemble khác + unlearn RANDOM** — **không phải cùng điều kiện**.)
+2. **Rec (cùng capacity, cùng tập xóa) THUA Ours/SISA về utility.** Sau unlearn: **Rec tốt nhất = UBP-mean 0.0665 < SISA 0.0751 < Ours 0.0765** (Full 0.1009). → Trên **cùng protocol EX1 (MOST)**, Rec không-WMF-in-model **không vượt Ours**; "Rec thắng 0.0996" (InP) **do partition + ensemble + RANDOM**, không phải unlearn mechanism.
+3. **Unlearn time Rec (357–416s) < Ours (779s) — nhưng "rẻ giả".** (Gắn EX6: Rec **giấu shard + instability 84%**) → Rec "tuyên bố" unlearn rẻ (chỉ retrain 3 shard), thật phải re-cluster UBP + retrain ~8 shard → **chi phí đúng nghĩa ≈ Ours/Full**. Ours **nói đúng chi phí** (naive = effective, stable 0%).
+4. **Before→After gần như FLAT (Δ trong ±0.003, 6 config)** → Rec no-WMF **không catastrophic khi unlearn** (BPRMF-based giữ utility), nhưng **chưa chứng minh "quên thật"** (muốn đủ tiêu chí 3 thật cần metric memorization — hiện chưa đo).
+
+> **Câu Discussion (Anh, EX1-style):** "On the matched-capacity, same-unlearn-set basis (EX1 protocol, 1% MOST), RecEraser **without** WMF-in-model does **not** beat Ours/SISA on retained utility (best Rec = UBP-mean 0.0665 < Ours 0.0765, SISA 0.0751), and **mean aggregation is at least as good as attention** (InP-attn is worst at 0.0481). Rec's lower unlearn time (357–416s vs Ours 779s) is a **stated, not true, cost**, given its shard-leaking (~84% instability). Rec's earlier 'utility win' (InP 0.0996) therefore came from **partition choice + standalone ensemble + RANDOM unlearn — not from the unlearning mechanism**."
+
+## 🎯 BẢNG SO CÙNG CAPABILITY (K=8, no-WMF-in-model, cùng protocol EX1, xóa 1% MOST)
+
+Tất cả = **K BPRMF shards, không WMF-in-model → ngang capacity**. So theo **cùng 1 protocol** (train FULL → Before → unlearn retrain shard → After RETAINED). Rec **giữ đủ 3 partition × 2 aggregation = 6 config**.
+
+| # | Method | Partition | Aggregation | Before (FULL) | After (RETAINED) | Unlearn time |
+|:-:|--------|-----------|-------------|:---:|:---:|:---:|
+| 1 | **Ours** | signature | hard-routing | 0.0681 | **0.0765** ⭐ | 779s |
+| 2 | **SISA** | modulo | mean | 0.0686 | **0.0751** ⭐ | 800s |
+| 3 | Rec InP | k-means(InP) | mean | 0.0640 | 0.0652 | 357s |
+| 4 | Rec InP | k-means(InP) | **attn** | 0.0524 | **0.0481** ⚠️ tệ nhất | 416s |
+| 5 | Rec UBP | k-means(UBP) | mean | 0.0634 | **0.0665** (Rec tốt nhất) | 405s |
+| 6 | Rec UBP | k-means(UBP) | attn | 0.0590 | 0.0618 | 382s |
+| 7 | Rec Random | random | mean | 0.0620 | 0.0634 | 395s |
+| 8 | Rec Random | random | attn | 0.0643 | 0.0651 | 383s |
+| *(oracle)* | Full Retrain | full-data (1 model) | — | 0.1038 | 0.1009 | 1532s |
+
+**4 nhận xét (cùng capability):**
+1. **Ours & SISA THẮNG cả 6 config Rec** (cùng capacity, cùng protocol): `Ours 0.0765 > SISA 0.0751 > Rec tốt nhất (UBP-mean 0.0665) > Rec còn lại (0.0481–0.0652)`. → "Rec thắng (InP)" chỉ đúng ở protocol oracle/fair-matrix, **KHÔNG ở cùng capability unlearn này**.
+2. **Attention KHÔNG hơn mean (ở đây); InP-attn 0.0481 = tệ nhất** → "mean robust hơn khi unlearn". (Giải thích khác paper gốc: họ đo **WMF-init + 1000ep + before**, mình **random-init + 50ep + after-unlearn**.)
+3. **Rec nhanh nhất (357–416s)** nhưng **rẻ giả** (giấu shard + instability 84% → thật đắt hơn). Ours **nói đúng chi phí** (naive = effective).
+4. **Partition không cứu được Rec (cùng capacity)**: InP/UBP/Random đều < Ours/SISA → đóng góp utility của Rec **không đến từ cơ chế unlearn** (khớp SHARDING −0.0628).
+
+> ⚠️ **Đừng lẫn 2 bảng Rec:** bảng **cùng capability này** (EX1, MOST, unlearn thật, no-WMF-in-model) cho **Rec InP-mean = 0.0652**; bảng **fair-matrix** (oracle retrain-on-retained, RANDOM, K BPRMF ensemble) cho **Rec InP-mean = 0.0996 ≈ Full trần**. Hai số đo **2 điều kiện khác nhau**, không so trực tiếp.
 
 ---
 
@@ -304,9 +347,9 @@ grep -HnE "Before \(FULL|After \(RETAINED|Unlearn time|no_wmf_in_model" \
 
 | Việc | Trạng thái | Lệnh |
 |------|:---:|------|
+| **Rec EX1-style ml-1m (Before/After/Unlearn time, `--no_wmf_in_model`)** | ✅ **XONG (6 config)** | số đã điền ở bảng tổng hợp + nhận xét 4 điểm |
 | Yelp EX1 (Ours/SISA/Rec) | ⏳ GPU nối tiếp | `tail -f logs/y_ex1_gpu.out` (đợi `XONG`) |
 | Yelp Rec matrix (6 ô, after-only fair) | ⏳ chạy SAU EX1 (1 GPU = 1 job) | `--rec_matrix --dataset yelp2018` |
-| **Rec EX1-style (Before+After+Unlearn time, cùng capacity, `--no_wmf_in_model`)** | ⏳ chưa chạy | khối "REC EX1-STYLE" ở trên (6 config) |
 | "Quên thật" (memorization rate) | ❌ chưa có metric | *tuỳ chọn* |
 
 **Lệnh lấy số yelp khi xong:**
