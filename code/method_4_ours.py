@@ -650,18 +650,29 @@ class OursMethod:
 
         return self.shard_data
 
-    def train(self, train_data, device):
+    def train(self, train_data, device, user_to_shard=None):
         """
         Training theo bài báo:
         1. Build signatures (Component I)
         2. Assign users to shards (Component II)
         3. Train each shard independently (Component III)
-        """
-        print("\n    [Training] Phase 1: Component I - Build signatures...")
-        signatures = self.signature_builder.build_signature(train_data)
 
-        print("\n    [Training] Phase 2: Component II - Assign users to shards...")
-        user_to_shard = self.assignment.assign_users(signatures)
+        user_to_shard (tuỳ chọn): FROZEN partition (vd InP-kept). Nếu có, BỎ qua
+        Component I/II (signature) và dùng mapping này trực tiếp -> Ours unlearn
+        stable 0% nhưng partition = InP (utility cao hơn signature).
+        """
+        if user_to_shard is not None:
+            print("\n    [Training] FROZEN partition mode (Component I/II skipped).")
+            print(f"    [Training] user_to_shard: min=0 max={int(np.max(user_to_shard))}, "
+                  f"len={len(user_to_shard)}")
+            # Lưu vào assignment để get_affected_shards() hoạt động lúc unlearn
+            self.assignment.user_to_shard = user_to_shard
+        else:
+            print("\n    [Training] Phase 1: Component I - Build signatures...")
+            signatures = self.signature_builder.build_signature(train_data)
+
+            print("\n    [Training] Phase 2: Component II - Assign users to shards...")
+            user_to_shard = self.assignment.assign_users(signatures)
 
         print("\n    [Training] Phase 3: Component III - Train shards independently...")
         self.build_shard_data(train_data, user_to_shard)
@@ -742,10 +753,28 @@ class OursMethod:
 # MAIN
 # ============================================================================
 
+def build_frozen_inp_partition(dataset, emb_dim, n_shards, train_data, n_users,
+                                max_epochs_wmf=100, batch_size=512, lr=0.05):
+    """Build Rec's InP (WMF k-means) partition ONCE on full data, return frozen mapping.
+
+    Dùng lại DataPartitioner._partition_inp_paper + load_or_train_wmf của method_3.
+    Result = user_to_shard (int32, len n_users) để Ours train + unlearn KHÔNG re-cluster.
+    """
+    from method_3_receraser_v2 import DataPartitioner, load_or_train_wmf
+    user_emb, item_emb = load_or_train_wmf(dataset, emb_dim, max_epochs_wmf, batch_size, lr)
+    part = DataPartitioner(n_shards=n_shards, partition_type=1, seed=42)
+    user_to_shard = part.partition_users(train_data, n_users, user_emb, item_emb)
+    counts = np.bincount(user_to_shard, minlength=n_shards)
+    print(f"  [frozen-InP] partition built: {n_shards} shards, sizes min/max = "
+          f"{int(counts.min())}/{int(counts.max())}")
+    return user_to_shard
+
+
 def run_ours(dataset='ml-1m', emb_dim=64, n_shards=8,
             batch_size=512, lr=0.05, max_epochs=100,
             unlearn_ratio=0.1, unlearn_mode='random', unlearn_user_id=None,
-            retrain_epochs=50, signature_dim=64, use_mean=False, output_suffix=''):
+            retrain_epochs=50, signature_dim=64, use_mean=False, output_suffix='',
+            partition='signature', max_epochs_wmf=100):
     """
     Chạy Ours method với 3 components đúng theo bài báo
     """
@@ -839,7 +868,15 @@ def run_ours(dataset='ml-1m', emb_dim=64, n_shards=8,
         load_models(method.shard_models.models, checkpoint_path, device)
         user_to_shard = method.assignment.user_to_shard
     else:
-        user_to_shard = method.train(train_data, device)
+        if partition == 'inpfrozen':
+            print(f"\n  [frozen-InP] building FROZEN InP (WMF k-means) partition "
+                  f"(Ours unlearn sẽ KHÔNG re-cluster -> stable 0% + utility InP)")
+            frozen = build_frozen_inp_partition(
+                dataset, emb_dim, n_shards, train_data, n_users,
+                max_epochs_wmf=max_epochs_wmf, batch_size=batch_size, lr=lr)
+            user_to_shard = method.train(train_data, device, user_to_shard=frozen)
+        else:
+            user_to_shard = method.train(train_data, device)
         # Skip saving checkpoint due to disk space
         # save_models(method.shard_models.models, checkpoint_path)
         print(f"  Skipped saving checkpoint due to disk space")
@@ -938,6 +975,9 @@ if __name__ == '__main__':
     parser.add_argument('--max_epochs', type=int, default=100)
     parser.add_argument('--signature_dim', type=int, default=64)
     parser.add_argument('--use_mean', type=int, default=0, help='1: use mean aggregation, 0: use hard-routing')
+    parser.add_argument('--partition', type=str, default='signature', choices=['signature', 'inpfrozen'],
+                       help='signature: Ours base (hash). inpfrozen: Rec InP (WMF k-means) partition FROZEN -> stable 0% + utility InP')
+    parser.add_argument('--max_epochs_wmf', type=int, default=100, help='WMF epochs (chỉ dùng khi --partition inpfrozen)')
     parser.add_argument('--unlearn_ratio', type=float, default=0.1)
     parser.add_argument('--unlearn_mode', type=str, default='random',
                        choices=['random', 'fewest', 'most', 'single'],
@@ -962,5 +1002,7 @@ if __name__ == '__main__':
         unlearn_mode=args.unlearn_mode,
         unlearn_user_id=args.unlearn_user_id,
         retrain_epochs=args.retrain_epochs,
-        output_suffix=args.output_suffix
+        output_suffix=args.output_suffix,
+        partition=args.partition,
+        max_epochs_wmf=args.max_epochs_wmf
     )
