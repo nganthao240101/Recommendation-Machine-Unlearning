@@ -757,21 +757,31 @@ class OursMethod:
 # MAIN
 # ============================================================================
 
-def build_frozen_inp_partition(dataset, emb_dim, n_shards, train_data, n_users,
-                                max_epochs_wmf=100, batch_size=512, lr=0.05):
-    """Build Rec's InP (WMF k-means) partition ONCE on full data, return frozen mapping.
+def build_frozen_partition(dataset, emb_dim, n_shards, train_data, n_users,
+                           partition_type=1, max_epochs_wmf=100, batch_size=512, lr=0.05):
+    """Build Rec's partition (InP=1 user+item WMF k-means / UBP=2 user-only k-means)
+    ONCE on full data, return FROZEN mapping (Ours unlearn KHÔNG re-cluster -> stable 0%).
 
-    Dùng lại DataPartitioner._partition_inp_paper + load_or_train_wmf của method_3.
-    Result = user_to_shard (int32, len n_users) để Ours train + unlearn KHÔNG re-cluster.
+    Dùng lại DataPartitioner + load_or_train_wmf của method_3.
+    Result = user_to_shard (int32, len n_users).
     """
     from method_3_receraser_v2 import DataPartitioner, load_or_train_wmf
     user_emb, item_emb = load_or_train_wmf(dataset, emb_dim, max_epochs_wmf, batch_size, lr)
-    part = DataPartitioner(n_shards=n_shards, partition_type=1, seed=42)
+    part = DataPartitioner(n_shards=n_shards, partition_type=partition_type, seed=42)
     user_to_shard = part.partition_users(train_data, n_users, user_emb, item_emb)
     counts = np.bincount(user_to_shard, minlength=n_shards)
-    print(f"  [frozen-InP] partition built: {n_shards} shards, sizes min/max = "
+    name = {1: 'InP', 2: 'UBP'}.get(partition_type, f'type{partition_type}')
+    print(f"  [frozen-{name}] partition built: {n_shards} shards, sizes min/max = "
           f"{int(counts.min())}/{int(counts.max())}")
     return user_to_shard
+
+
+# Giữ tên cũ (InP) cho tương thích
+def build_frozen_inp_partition(dataset, emb_dim, n_shards, train_data, n_users,
+                                max_epochs_wmf=100, batch_size=512, lr=0.05):
+    return build_frozen_partition(dataset, emb_dim, n_shards, train_data, n_users,
+                                  partition_type=1, max_epochs_wmf=max_epochs_wmf,
+                                  batch_size=batch_size, lr=lr)
 
 
 def run_ours(dataset='ml-1m', emb_dim=64, n_shards=8,
@@ -872,11 +882,14 @@ def run_ours(dataset='ml-1m', emb_dim=64, n_shards=8,
         load_models(method.shard_models.models, checkpoint_path, device)
         user_to_shard = method.assignment.user_to_shard
     else:
-        if partition == 'inpfrozen':
-            print(f"\n  [frozen-InP] building FROZEN InP (WMF k-means) partition "
-                  f"(Ours unlearn sẽ KHÔNG re-cluster -> stable 0% + utility InP)")
-            frozen = build_frozen_inp_partition(
+        _FROZEN = {'inpfrozen': 1, 'ubpfrozen': 2}
+        if partition in _FROZEN:
+            _pname = {1: 'InP', 2: 'UBP'}[_FROZEN[partition]]
+            print(f"\n  [frozen-{_pname}] building FROZEN {_pname} (WMF k-means) partition "
+                  f"(Ours unlearn sẽ KHÔNG re-cluster -> stable 0% + utility {_pname})")
+            frozen = build_frozen_partition(
                 dataset, emb_dim, n_shards, train_data, n_users,
+                partition_type=_FROZEN[partition],
                 max_epochs_wmf=max_epochs_wmf, batch_size=batch_size, lr=lr)
             user_to_shard = method.train(train_data, device, user_to_shard=frozen)
         else:
@@ -979,9 +992,11 @@ if __name__ == '__main__':
     parser.add_argument('--max_epochs', type=int, default=100)
     parser.add_argument('--signature_dim', type=int, default=64)
     parser.add_argument('--use_mean', type=int, default=0, help='1: use mean aggregation, 0: use hard-routing')
-    parser.add_argument('--partition', type=str, default='signature', choices=['signature', 'inpfrozen'],
-                       help='signature: Ours base (hash). inpfrozen: Rec InP (WMF k-means) partition FROZEN -> stable 0% + utility InP')
-    parser.add_argument('--max_epochs_wmf', type=int, default=100, help='WMF epochs (chỉ dùng khi --partition inpfrozen)')
+    parser.add_argument('--partition', type=str, default='signature',
+                       choices=['signature', 'inpfrozen', 'ubpfrozen'],
+                       help='signature: Ours base (hash). inpfrozen: Rec InP (user+item WMF k-means) FROZEN. '
+                            'ubpfrozen: Rec UBP (user-only WMF k-means) FROZEN -> stable 0% + utility đó partition')
+    parser.add_argument('--max_epochs_wmf', type=int, default=100, help='WMF epochs (dùng khi --partition inpfrozen hoặc ubpfrozen)')
     parser.add_argument('--unlearn_ratio', type=float, default=0.1)
     parser.add_argument('--unlearn_mode', type=str, default='random',
                        choices=['random', 'fewest', 'most', 'single'],
