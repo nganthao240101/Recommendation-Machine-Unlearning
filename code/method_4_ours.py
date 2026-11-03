@@ -701,8 +701,12 @@ class OursMethod:
         print(f"\n    [Unlearn] Affected shards: {affected_shards}")
 
         # Component I: Remove from signatures
-        print("    [Unlearn] Component I: Removing from signatures...")
-        self.signature_builder.remove_users(unlearn_user_ids)
+        # (skip if frozen partition mode - no signatures built, assignment is fixed)
+        if self.signature_builder.user_signatures is not None:
+            print("    [Unlearn] Component I: Removing from signatures...")
+            self.signature_builder.remove_users(unlearn_user_ids)
+        else:
+            print("    [Unlearn] Component I: SKIPPED (frozen partition, no signatures)")
 
         # Component II: Assignment is STABLE - no changes needed!
         print("    [Unlearn] Component II: Assignment is STABLE (no changes)")
