@@ -766,11 +766,15 @@ def build_frozen_partition(dataset, emb_dim, n_shards, train_data, n_users,
     Result = user_to_shard (int32, len n_users).
     """
     from method_3_receraser_v2 import DataPartitioner, load_or_train_wmf
-    user_emb, item_emb = load_or_train_wmf(dataset, emb_dim, max_epochs_wmf, batch_size, lr)
+    if partition_type == 3:
+        # Random/modulo: KHÔNG cần WMF (partition thuần user_id % n_shards)
+        user_emb, item_emb = None, None
+    else:
+        user_emb, item_emb = load_or_train_wmf(dataset, emb_dim, max_epochs_wmf, batch_size, lr)
     part = DataPartitioner(n_shards=n_shards, partition_type=partition_type, seed=42)
     user_to_shard = part.partition_users(train_data, n_users, user_emb, item_emb)
     counts = np.bincount(user_to_shard, minlength=n_shards)
-    name = {1: 'InP', 2: 'UBP'}.get(partition_type, f'type{partition_type}')
+    name = {1: 'InP', 2: 'UBP', 3: 'Random'}.get(partition_type, f'type{partition_type}')
     print(f"  [frozen-{name}] partition built: {n_shards} shards, sizes min/max = "
           f"{int(counts.min())}/{int(counts.max())}")
     return user_to_shard
@@ -882,10 +886,11 @@ def run_ours(dataset='ml-1m', emb_dim=64, n_shards=8,
         load_models(method.shard_models.models, checkpoint_path, device)
         user_to_shard = method.assignment.user_to_shard
     else:
-        _FROZEN = {'inpfrozen': 1, 'ubpfrozen': 2}
+        _FROZEN = {'inpfrozen': 1, 'ubpfrozen': 2, 'randomfrozen': 3}
         if partition in _FROZEN:
-            _pname = {1: 'InP', 2: 'UBP'}[_FROZEN[partition]]
-            print(f"\n  [frozen-{_pname}] building FROZEN {_pname} (WMF k-means) partition "
+            _pname = {1: 'InP', 2: 'UBP', 3: 'Random'}[_FROZEN[partition]]
+            _kind = '(modulo, no WMF)' if _FROZEN[partition] == 3 else '(WMF k-means)'
+            print(f"\n  [frozen-{_pname}] building FROZEN {_pname} {_kind} partition "
                   f"(Ours unlearn sẽ KHÔNG re-cluster -> stable 0% + utility {_pname})")
             frozen = build_frozen_partition(
                 dataset, emb_dim, n_shards, train_data, n_users,
@@ -993,9 +998,11 @@ if __name__ == '__main__':
     parser.add_argument('--signature_dim', type=int, default=64)
     parser.add_argument('--use_mean', type=int, default=0, help='1: use mean aggregation, 0: use hard-routing')
     parser.add_argument('--partition', type=str, default='signature',
-                       choices=['signature', 'inpfrozen', 'ubpfrozen'],
+                       choices=['signature', 'inpfrozen', 'ubpfrozen', 'randomfrozen'],
                        help='signature: Ours base (hash). inpfrozen: Rec InP (user+item WMF k-means) FROZEN. '
-                            'ubpfrozen: Rec UBP (user-only WMF k-means) FROZEN -> stable 0% + utility đó partition')
+                            'ubpfrozen: Rec UBP (user-only WMF k-means) FROZEN. '
+                            'randomfrozen: Random/modulo (no WMF) FROZEN. '
+                            'All frozen -> Ours 0% deletion-stable + correct scope + that partition\'s utility')
     parser.add_argument('--max_epochs_wmf', type=int, default=100, help='WMF epochs (dùng khi --partition inpfrozen hoặc ubpfrozen)')
     parser.add_argument('--unlearn_ratio', type=float, default=0.1)
     parser.add_argument('--unlearn_mode', type=str, default='random',

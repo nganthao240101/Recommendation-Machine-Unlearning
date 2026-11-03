@@ -168,6 +168,42 @@ def main():
                        retained_ids, K, similarity_aware=False, deletion_stable_expected=True))
 
     # ------------------------------------------------------------------
+    # Ours FROZEN partitions (InP/UBP/Random) - "stable" vì FROZEN khi xóa
+    # (partition build 1 LẦN trên FULL, giữ mapping; unlearn KHÔNG re-cluster)
+    # -> 4 Ours-partition (signature + InP + UBP + Random) ĐỀU deletion-stable 0%
+    # ------------------------------------------------------------------
+    from method_3_receraser_v2 import DataPartitioner
+    base = os.path.dirname(os.path.dirname(__file__))
+    wmf_path = os.path.join(base, 'data', args.dataset, 'wmf_embeddings.npz')
+    wmf_ok = os.path.exists(wmf_path)
+    user_emb_full = None
+    if wmf_ok:
+        w = np.load(wmf_path)
+        user_emb_full = w['user_embeddings'][:N]
+        item_emb_full = w['item_embeddings']
+
+    # Random (modulo, no WMF) - FROZEN
+    pr = DataPartitioner(n_shards=K, partition_type=3, seed=42)
+    A_full_r = pr.partition_users(train_data, N, None, None).astype(np.int64)
+    A_ret_r = pr.partition_users(train_ret, N, None, None).astype(np.int64)  # modulo -> 0 đổi
+    rows.append(analyze("Ours Random-frozen", A_full_r, A_ret_r, unlearn,
+                       retained_ids, K, similarity_aware=False, deletion_stable_expected=True))
+
+    if wmf_ok:
+        # UBP (user-only WMF k-means) - build FULL, rồi RETAINED (thật ra frozen -> giữ FULL)
+        for pt, label, use_item in ((2, "Ours UBP-frozen", False), (1, "Ours InP-frozen", True)):
+            pf = DataPartitioner(n_shards=K, partition_type=pt, seed=42)
+            A_full_x = pf.partition_users(train_data, N, user_emb_full,
+                                          item_emb_full if use_item else None).astype(np.int64)
+            # FROZEN: mapping giữ nguyên (KHÔNG re-cluster) -> A_ret == A_full (0 user đổi)
+            A_ret_x = A_full_x.copy()
+            rows.append(analyze(label, A_full_x, A_ret_x, unlearn,
+                               retained_ids, K, similarity_aware=True,
+                               deletion_stable_expected=True))
+    else:
+        print(f"\n  [Ours InP/UBP-frozen] no WMF embeddings at {wmf_path}; skip (chỉ có Random-frozen).")
+
+    # ------------------------------------------------------------------
     # Rec UBP (balanced, đúng paper) - similarity-aware nhưng KHÔNG deletion-stable
     # ------------------------------------------------------------------
     base = os.path.dirname(os.path.dirname(__file__))
