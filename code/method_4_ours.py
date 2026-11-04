@@ -757,8 +757,24 @@ class OursMethod:
 # MAIN
 # ============================================================================
 
+def train_bpr_full_embeddings(n_users, n_items, emb_dim, train_data, device,
+                              batch_size=512, lr=0.05, n_epochs=100):
+    """Train BPRMF (BPR + L2 reg 0.01 + clamp±50 - model trong method_1) trên FULL data,
+    trả (user_emb, item_emb) ndarray (n x D) - nguồn embedding LƯA CHỌN cho partition
+    (so với WMF-npz: khác = L2 reg 0.01 + clamp, còn lại cùng BPR, cùng full data)."""
+    model = BPRMF(n_users, n_items, emb_dim).to(device)
+    print(f"  [embed=bprfull] training FULL-data BPRMF: emb_dim={emb_dim}, epochs={n_epochs}")
+    train_shard_model(model, train_data, n_items, device,
+                      batch_size=batch_size, lr=lr, n_epochs=n_epochs)
+    user_emb = model.user_embedding.weight.data.cpu().numpy()
+    item_emb = model.item_embedding.weight.data.cpu().numpy()
+    print(f"  [embed=bprfull] embeddings: user={user_emb.shape}, item={item_emb.shape}")
+    return user_emb, item_emb
+
+
 def build_frozen_partition(dataset, emb_dim, n_shards, train_data, n_users,
-                           partition_type=1, max_epochs_wmf=100, batch_size=512, lr=0.05):
+                           partition_type=1, max_epochs_wmf=100, batch_size=512, lr=0.05,
+                           n_items=0, embed_source='wmf'):
     """Build Rec's partition (InP=1 user+item WMF k-means / UBP=2 user-only k-means)
     ONCE on full data, return FROZEN mapping (Ours unlearn KHÔNG re-cluster -> stable 0%).
 
@@ -767,9 +783,16 @@ def build_frozen_partition(dataset, emb_dim, n_shards, train_data, n_users,
     """
     from method_3_receraser_v2 import DataPartitioner, load_or_train_wmf
     if partition_type == 3:
-        # Random/modulo: KHÔNG cần WMF (partition thuần user_id % n_shards)
+        # Random/modulo: KHÔNG cần embedding (partition thuần user_id % n_shards)
         user_emb, item_emb = None, None
+    elif embed_source == 'bprfull':
+        # Train BPRMF (BPR + L2 reg 0.01 + clamp) trên FULL data -> embedding BPR
+        device = 'cuda' if torch.cuda.is_available() else 'cpu'
+        user_emb, item_emb = train_bpr_full_embeddings(
+            n_users, n_items, emb_dim, train_data, device,
+            batch_size=batch_size, lr=lr, n_epochs=max_epochs_wmf)
     else:
+        # Mặc định: WMF-npz (load, hoặc train nếu chưa có)
         user_emb, item_emb = load_or_train_wmf(dataset, emb_dim, max_epochs_wmf, batch_size, lr)
     part = DataPartitioner(n_shards=n_shards, partition_type=partition_type, seed=42)
     user_to_shard = part.partition_users(train_data, n_users, user_emb, item_emb)
@@ -792,7 +815,7 @@ def run_ours(dataset='ml-1m', emb_dim=64, n_shards=8,
             batch_size=512, lr=0.05, max_epochs=100,
             unlearn_ratio=0.1, unlearn_mode='random', unlearn_user_id=None,
             retrain_epochs=50, signature_dim=64, use_mean=False, output_suffix='',
-            partition='signature', max_epochs_wmf=100):
+            partition='signature', max_epochs_wmf=100, embed_source='wmf'):
     """
     Chạy Ours method với 3 components đúng theo bài báo
     """
@@ -895,7 +918,8 @@ def run_ours(dataset='ml-1m', emb_dim=64, n_shards=8,
             frozen = build_frozen_partition(
                 dataset, emb_dim, n_shards, train_data, n_users,
                 partition_type=_FROZEN[partition],
-                max_epochs_wmf=max_epochs_wmf, batch_size=batch_size, lr=lr)
+                max_epochs_wmf=max_epochs_wmf, batch_size=batch_size, lr=lr,
+                n_items=n_items, embed_source=embed_source)
             user_to_shard = method.train(train_data, device, user_to_shard=frozen)
         else:
             user_to_shard = method.train(train_data, device)
@@ -1003,7 +1027,11 @@ if __name__ == '__main__':
                             'ubpfrozen: Rec UBP (user-only WMF k-means) FROZEN. '
                             'randomfrozen: Random/modulo (no WMF) FROZEN. '
                             'All frozen -> Ours 0% deletion-stable + correct scope + that partition\'s utility')
-    parser.add_argument('--max_epochs_wmf', type=int, default=100, help='WMF epochs (dùng khi --partition inpfrozen hoặc ubpfrozen)')
+    parser.add_argument('--max_epochs_wmf', type=int, default=100, help='WMF/BPR-embed epochs (dùng khi --partition inpfrozen/ubpfrozen; epochs để train BPRMF nếu --embed_source bprfull)')
+    parser.add_argument('--embed_source', type=str, default='wmf', choices=['wmf', 'bprfull'],
+                       help='Nguồn embedding cho partition InP/UBP: wmf (load wmf_embeddings.npz - BPR-trọng-1, không reg) '
+                            'hoặc bprfull (train BPRMF + L2 reg 0.01 + clamp trên FULL data - model method_1). '
+                            'Chỉ dùng khi --partition inpfrozen/ubpfrozen.')
     parser.add_argument('--unlearn_ratio', type=float, default=0.1)
     parser.add_argument('--unlearn_mode', type=str, default='random',
                        choices=['random', 'fewest', 'most', 'single'],
@@ -1030,5 +1058,6 @@ if __name__ == '__main__':
         retrain_epochs=args.retrain_epochs,
         output_suffix=args.output_suffix,
         partition=args.partition,
-        max_epochs_wmf=args.max_epochs_wmf
+        max_epochs_wmf=args.max_epochs_wmf,
+        embed_source=args.embed_source
     )
