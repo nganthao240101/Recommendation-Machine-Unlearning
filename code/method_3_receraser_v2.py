@@ -782,7 +782,7 @@ def run_receraser_v2(dataset='ml-1m', emb_dim=64, n_shards=8, partition_type=1,
                     unlearn_mode='random',
                     batch_size=512, lr=0.01, lr_finetune=0.001,
                     use_attention=True, output_suffix='',
-                    no_wmf_in_model=False):
+                    no_wmf_in_model=False, embed_source='wmf'):
     """
     RecEraser với WMF pretrained embeddings
 
@@ -854,15 +854,22 @@ def run_receraser_v2(dataset='ml-1m', emb_dim=64, n_shards=8, partition_type=1,
     cache_dir = data_dir_for(dataset)
     partitioner = DataPartitioner(n_shards=n_shards, partition_type=partition_type, seed=42)
 
-    if partitioner.load_cache(cache_dir, train_data):
+    if partitioner.load_cache(cache_dir, train_data) and embed_source == 'wmf':
         print("  Using cached partition (skipping WMF + re-clustering)")
         partitioner.build_shard_data(train_data)
         user_emb, item_emb = None, None   # không cần nữa
     else:
-        # Chưa có cache: cần WMF (nếu partition_type != 3)
+        # Chưa có cache (hoặc đang dùng BPR-embedding -> bỏ qua cache WMF): cần embedding
         if partition_type == 3:
             user_emb, item_emb = None, None
-            print("  [Random] không cần WMF")
+            print("  [Random] không cần embedding")
+        elif embed_source == 'bprfull':
+            # Train BPRMF (BPR + L2 reg 0.01 + clamp) trên FULL data -> embedding BPR
+            from method_4_ours import train_bpr_full_embeddings
+            print(f"  [embed=bprfull] training FULL-data BPRMF embeddings (Rec, bypass WMF cache)")
+            user_emb, item_emb = train_bpr_full_embeddings(
+                n_users, n_items, emb_dim, train_data, device,
+                batch_size=batch_size, lr=lr, n_epochs=max_epochs_wmf)
         elif max_epochs_wmf == 0:
             user_emb, item_emb = None, None
             print("  Skipping WMF (max_epochs_wmf=0); partition sẽ run không có embedding")
@@ -870,7 +877,9 @@ def run_receraser_v2(dataset='ml-1m', emb_dim=64, n_shards=8, partition_type=1,
             user_emb, item_emb = load_or_train_wmf(dataset, emb_dim, max_epochs_wmf, batch_size, lr)
 
         partitioner.partition_users(train_data, n_users, user_emb, item_emb)
-        partitioner.save_cache(cache_dir, train_data)
+        # Chỉ save cache khi dùng WMF (cache định danh theo partition_type, dùng chung)
+        if embed_source == 'wmf':
+            partitioner.save_cache(cache_dir, train_data)
         partitioner.build_shard_data(train_data)
 
     # =========================================================================
@@ -1023,6 +1032,9 @@ if __name__ == '__main__':
     parser.add_argument('--lr_finetune', type=float, default=0.001)
     parser.add_argument('--use_attention', type=int, default=1, help='1: use attention aggregation, 0: use mean aggregation')
     parser.add_argument('--output_suffix', type=str, default='')
+    parser.add_argument('--embed_source', type=str, default='wmf', choices=['wmf', 'bprfull'],
+                       help='Nguồn embedding cho partition InP/UBP: wmf (wmf_embeddings.npz - BPR-trọng-1, không reg) '
+                            'hoặc bprfull (train BPRMF + L2 reg 0.01 + clamp FULL data). bprfull bỏ qua cache WMF.')
     parser.add_argument('--no_wmf_in_model', action='store_true',
                         help='skip load_pretrained_embeddings (random-init, same capacity); '
                              'WMF still used only for InP/UBP partition')
@@ -1043,5 +1055,6 @@ if __name__ == '__main__':
         lr_finetune=args.lr_finetune,
         use_attention=bool(args.use_attention),
         output_suffix=args.output_suffix,
-        no_wmf_in_model=args.no_wmf_in_model
+        no_wmf_in_model=args.no_wmf_in_model,
+        embed_source=args.embed_source
     )
