@@ -9,11 +9,15 @@
 #   2) OURS×PART : Ours × {signature,Random,UBP,InP}(frozen) × {wmf,bprfull}
 #   3) REC×PART  : Rec  × {InP,UBP,Random} × {wmf,bprfull} (no-WMF, mean, lr 0.05)
 #   4) EX6       : stability (flip%) 4 Ours-partition (không train, ~5p/ds)
+#   comb        : = KHỐI 1 + KHỐI 3 gộp 1 chỗ (4 method + Rec×3-partition×2-model,
+#                 CẢ 2 dataset, CẢ 2 model) -> "1 lệnh so tất cả"
 #
 # Cách dùng:
-#   bash code/run_compare_all.sh                # tất cả
-#   BLOCKS="2 3" bash code/run_compare_all.sh   # chỉ so partition × model
-#   bash code/run_compare_all.sh --grep         # in mọi số
+#   bash code/run_compare_all.sh                     # tất cả (1 2 3 4)
+#   BLOCKS="comb" bash code/run_compare_all.sh       # 4 method + Rec×3partition×2model (đúng ý "khối1+3")
+#   BLOCKS="comb 4" bash code/run_compare_all.sh     # + thêm EX6
+#   BLOCKS="2 3" bash code/run_compare_all.sh        # chỉ so partition × model
+#   bash code/run_compare_all.sh --grep              # in mọi số
 # ============================================================================
 set -u
 cd "$(dirname "$0")/.."
@@ -98,6 +102,46 @@ for ds in ml-1m yelp2018; do
   for pt in 1 2; do
     for emb in wmf bprfull; do
       run "logs/cmp3_${ds}_pt${pt}_emb${emb}.log" "M3 $ds Rec-pt${pt} emb=$emb" \
+        python code/method_3_receraser_v2.py --dataset $ds --emb_dim 64 --n_shards $K \
+          --partition_type $pt --max_epochs_wmf $EWMF --max_epochs_local $EL \
+          --use_attention 0 --no_wmf_in_model --lr_finetune 0.05 \
+          --embed_source $emb --unlearn_ratio $R --unlearn_mode $M
+    done
+  done
+done
+fi
+
+# ============================================================================
+# KHỐI "comb" = KHỐI 1 (4 method) + KHỐI 3 (Rec x 3 partition x 2 model),
+# CẢ 2 DATASET, CẢ 2 MODEL (wmf/bprfull). Chạy: BLOCKS="comb"
+#   - 4 method: Full / Ours(sig) / SISA / Rec-UBP (WMF-in, "Rec thật")
+#   - Rec x 3 partition (InP/UBP/Random) x 2 model (wmf & bprfull)
+# ============================================================================
+if echo " $BLOCKS " | grep -q " comb "; then
+for ds in ml-1m yelp2018; do
+  # ---- 4 PHƯƠNG PHÁP (khối 1) ----
+  run "logs/cmp1_${ds}_full.log"  "comb $ds FULL" \
+    python code/method_1_full_retrain.py --dataset $ds --emb_dim 64 --max_epochs $E \
+      --unlearn_ratio $R --unlearn_mode $M
+  run "logs/cmp1_${ds}_ours.log" "comb $ds OURS(sig)" \
+    python code/method_4_ours.py --dataset $ds --emb_dim 64 --n_shards $K \
+      --signature_dim $D --max_epochs $E --unlearn_ratio $R --unlearn_mode $M
+  run "logs/cmp1_${ds}_sisa.log" "comb $ds SISA" \
+    python code/method_2_sisa.py --dataset $ds --emb_dim 64 --n_shards $K \
+      --max_epochs $E --unlearn_ratio $R --unlearn_mode $M
+  run "logs/cmp1_${ds}_rec.log"  "comb $ds REC-UBP (WMF-in, attn) [Rec thật]" \
+    python code/method_3_receraser_v2.py --dataset $ds --emb_dim 64 --n_shards $K \
+      --partition_type 2 --max_epochs_wmf $EWMF --max_epochs_local $EL \
+      --use_attention 1 --lr_finetune 0.05 --unlearn_ratio $R --unlearn_mode $M
+  # ---- Rec x 3 PARTITION x 2 MODEL (khối 3) ----
+  run "logs/cmp3_${ds}_pt3_random.log" "comb $ds Rec-Random (no-emb)" \
+    python code/method_3_receraser_v2.py --dataset $ds --emb_dim 64 --n_shards $K \
+      --partition_type 3 --max_epochs_wmf 0 --max_epochs_local $EL \
+      --use_attention 0 --no_wmf_in_model --lr_finetune 0.05 \
+      --unlearn_ratio $R --unlearn_mode $M
+  for pt in 1 2; do
+    for emb in wmf bprfull; do
+      run "logs/cmp3_${ds}_pt${pt}_emb${emb}.log" "comb $ds Rec-pt${pt} emb=$emb" \
         python code/method_3_receraser_v2.py --dataset $ds --emb_dim 64 --n_shards $K \
           --partition_type $pt --max_epochs_wmf $EWMF --max_epochs_local $EL \
           --use_attention 0 --no_wmf_in_model --lr_finetune 0.05 \
