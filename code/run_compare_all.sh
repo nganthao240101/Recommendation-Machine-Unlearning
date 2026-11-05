@@ -33,6 +33,49 @@ BLOCKS="${BLOCKS:-1 2 3 4}"
 
 log(){ echo "=== $(date +%H:%M:%S) $1 ==="; }
 
+# ---------------------------------------------------------------------------
+# --grep: CHỈ IN SỐ, KHÔNG CHẠY GÌ. Phải kiểm TRƯỚC khi chạy các khối,
+# nếu không lệnh này sẽ chạy lại toàn bộ (rất tốn thời gian/GPU).
+# ---------------------------------------------------------------------------
+if [ "${1:-}" = "--grep" ]; then
+  rnum(){ grep -hE "After \(RETAINED" "$1" 2>/dev/null | grep -oE "R@10: [0-9.]+" || echo "(thiếu)"; }
+  echo "########## KHỐI 1 - 4 PHƯƠNG PHÁP (Before / After / Unlearn time) ##########"
+  for ds in ml-1m yelp2018; do
+    echo "----- $ds -----"
+    for m in full ours sisa rec_ubp_author; do
+      echo "[$ds:$m]"; grep -hE "Before \(FULL|After \(RETAINED|Unlearn time" logs/cmp1_${ds}_${m}.log 2>/dev/null || echo "  (thiếu)"
+    done
+  done
+  echo ""
+  echo "########## KHỐI 2 - Ours × 4 PARTITION × {wmf,bprfull} ##########"
+  for ds in ml-1m yelp2018; do
+    echo "----- $ds -----"
+    printf "%-16s : " "sig"        "$(rnum logs/cmp2_${ds}_signature.log)"
+    printf "  randomfrozen : " "$(rnum logs/cmp2_${ds}_randomfrozen.log)"
+    for part in ubpfrozen inpfrozen; do
+      printf "%-14s wmf : " "$part" "$(rnum logs/cmp2_${ds}_${part}_embwmf.log)"
+      printf "  bprfull : " "$(rnum logs/cmp2_${ds}_${part}_embbprfull.log)"
+    done
+  done
+  echo ""
+  echo "########## KHỐI 3 - Rec × 3 PARTITION × {wmf,bprfull} ##########"
+  for ds in ml-1m yelp2018; do
+    echo "----- $ds -----"
+    printf "%-14s : " "Random(no-emb)" "$(rnum logs/cmp3_${ds}_pt3_random.log)"
+    for pt in 1 2; do
+      pnm=$([ "$pt" = "1" ] && echo InP || echo UBP)
+      printf "%-14s wmf : " "$pnm" "$(rnum logs/cmp3_${ds}_pt${pt}_embwmf.log)"
+      printf "  bprfull : " "$(rnum logs/cmp3_${ds}_pt${pt}_embbprfull.log)"
+    done
+  done
+  echo ""
+  echo "########## KHỐI 4 - EX6 (flip% các method × partition) ##########"
+  for ds in ml-1m yelp2018; do
+    echo "----- $ds -----"; grep -hE "Ours|Rec|SISA|Instab" logs/cmp4_ex6_${ds}.log 2>/dev/null || echo "  (thiếu)"
+  done
+  exit 0
+fi
+
 # Run 1 lệnh, ghi log; SKIP nếu log đã có "After (RETAINED)"
 run(){  # $1=logfile  $2=label  $...=command
   local logfile="$1"; shift; local label="$1"; shift
@@ -168,47 +211,6 @@ done
 fi
 
 # ============================================================================
-# IN MỌI SỐ
+# IN MỌI SỐ: đã xử lý ở đầu script (--grep) để KHÔNG chạy lại các khối.
 # ============================================================================
-rnum(){  # $1=logfile  $2=prefix
-  grep -hE "After \(RETAINED" "$1" 2>/dev/null | grep -oE "R@10: [0-9.]+" || echo "(thiếu)"
-}
-if [ "${1:-}" = "--grep" ]; then
-  echo "########## KHỐI 1 - 4 PHƯƠNG PHÁP (Before / After / Unlearn time) ##########"
-  for ds in ml-1m yelp2018; do
-    echo "----- $ds -----"
-    for m in full ours sisa rec_ubp_author; do
-      echo "[$ds:$m]"; grep -hE "Before \(FULL|After \(RETAINED|Unlearn time" logs/cmp1_${ds}_${m}.log 2>/dev/null || echo "  (thiếu)"
-    done
-  done
-  echo ""
-  echo "########## KHỐI 2 - Ours × 4 PARTITION × {wmf,bprfull} ##########"
-  for ds in ml-1m yelp2018; do
-    echo "----- $ds -----"
-    printf "%-16s : " "sig"        "$(rnum logs/cmp2_${ds}_signature.log)"
-    printf "  randomfrozen : " "$(rnum logs/cmp2_${ds}_randomfrozen.log)"
-    for part in ubpfrozen inpfrozen; do
-      printf "%-14s wmf : " "$part" "$(rnum logs/cmp2_${ds}_${part}_embwmf.log)"
-      printf "  bprfull : " "$(rnum logs/cmp2_${ds}_${part}_embbprfull.log)"
-    done
-  done
-  echo ""
-  echo "########## KHỐI 3 - Rec × 3 PARTITION × {wmf,bprfull} ##########"
-  for ds in ml-1m yelp2018; do
-    echo "----- $ds -----"
-    printf "%-14s : " "Random(no-emb)" "$(rnum logs/cmp3_${ds}_pt3_random.log)"
-    for pt in 1 2; do
-      pnm=$([ "$pt" = "1" ] && echo InP || echo UBP)
-      printf "%-14s wmf : " "$pnm" "$(rnum logs/cmp3_${ds}_pt${pt}_embwmf.log)"
-      printf "  bprfull : " "$(rnum logs/cmp3_${ds}_pt${pt}_embbprfull.log)"
-    done
-  done
-  echo ""
-  echo "########## KHỐI 4 - EX6 (flip% 4 Ours-partition) ##########"
-  for ds in ml-1m yelp2018; do
-    echo "----- $ds -----"; grep -hE "Ours|Instability" logs/cmp4_ex6_${ds}.log 2>/dev/null || echo "  (thiếu)"
-  done
-  exit 0
-fi
-
 echo "XONG TẤT CẢ $(date +%H:%M:%S) - xem số: bash code/run_compare_all.sh --grep"
