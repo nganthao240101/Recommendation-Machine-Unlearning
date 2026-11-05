@@ -54,10 +54,10 @@ for ds in ml-1m yelp2018; do
   run "logs/cmp1_${ds}_sisa.log" "M1 $ds SISA" \
     python code/method_2_sisa.py --dataset $ds --emb_dim 64 --n_shards $K \
       --max_epochs $E --unlearn_ratio $R --unlearn_mode $M
-  run "logs/cmp1_${ds}_rec.log"  "M1 $ds REC-UBP (WMF-in, attn) [Rec thật]" \
+  run "logs/cmp1_${ds}_rec_pretrain.log"  "M1 $ds REC-UBP (pretrain=1 WMF-in, attn) [Rec thật]" \
     python code/method_3_receraser_v2.py --dataset $ds --emb_dim 64 --n_shards $K \
       --partition_type 2 --max_epochs_wmf $EWMF --max_epochs_local $EL \
-      --use_attention 1 --lr_finetune 0.05 --unlearn_ratio $R --unlearn_mode $M
+      --use_attention 1 --pretrain 1 --lr_finetune 0.05 --unlearn_ratio $R --unlearn_mode $M
 done
 fi
 
@@ -129,10 +129,10 @@ for ds in ml-1m yelp2018; do
   run "logs/cmp1_${ds}_sisa.log" "comb $ds SISA" \
     python code/method_2_sisa.py --dataset $ds --emb_dim 64 --n_shards $K \
       --max_epochs $E --unlearn_ratio $R --unlearn_mode $M
-  run "logs/cmp1_${ds}_rec.log"  "comb $ds REC-UBP (WMF-in, attn) [Rec thật]" \
+  run "logs/cmp1_${ds}_rec_pretrain.log"  "comb $ds REC-UBP (pretrain=1 WMF-in, attn) [Rec thật]" \
     python code/method_3_receraser_v2.py --dataset $ds --emb_dim 64 --n_shards $K \
       --partition_type 2 --max_epochs_wmf $EWMF --max_epochs_local $EL \
-      --use_attention 1 --lr_finetune 0.05 --unlearn_ratio $R --unlearn_mode $M
+      --use_attention 1 --pretrain 1 --lr_finetune 0.05 --unlearn_ratio $R --unlearn_mode $M
   # ---- Rec x 3 PARTITION x 2 MODEL (khối 3) ----
   run "logs/cmp3_${ds}_pt3_random.log" "comb $ds Rec-Random (no-emb)" \
     python code/method_3_receraser_v2.py --dataset $ds --emb_dim 64 --n_shards $K \
@@ -172,7 +172,7 @@ if [ "${1:-}" = "--grep" ]; then
   echo "########## KHỐI 1 - 4 PHƯƠNG PHÁP (Before / After / Unlearn time) ##########"
   for ds in ml-1m yelp2018; do
     echo "----- $ds -----"
-    for m in full ours sisa rec; do
+    for m in full ours sisa rec_pretrain; do
       echo "[$ds:$m]"; grep -hE "Before \(FULL|After \(RETAINED|Unlearn time" logs/cmp1_${ds}_${m}.log 2>/dev/null || echo "  (thiếu)"
     done
   done

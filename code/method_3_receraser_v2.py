@@ -782,7 +782,7 @@ def run_receraser_v2(dataset='ml-1m', emb_dim=64, n_shards=8, partition_type=1,
                     unlearn_mode='random',
                     batch_size=512, lr=0.01, lr_finetune=0.001,
                     use_attention=True, output_suffix='',
-                    no_wmf_in_model=False, embed_source='wmf'):
+                    no_wmf_in_model=False, embed_source='wmf', pretrain=0):
     """
     RecEraser với WMF pretrained embeddings
 
@@ -904,11 +904,17 @@ def run_receraser_v2(dataset='ml-1m', emb_dim=64, n_shards=8, partition_type=1,
         load_model(model, checkpoint_path, device)
     else:
         print(f"  Training RecEraser on all shards (first time)...")
-        if user_emb is not None and item_emb is not None and not no_wmf_in_model:
+        # KHỚP TÁC GIẢ (RecEraser_WMF.py):
+        #   - Mặc định (pretrain=0): model KHỞI TẠO NGẪU NHIÊN + train từ scratch.
+        #     WMF/BPR embedding CHỈ dùng cho partition (C/C_U/C_I), KHÔNG nạp vào model.
+        #   - pretrain=1 (opt-in): warm-start model từ embedding WMF (load_pretrained).
+        load_into_model = (pretrain == 1)
+        if load_into_model and user_emb is not None and item_emb is not None and not no_wmf_in_model:
             model.load_pretrained_embeddings(user_emb, item_emb, device)
-            print(f"  [WMF] loaded pretrained embeddings into model")
-        elif no_wmf_in_model:
-            print(f"  [no_wmf_in_model] skipping WMF-in-model (random init, same capacity)")
+            print(f"  [pretrain=1] loaded pretrained embeddings into model (warm-start, như tác giả pretrain=1)")
+        else:
+            print(f"  [pretrain={pretrain}] model random-init (khớp mặc định tác giả pretrain=0); "
+                  f"embedding CHỈ dùng cho partition" + ("" if no_wmf_in_model else "; WMF-in-model bị tắt bởi --no_wmf_in_model"))
         for shard_id in range(n_shards):
             if partitioner.shard_data[shard_id]:
                 print(f"  Training shard {shard_id}...")
@@ -1038,6 +1044,9 @@ if __name__ == '__main__':
     parser.add_argument('--no_wmf_in_model', action='store_true',
                         help='skip load_pretrained_embeddings (random-init, same capacity); '
                              'WMF still used only for InP/UBP partition')
+    parser.add_argument('--pretrain', type=int, default=0, choices=[0, 1],
+                        help='0 = MẶC ĐỊNH (khớp tác giả pretrain=0): model random-init + train từ scratch, '
+                             'embedding CHỈ dùng cho partition. 1 = warm-start model từ embedding (tác giả pretrain=1).')
 
     args = parser.parse_args()
 
@@ -1056,5 +1065,6 @@ if __name__ == '__main__':
         use_attention=bool(args.use_attention),
         output_suffix=args.output_suffix,
         no_wmf_in_model=args.no_wmf_in_model,
-        embed_source=args.embed_source
+        embed_source=args.embed_source,
+        pretrain=args.pretrain
     )
