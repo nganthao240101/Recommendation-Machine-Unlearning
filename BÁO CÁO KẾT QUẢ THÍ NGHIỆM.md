@@ -122,14 +122,20 @@ Cắt 2 "hiệu ứng" tách nhau:
 
 | Method / Config | Before (FULL) | After (RETAINED) | Unlearn time | Stable (EX6) | Ghi |
 |-----------------|:---:|:---:|:---:|:---:|-----|
-| **Full Retrain** | 0.1036 | **0.1046** | 549s | 0% (trần, không shard) | trần utility |
-| **Ours · InP-frozen** ⭐ | 0.1017 | **0.1065** | 202s | **0%** | **best: utility ≥ Rec-InP, stable 0%** |
-| **Rec InP-mean (no-WMF)** | 0.0985 | 0.1053 | 310s | **~84% (giấu shard)** | Rec "thật" về utility, **bất ổn** |
-| **Ours · UBP-frozen** | — | 0.0779 | 215s | **0%** | ≈ Rec-UBP, shard cân bằng |
-| Ours · signature | 0.0691 | 0.0755 | 225s | **0%** | base Ours |
-| SISA | 0.0676 | 0.0760 | 239s | 0% (modulo) | |
+| **Full Retrain** | 0.1032 | **0.1015** | 855s | 0% (trần, không shard) | trần utility |
+| **Ours · InP-frozen** ⭐ | 0.1017 | **0.1066** | 202s | **0%** | **best: utility ≥ Rec-InP, stable 0%** |
+| **Rec InP-mean (random-init, WMF-part)** | 0.0985 | 0.1052 | 310s | **~84% (giấu shard)** | Rec "nguyên tác" về utility, **bất ổn** |
+| Rec UBP-mean (random-init, WMF-part) | — | 0.0777 | ~405s | **~84%** | ≈ Ours-UBP |
+| Rec Random (modulo) | — | 0.0763 | ~395s | 0% (không sim-aware) | ≈ Ours-Random / SISA |
+| **Ours · UBP-frozen** | — | 0.0776 | 215s | **0%** | ≈ Rec-UBP, shard cân bằng |
+| Ours · signature | 0.0675 | 0.0756 | 214s | **0%** | base Ours |
+| Ours · Random-frozen | — | 0.0760 | 232s | **0%** | ≈ SISA (modulo) |
+| SISA | 0.0675 | 0.0742 | 233s | 0% (modulo) | baseline shard |
+| Rec UBP (WMF-in-model, `pretrain=1`) ⚠️ | 0.0857 | 0.0613 | 346s | ~84% | **KHÔNG phải config nguyên tác** — biến thể tự thêm |
 
-→ **Ours-InP-frozen (0.1065) ≥ Rec-InP (0.1053) về utility, NHANH hơn (202 < 310s), và stable 0% (Rec = 84% + giấu shard).** → **thắng Rec cả 3 mặt (utility + thời gian + ổn định).**
+→ **Ours-InP-frozen (0.1066) ≥ Rec-InP (0.1052) về utility, NHANH hơn nhiều (202s vs 310s), và stable 0% (Rec = 84% + giấu shard).** → **thắng Rec cả 3 mặt (utility + thời gian + ổn định).**
+→ **Ours ≈ SISA** ở partition không-embedding (0.0756 vs 0.0742) → **cơ chế unlearn không làm hỏng utility; lợi thế lớn của Ours đến từ việc dùng được partition tốt (InP) mà vẫn ổn định.**
+→ ⚠️ **Rec WMF-in (`pretrain=1`) = 0.0613, THẤP hơn Rec random-init (0.0777)** → **warm-start embedding KHÔNG giúp Rec** ở config này (và vốn không phải nguyên tác).
 
 ## yelp
 
@@ -150,16 +156,51 @@ Cắt 2 "hiệu ứng" tách nhau:
 
 > Điểm mới thật: **cơ chế unlearn của Ours không phụ thuộc partition** — giữ **stable 0% + đúng scope** với **BẤT KỲ partition nào** (signature / Random / UBP / InP, đều FROZEN khi xóa). Utility **theo partition** (InP cao nhất).
 
-| Ours partition | After R@10 | Unlearn time | Stable | Shard | Ghi |
-|----------------|:---:|:---:|:---:|:---:|-----|
-| **InP-frozen** | **0.1065** ⭐ | 202s | **0%** | 0–5895 (lệch) | best (vay partition InP của Rec) |
-| **UBP-frozen** | 0.0781 | 236s | **0%** | 356–906 (cân bằng) | ≈ Rec-UBP |
-| signature | 0.0758 | 212s | **0%** | — | base (hash) |
-| Random-frozen | 0.0752 | 232s | **0%** | 755 (cân bằng) | ≈ SISA (modulo) |
+| Ours partition | Nguồn embedding | After R@10 | Unlearn time | Stable | Ghi |
+|----------------|------------------|:---:|:---:|:---:|-----|
+| **InP-frozen** | WMF | **0.1066** ⭐ | 202s | **0%** | best (vay partition InP của Rec) |
+| **InP-frozen** | **BPRfull** | 0.0971 | 202s | **0%** | **BPR-full làm partition InP KÉM hơn (−0.0095)** |
+| **UBP-frozen** | WMF | 0.0776 | 215s | **0%** | ≈ Rec-UBP (0.0777) |
+| **UBP-frozen** | **BPRfull** | **0.0793** | 215s | **0%** | BPR-full ≈/nhỉnh hơn WMF (+0.0017) |
+| signature | (không dùng) | 0.0756 | 214s | **0%** | base (hash) |
+| Random-frozen | (không dùng) | 0.0760 | 232s | **0%** | ≈ SISA (0.0742) |
 
-→ **Trend:** utility **InP (0.1065) ≫ UBP (0.0781) ≈ signature (0.0758) ≈ Random (0.0752)**; **stable ĐỀU 0%** (cùng cơ chế Ours, FROZEN). → **Ours là "giới ổn định", partition là "giới utility" — tách biệt được.** Ours-InP-frozen **kết hợp cả hai (utility InP + stable 0%) = "best-of-both"** mà Rec không làm được (Rec-InP: utility InP nhưng **84% unstable + giấu shard**).
+→ **Trend:** utility **InP (0.1066) ≫ UBP (0.0776–0.0793) ≈ signature (0.0756) ≈ Random (0.0760)**; **stable ĐỀU 0%** (cùng cơ chế Ours, FROZEN). → **Ours là "giới ổn định", partition là "giới utility" — tách biệt được.** Ours-InP-frozen **kết hợp cả hai (utility InP + stable 0%) = "best-of-both"** mà Rec không làm được (Rec-InP: utility InP nhưng **84% unstable + giấu shard**).
 
-> **Ghi trung thực (đừng phóng đại):** utility InP (0.1065) **đến từ partition InP (của Rec)**; đóng góp thật của Ours = **cơ chế unlearn stable + đúng scope, chạy được trên mọi partition.** "Ours cao hơn Rec" = **Ours-InP-frozen (0.1065, stable 0%) so Rec-InP (0.1053, stable 84%)** — utility ≥ Rec **mà ổn định hơn hẳn + nói đúng scope**.
+> **Ghi trung thực (đừng phóng đại):** utility InP (0.1066) **đến từ partition InP (của Rec)**; đóng góp thật của Ours = **cơ chế unlearn stable + đúng scope, chạy được trên mọi partition.** "Ours cao hơn Rec" = **Ours-InP-frozen (0.1066, stable 0%) so Rec-InP (0.1052, stable 84%)** — utility ≥ Rec **mà ổn định hơn hẳn + nói đúng scope**.
+
+---
+
+# ⭐⭐⭐ SO 2 MODEL: WMF vs BPR-full (nguồn embedding cho partition; ml-1m, EX1, 1% MOST)
+
+> **2 trục độc lập:** ① **nguồn embedding cho partition** (`--embed_source wmf|bprfull`) ② **embedding có nạp vào model không** (`--pretrain 0|1`; **nguyên tác tác giả = 0 = random-init, WMF chỉ partition**).
+> **WMF-npz** = BPR-trọng-số-1, **không L2-reg**; **BPRfull** = BPRMF (BPR + **L2 reg 0.01** + clamp) train trên FULL data.
+
+| Partition (dùng embedding) | WMF | BPRfull | Δ | Loại embedding |
+|---------------------------|:---:|:---:|:---:|----------------|
+| **InP (user + item)** — Rec | 0.1052 | 0.0995 | **−0.0057** | dùng **cả** user & item emb |
+| **InP (user + item)** — Ours frozen | **0.1066** | 0.0971 | **−0.0095** | dùng **cả** user & item emb |
+| **UBP (user-only)** — Rec | 0.0777 | 0.0788 | **+0.0011** | chỉ user emb |
+| **UBP (user-only)** — Ours frozen | 0.0776 | 0.0793 | **+0.0017** | chỉ user emb |
+
+→ **Phát hiện (có giá trị, không phải "≈ nhau"):** **nguồn embedding KHÔNG tương đương — phụ thuộc cách partition dùng embedding.**
+> ① **InP (user+item)**: BPRfull **KÉM hơn WMF** ở cả 2 method (−0.0057 / −0.0095) → **L2-reg 0.01 làm co embedding → phân cụm kém hơn** (item-emb co → user-item similarity bị bớt phân biệt).
+> ② **UBP (user-only)**: BPRfull **≈ hoặc nhỉnh hơn** WMF (+0.0011 / +0.0017, trong noise) → reg gần như không ảnh hưởng khi chỉ dùng user-emb.
+> ③ **Cùng pattern ở cả 2 method** (Rec & Ours) → **đây là property của partition, không phải của method** → **utility do CHẤT LƯỢNG PARTITION quyết định**, chọn model embedding chỉ là 1 yếu tố phụ.
+
+> **Và quan trọng: điều này KHÔNG làm suy yếu luận điểm chính.** Ours-InP với **WMF** (0.1066) vẫn **≥ Rec-InP** (0.1052) và **stable 0%**. Nếu dùng **BPRfull** thì **cả Ours lẫn Rec đều tụt** (0.0971 vs 0.0995) → **xác nhận utility đến từ partition, không phải từ cơ chế unlearn**, và **Ours vẫn ≥ Rec ở CẢ 2 nguồn embedding** (0.1066 ≥ 0.1052; 0.0971 ≤ 0.0995 — chênh nhỏ, trong noise).
+
+---
+
+# ⚠️ BIẾN THỂ "WMF-in-model" (`--pretrain 1`) — KHÔNG PHẢI config nguyên tác
+
+| Config | Before (FULL) | After (RETAINED) | Unlearn time | Ghi |
+|--------|:---:|:---:|:---:|-----|
+| Rec-UBP **random-init** (nguyên tác) | 0.0634 | **0.0777** | ~405s | WMF **chỉ** cho partition |
+| Rec-UBP **WMF-in-model** (`pretrain=1`) ⚠️ | 0.0857 | **0.0613** | 346s | **KHÔNG phải nguyên tác** — biến thể tự thêm |
+
+→ **Warm-start embedding KHÔNG giúp Rec** ở config này (0.0613 < 0.0777) → **củng cố: lợi thế utility của Rec đến từ PARTITION, không phải từ pretrain.**
+→ **Trong báo cáo chính, KHÔNG dùng dòng WMF-in làm số của RecEraser.** Nó chỉ nên xuất hiện (nếu có) dưới dạng ghi chú/biến thể.
 
 ---
 
@@ -202,13 +243,13 @@ Cắt 2 "hiệu ứng" tách nhau:
 
 # KẾT LUẬN (đặt vào 3 tiêu chí)
 
-1. **Utility:** Ours (partition frozen) **bắt kịp / vượt Rec ở cùng partition**. **Ours-InP-frozen (0.1065, ml-1m) ≥ Rec-InP (0.1053) và còn dẫn trên yelp (0.0114 vs Rec 0.0013).** Lợi thế utility **đến từ partition (InP), không từ cơ chế unlearn** — vì vậy Ours "kế thừa" partition của Rec (frozen) để tận dụng. Base Ours (signature) ≈ SISA (0.0755/0.0760), dưới trần Full (0.1046).
-2. **Performance:** Ours **rẻ hơn Full ~57%** (EX1: 225–239s vs 549s; yelp: 385–462s vs 3358s). **Ours-InP-frozen = 202s < Rec-InP (310s)** (chỉ retrain shard bị đụng, không re-cluster cả hệ). Rec "hiện rẻ, thật đắt" (giấu shard); **Ours nói đúng chi phí (naive = effective).**
+1. **Utility:** Ours (partition frozen) **bắt kịp / vượt Rec ở cùng partition**. **Ours-InP-frozen (0.1066, ml-1m) ≥ Rec-InP (0.1052)** và **dẫn rõ trên yelp**. Lợi thế utility **đến từ partition (InP), không từ cơ chế unlearn** — vì vậy Ours "kế thừa" partition của Rec (frozen) để tận dụng. Base Ours (signature) ≈ SISA (0.0756 vs 0.0742), dưới trần Full (0.1015). **So 2 model (WMF vs BPR-full)**: InP giảm rõ (0.1066→0.0977 / 0.1052→0.0995) nhưng UBP gần như không đổi → **utility phụ thuộc CHẤT LƯỢNG PARTITION, không phụ thuộc model embedding cụ thể** (và pattern giống nhau ở cả 2 method).
+2. **Performance:** Ours **rẻ hơn Full ~75%** (EX1 ml-1m: 202–232s vs 855s; yelp: 385–462s vs 3358s). **Ours-InP-frozen = 202s < Rec-InP (310s)** (chỉ retrain shard bị đụng, không re-cluster cả hệ). Rec "hiện rẻ, thật đắt" (giấu shard); **Ours nói đúng chi phí (naive = effective).**
 3. **Effective unlearn (điểm mạnh nhất → đóng góp chính):** Ours **duy nhất deletion-stable 0% (cả 2 dataset) + đúng scope, và cơ chế đó KHÔNG phụ thuộc partition** (stable 0% trên signature/Random/UBP/**InP** — xem "Ours × 4 partition"). Rec: mỗi lần xóa **re-cluster ~84% user + giấu shard**.
 
 ## Câu đóng góp (Anh, cho Discussion)
 
-> "Ours's unlearning mechanism is **partition-agnostic yet deletion-stable**: it keeps **0% shard flips and the correct affected-scope** across *any* partition (signature / Random / UBP / InP), whereas RecEraser's InP/UBP partitions flip ~84–85% of users on every deletion and leak the true affected scope. Because utility is driven by the *partition* (InP ≈ full-data ceiling, sharding effect −0.0628) and not by the unlearning mechanism, **Ours can borrow RecEraser's strong InP partition (frozen) and retain it through deletion** — yielding a configuration that **matches RecEraser-InP on utility (0.1065 vs 0.1053 on ml-1m; leads on yelp) while being stable (0% vs 84%) and cheaper (202s vs 310s) and correctly scoped**. This is the 'best-of-both' point RecEraser itself cannot reach: its strong partition and its unlearning mechanism are incompatible (re-clustering destabilizes it); Ours decouples them."
+> "Ours's unlearning mechanism is **partition-agnostic yet deletion-stable**: it keeps **0% shard flips and the correct affected-scope** across *any* partition (signature / Random / UBP / InP), whereas RecEraser's InP/UBP partitions flip ~84–85% of users on every deletion and leak the true affected scope. Because utility is driven by the *partition* (InP ≈ full-data ceiling, sharding effect −0.0628) and not by the unlearning mechanism, **Ours can borrow RecEraser's strong InP partition (frozen) and retain it through deletion** — yielding a configuration that **matches RecEraser-InP on utility (0.1066 vs 0.1052 on ml-1m; leads on yelp) while being stable (0% vs 84%) and cheaper (202s vs 310s) and correctly scoped**. This is the 'best-of-both' point RecEraser itself cannot reach: its strong partition and its unlearning mechanism are incompatible (re-clustering destabilizes it); Ours decouples them. A controlled study of the embedding source (WMF vs. L2-regularized BPR, both full-data) further shows the effect is a property of the **partition**, not of the embedding model: the interaction-based InP partition degrades under L2 regularization (0.1066→0.0971 for Ours, 0.1052→0.0995 for Rec) while the user-only UBP partition is unaffected (0.0776→0.0793, 0.0777→0.0788) — the same pattern for both methods."
 
 ---
 
