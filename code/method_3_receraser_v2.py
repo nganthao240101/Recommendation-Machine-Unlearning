@@ -911,10 +911,13 @@ def run_receraser_v2(dataset='ml-1m', emb_dim=64, n_shards=8, partition_type=1,
         load_into_model = (pretrain == 1)
         if load_into_model and user_emb is not None and item_emb is not None and not no_wmf_in_model:
             model.load_pretrained_embeddings(user_emb, item_emb, device)
-            print(f"  [pretrain=1] loaded pretrained embeddings into model (warm-start, như tác giả pretrain=1)")
+            print(f"  [pretrain=1] loaded pretrained embeddings into model (warm-start)")
+            print(f"  [pretrain=1] *** KHÔNG PHẢI config nguyên tác: tác giả LUÔN random-init model, "
+                  f"WMF chỉ dùng CHO PARTITION. Dùng pretrain=1 chỉ để đo lợi thế pretrain (K× capacity) ***")
         else:
-            print(f"  [pretrain={pretrain}] model random-init (khớp mặc định tác giả pretrain=0); "
-                  f"embedding CHỈ dùng cho partition" + ("" if no_wmf_in_model else "; WMF-in-model bị tắt bởi --no_wmf_in_model"))
+            print(f"  [pretrain={pretrain}] model random-init + train từ scratch "
+                  f"(KHỚP NGUYÊN TÁC RecEraser: WMF chỉ dùng cho partition, KHÔNG nạp vào model)"
+                  + ("" if no_wmf_in_model else "; --no_wmf_in_model cũng tắt WMF-in-model"))
         for shard_id in range(n_shards):
             if partitioner.shard_data[shard_id]:
                 print(f"  Training shard {shard_id}...")

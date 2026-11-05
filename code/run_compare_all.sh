@@ -5,12 +5,17 @@
 # Nguyên tắc: MỌI run có log riêng; NẾU log đã ra "After (RETAINED)" -> BỎ QUA.
 # Chọn khối:  BLOCKS="1 2 3 4" (default tất cả).  --grep để in mọi số.
 #
-#   1) METHODS   : Full / Ours(sig) / SISA / Rec(UBP WMF-in, Rec thật)  - 2 ds
+#   1) METHODS   : Full / Ours(sig) / SISA / Rec(UBP NGUYÊN TÁC: random-init,
+#                  WMF chỉ dùng cho partition, không nạp vào model)          - 2 ds
 #   2) OURS×PART : Ours × {signature,Random,UBP,InP}(frozen) × {wmf,bprfull}
 #   3) REC×PART  : Rec  × {InP,UBP,Random} × {wmf,bprfull} (no-WMF, mean, lr 0.05)
 #   4) EX6       : stability (flip%) 4 Ours-partition (không train, ~5p/ds)
 #   comb        : = KHỐI 1 + KHỐI 3 gộp 1 chỗ (4 method + Rec×3-partition×2-model,
 #                 CẢ 2 dataset, CẢ 2 model) -> "1 lệnh so tất cả"
+#
+# LƯU Ý NGYUÊN TÁC: RecEraser gốc LUÔN random-init model; WMF/BPR embedding CHỈ dùng
+# cho partition (C/C_U/C_I), KHÔNG bao giờ nạp vào model. --pretrain 1 (nạp emb vào
+# model) là variant TỰ THÊM để đo lợi thế pretrain, KHÔNG phải config của tác giả.
 #
 # Cách dùng:
 #   bash code/run_compare_all.sh                     # tất cả (1 2 3 4)
@@ -54,10 +59,10 @@ for ds in ml-1m yelp2018; do
   run "logs/cmp1_${ds}_sisa.log" "M1 $ds SISA" \
     python code/method_2_sisa.py --dataset $ds --emb_dim 64 --n_shards $K \
       --max_epochs $E --unlearn_ratio $R --unlearn_mode $M
-  run "logs/cmp1_${ds}_rec_pretrain.log"  "M1 $ds REC-UBP (pretrain=1 WMF-in, attn) [Rec thật]" \
+  run "logs/cmp1_${ds}_rec_ubp_author.log"  "M1 $ds REC-UBP (NGUYÊN TÁC: random-init, WMF-chỉ-partition, attn)" \
     python code/method_3_receraser_v2.py --dataset $ds --emb_dim 64 --n_shards $K \
       --partition_type 2 --max_epochs_wmf $EWMF --max_epochs_local $EL \
-      --use_attention 1 --pretrain 1 --lr_finetune 0.05 --unlearn_ratio $R --unlearn_mode $M
+      --use_attention 1 --pretrain 0 --lr_finetune 0.05 --unlearn_ratio $R --unlearn_mode $M
 done
 fi
 
@@ -129,10 +134,10 @@ for ds in ml-1m yelp2018; do
   run "logs/cmp1_${ds}_sisa.log" "comb $ds SISA" \
     python code/method_2_sisa.py --dataset $ds --emb_dim 64 --n_shards $K \
       --max_epochs $E --unlearn_ratio $R --unlearn_mode $M
-  run "logs/cmp1_${ds}_rec_pretrain.log"  "comb $ds REC-UBP (pretrain=1 WMF-in, attn) [Rec thật]" \
+  run "logs/cmp1_${ds}_rec_ubp_author.log"  "comb $ds REC-UBP (NGUYÊN TÁC: random-init, WMF-chỉ-partition, attn)" \
     python code/method_3_receraser_v2.py --dataset $ds --emb_dim 64 --n_shards $K \
       --partition_type 2 --max_epochs_wmf $EWMF --max_epochs_local $EL \
-      --use_attention 1 --pretrain 1 --lr_finetune 0.05 --unlearn_ratio $R --unlearn_mode $M
+      --use_attention 1 --pretrain 0 --lr_finetune 0.05 --unlearn_ratio $R --unlearn_mode $M
   # ---- Rec x 3 PARTITION x 2 MODEL (khối 3) ----
   run "logs/cmp3_${ds}_pt3_random.log" "comb $ds Rec-Random (no-emb)" \
     python code/method_3_receraser_v2.py --dataset $ds --emb_dim 64 --n_shards $K \
@@ -172,7 +177,7 @@ if [ "${1:-}" = "--grep" ]; then
   echo "########## KHỐI 1 - 4 PHƯƠNG PHÁP (Before / After / Unlearn time) ##########"
   for ds in ml-1m yelp2018; do
     echo "----- $ds -----"
-    for m in full ours sisa rec_pretrain; do
+    for m in full ours sisa rec_ubp_author; do
       echo "[$ds:$m]"; grep -hE "Before \(FULL|After \(RETAINED|Unlearn time" logs/cmp1_${ds}_${m}.log 2>/dev/null || echo "  (thiếu)"
     done
   done
