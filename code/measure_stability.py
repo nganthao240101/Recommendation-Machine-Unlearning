@@ -78,6 +78,13 @@ def rec_ubp_assign(train_data, n_users, user_emb, n_shards, seed, T=10):
     return p.partition_users(train_data, n_users, user_emb, None)
 
 
+def rec_inp_assign(train_data, n_users, user_emb, item_emb, n_shards, seed, T=10):
+    """Rec InP (partition_type=1) - trả về user_to_shard."""
+    from method_3_receraser_v2 import DataPartitioner
+    p = DataPartitioner(n_shards=n_shards, partition_type=1, seed=seed, T=T)
+    return p.partition_users(train_data, n_users, user_emb, item_emb)
+
+
 def analyze(method_name, A_full, A_ret, unlearn_users, retained_ids, n_shards,
             similarity_aware, deletion_stable_expected, verbose=True):
     """Tính instability + naive/effective affected."""
@@ -204,26 +211,42 @@ def main():
         print(f"\n  [Ours InP/UBP-frozen] no WMF embeddings at {wmf_path}; skip (chỉ có Random-frozen).")
 
     # ------------------------------------------------------------------
-    # Rec UBP (balanced, đúng paper) - similarity-aware nhưng KHÔNG deletion-stable
+    # Rec × {InP, UBP, Random} (KHÔNG frozen: xóa rồi re-cluster -> unstable)
+    #   InP/UBP: k-means WMF (re-cluster khi xóa) -> ~84% flip (giấu shard)
+    #   Random : modulo (KHÔNG re-cluster) -> 0% flip (stable nhưng KHÔNG sim-aware)
+    # So với Ours (frozen, 0%): Rec InP/UBP unstable; Random stable nhưng modulo.
     # ------------------------------------------------------------------
-    base = os.path.dirname(os.path.dirname(__file__))
     candidate = os.path.join(base, 'data', args.dataset, 'wmf_embeddings.npz')
-    if os.path.exists(candidate):
-        print(f"\n  [Rec UBP] loading embeddings from {candidate}")
-        w = np.load(candidate)
-        user_emb_full = w['user_embeddings'][:N]
+    rec_ok = os.path.exists(candidate)
+    u_emb_r = i_emb_r = None
+    if rec_ok:
+        w2 = np.load(candidate)
+        u_emb_r = w2['user_embeddings'][:N]
+        i_emb_r = w2['item_embeddings']
 
-        # BEFORE: partition trên FULL
-        A_full_rec = rec_ubp_assign(train_data, N, user_emb_full, K, seed=42).astype(np.int64)
+        # Rec InP (k-means user+item) - re-cluster khi xóa -> UNSTABLE
+        A_full = rec_inp_assign(train_data, N, u_emb_r, i_emb_r, K, seed=42).astype(np.int64)
+        A_ret  = rec_inp_assign(train_ret,  N, u_emb_r, i_emb_r, K, seed=42).astype(np.int64)
+        rows.append(analyze("Rec InP (re-cluster)", A_full, A_ret, unlearn,
+                            retained_ids, K, similarity_aware=True,
+                            deletion_stable_expected=False))
 
-        # AFTER (retained): re-partition CHỈ trên retained users (xóa rồi re-cluster),
-        # dùng embedding index theo user-id (user_emb_full) để partitioner index đúng.
-        A_ret_rec = rec_ubp_assign(train_ret, N, user_emb_full, K, seed=42).astype(np.int64)
-        rows.append(analyze("Rec UBP (balanced)", A_full_rec, A_ret_rec, unlearn,
+        # Rec UBP (k-means user-only, balanced) - re-cluster khi xóa -> UNSTABLE
+        A_full = rec_ubp_assign(train_data, N, u_emb_r, K, seed=42).astype(np.int64)
+        A_ret  = rec_ubp_assign(train_ret,  N, u_emb_r, K, seed=42).astype(np.int64)
+        rows.append(analyze("Rec UBP (re-cluster)", A_full, A_ret, unlearn,
                             retained_ids, K, similarity_aware=True,
                             deletion_stable_expected=False))
     else:
-        print(f"\n  [Rec UBP] no WMF embeddings found at {candidate}; skip Rec UBP.")
+        print(f"\n  [Rec InP/UBP] no WMF embeddings at {candidate}; skip.")
+
+    # Rec Random (modulo) - KHÔNG cần embedding, stable (modulo) nhưng KHÔNG sim-aware
+    pr_r = DataPartitioner(n_shards=K, partition_type=3, seed=42)
+    A_full = pr_r.partition_users(train_data, N, None, None).astype(np.int64)
+    A_ret  = pr_r.partition_users(train_ret,  N, None, None).astype(np.int64)
+    rows.append(analyze("Rec Random (modulo)", A_full, A_ret, unlearn,
+                       retained_ids, K, similarity_aware=False,
+                       deletion_stable_expected=True))
 
     # ------------------------------------------------------------------
     # BẢNG TỔNG HỢP

@@ -184,7 +184,7 @@ if [ "${1:-}" = "--grep" ]; then
     printf "  randomfrozen : " "$(rnum logs/cmp2_${ds}_randomfrozen.log)"
     for part in ubpfrozen inpfrozen; do
       printf "%-14s wmf : " "$part" "$(rnum logs/cmp2_${ds}_${part}_embwmf.log)"
-      printf "  bprfull : " "$(rnum logs/cmp2_${ds}_${part}_emb${part#frozen}.log)"
+      printf "  bprfull : " "$(rnum logs/cmp2_${ds}_${part}_embbprfull.log)"
     done
   done
   echo ""
@@ -193,9 +193,9 @@ if [ "${1:-}" = "--grep" ]; then
     echo "----- $ds -----"
     printf "%-14s : " "Random(no-emb)" "$(rnum logs/cmp3_${ds}_pt3_random.log)"
     for pt in 1 2; do
-      p=$((pt==1?1:2)); pnm=$((pt==1?InP:UBP))
+      pnm=$([ "$pt" = "1" ] && echo InP || echo UBP)
       printf "%-14s wmf : " "$pnm" "$(rnum logs/cmp3_${ds}_pt${pt}_embwmf.log)"
-      printf "  bprfull : " "$(rnum logs/cmp3_${ds}_pt${pt}_emb${pt}.log)"
+      printf "  bprfull : " "$(rnum logs/cmp3_${ds}_pt${pt}_embbprfull.log)"
     done
   done
   echo ""
