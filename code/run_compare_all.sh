@@ -12,6 +12,7 @@
 #   4) EX6       : stability (flip%) các method × partition (không train, ~5p/ds)
 #   5) ABLATION  : Ours (ml-1m, signature): K {4,8,16} · ratio {0.1..2%} ·
 #                   mode {random,most,fewest} · sig-dim {32,64,128}
+#   6) ATTN×MEAN : EX7 - Rec-UBP aggregator: mean vs attention (quét agg lr/ep)
 #   comb        : = KHỐI 1 + KHỐI 3 gộp 1 chỗ (4 method + Rec×3-partition×2-model,
 #                 CẢ 2 dataset, CẢ 2 model) -> "1 lệnh so tất cả"
 #
@@ -40,7 +41,10 @@ log(){ echo "=== $(date +%H:%M:%S) $1 ==="; }
 # nếu không lệnh này sẽ chạy lại toàn bộ (rất tốn thời gian/GPU).
 # ---------------------------------------------------------------------------
 if [ "${1:-}" = "--grep" ]; then
-  rnum(){ grep -hE "After \(RETAINED" "$1" 2>/dev/null | grep -oE "R@10: [0-9.]+" || echo "(thiếu)"; }
+  # R@10 theo cả 2 format: cũ "R@10: 0.1234" và mới "R@10=0.1234 | ..."
+  rnum(){ grep -hE "After \(RETAINED" "$1" 2>/dev/null | grep -oE "R@10[ =:]+[0-9.]+" | grep -oE "[0-9.]+$" || echo "(thiếu)"; }
+  # Dòng metrics đầy đủ (R/NDCG @10,20,50) nếu log có
+  rfull(){ grep -hE "After \(RETAINED" "$1" 2>/dev/null | tail -1 || echo "(thiếu)"; }
   echo "########## KHỐI 1 - 4 PHƯƠNG PHÁP (Before / After / Unlearn time) ##########"
   for ds in ml-1m yelp2018; do
     echo "----- $ds -----"
@@ -76,6 +80,30 @@ if [ "${1:-}" = "--grep" ]; then
     echo "----- $ds -----"; grep -hE "Ours|Rec|SISA|Instab" logs/cmp4_ex6_${ds}.log 2>/dev/null || echo "  (thiếu)"
   done
   echo ""
+  echo "########## BẢNG ĐẦY ĐỦ: Recall/NDCG @10,20,50 (After) ##########"
+  for ds in ml-1m yelp2018; do
+    echo "----- $ds -----"
+    echo "[$ds:full]";        rfull logs/cmp1_${ds}_full.log
+    echo "[$ds:ours]";        rfull logs/cmp1_${ds}_ours.log
+    echo "[$ds:sisa]";        rfull logs/cmp1_${ds}_sisa.log
+    echo "[$ds:rec_ubp_author]"; rfull logs/cmp1_${ds}_rec_ubp_author.log
+    for part in signature randomfrozen; do
+      echo "[$ds:ours-$part]"; rfull logs/cmp2_${ds}_${part}.log
+    done
+    for part in ubpfrozen inpfrozen; do
+      for emb in wmf bprfull; do
+        echo "[$ds:ours-$part-$emb]"; rfull logs/cmp2_${ds}_${part}_emb${emb}.log
+      done
+    done
+    echo "[$ds:rec-random]";  rfull logs/cmp3_${ds}_pt3_random.log
+    for pt in 1 2; do
+      pnm=$([ "$pt" = "1" ] && echo InP || echo UBP)
+      for emb in wmf bprfull; do
+        echo "[$ds:rec-$pnm-$emb]"; rfull logs/cmp3_${ds}_pt${pt}_emb${emb}.log
+      done
+    done
+  done
+  echo ""
   echo "########## KHỐI 5 - ABLATION (Ours, ml-1m) ##########"
   echo "-- Shard K --"
   for k in 4 8 16; do
@@ -92,6 +120,17 @@ if [ "${1:-}" = "--grep" ]; then
   echo "-- Signature dim --"
   for d in 32 64 128; do
     printf "  d=%-4s : %s\n" "$d" "$(rnum logs/cmp5_sigd${d}.log)"
+  done
+  echo ""
+  echo "########## KHỐI 6 - EX7: ATTENTION vs MEAN (Rec-UBP) ##########"
+  for ds in ml-1m yelp2018; do
+    echo "----- $ds -----"
+    printf "  %-28s : %s\n" "MEAN (baseline)" "$(rnum logs/cmp6_${ds}_ubp_mean.log)"
+    for cfg in "0.05 60" "0.005 60" "0.005 200" "0.001 200"; do
+      alr=$(echo "$cfg" | cut -d' ' -f1)
+      aep=$(echo "$cfg" | cut -d' ' -f2)
+      printf "  %-28s : %s\n" "ATTN lr=$alr ep=$aep" "$(rnum logs/cmp6_${ds}_ubp_attn_lr${alr}_ep${aep}.log)"
+    done
   done
   exit 0
 fi
@@ -257,6 +296,35 @@ for d in 32 64 128; do
   run "logs/cmp5_sigd${d}.log" "M5 sigdim=${d}" \
     python code/method_4_ours.py --dataset ml-1m --emb_dim 64 --n_shards $K \
       --signature_dim $d --max_epochs $E --unlearn_ratio $R --unlearn_mode $M
+done
+fi
+
+# ============================================================================
+# KHỐI 6 - EX7: ATTENTION vs MEAN (RecEraser aggregator)
+#   Cùng partition (UBP), cùng model (random-init, WMF chỉ partition),
+#   chỉ đổi aggregator: attention vs mean, và quét lr/epochs của aggregator.
+#   Sau fix stop-gradient (khớp code gốc tác giả), attention dùng
+#   --agg_lr nhỏ + --agg_epochs nhiều hơn.
+# ============================================================================
+if echo " $BLOCKS " | grep -q " 6 "; then
+for ds in ml-1m yelp2018; do
+  # --- mean (baseline, hard-routing 1 shard) ---
+  run "logs/cmp6_${ds}_ubp_mean.log" "M6 $ds Rec-UBP MEAN" \
+    python code/method_3_receraser_v2.py --dataset $ds --emb_dim 64 --n_shards $K \
+      --partition_type 2 --max_epochs_wmf $EWMF --max_epochs_local $EL \
+      --use_attention 0 --no_wmf_in_model --lr_finetune 0.05 \
+      --unlearn_ratio $R --unlearn_mode $M
+  # --- attention: quét (agg_lr, agg_epochs) ---
+  for cfg in "0.05 60" "0.005 60" "0.005 200" "0.001 200"; do
+    alr=$(echo "$cfg" | cut -d' ' -f1)
+    aep=$(echo "$cfg" | cut -d' ' -f2)
+    run "logs/cmp6_${ds}_ubp_attn_lr${alr}_ep${aep}.log" "M6 $ds Rec-UBP ATTN lr=$alr ep=$aep" \
+      python code/method_3_receraser_v2.py --dataset $ds --emb_dim 64 --n_shards $K \
+        --partition_type 2 --max_epochs_wmf $EWMF --max_epochs_local $EL \
+        --use_attention 1 --no_wmf_in_model --lr_finetune 0.05 \
+        --agg_lr $alr --agg_epochs $aep \
+        --unlearn_ratio $R --unlearn_mode $M
+  done
 done
 fi
 

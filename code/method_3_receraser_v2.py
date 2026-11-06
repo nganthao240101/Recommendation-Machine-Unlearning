@@ -555,9 +555,11 @@ class RecEraserModel(nn.Module):
 
         if use_aggregation:
             # Use attention aggregation
-            u_es = self.user_embedding(users).view(-1, self.num_local, self.emb_dim)
-            pos_es = self.item_embedding(pos_items).view(-1, self.num_local, self.emb_dim)
-            neg_es = self.item_embedding(neg_items).view(-1, self.num_local, self.emb_dim)
+            # DETACH embedding (tương đương tf.stop_gradient của code gốc):
+            # aggregator không được cập nhật embedding của local model.
+            u_es = self.user_embedding(users).detach().view(-1, self.num_local, self.emb_dim)
+            pos_es = self.item_embedding(pos_items).detach().view(-1, self.num_local, self.emb_dim)
+            neg_es = self.item_embedding(neg_items).detach().view(-1, self.num_local, self.emb_dim)
 
             # Apply transformation
             u_es = torch.einsum('bkd,kde->bke', u_es, self.trans_W) + self.trans_B
@@ -590,8 +592,8 @@ class RecEraserModel(nn.Module):
     def predict(self, users, items, shard, use_aggregation=False):
         if use_aggregation:
             # Use attention aggregation
-            u_es = self.user_embedding(users).view(-1, self.num_local, self.emb_dim)
-            i_es = self.item_embedding(items).view(-1, self.num_local, self.emb_dim)
+            u_es = self.user_embedding(users).detach().view(-1, self.num_local, self.emb_dim)
+            i_es = self.item_embedding(items).detach().view(-1, self.num_local, self.emb_dim)
 
             u_es = torch.einsum('bkd,kde->bke', u_es, self.trans_W) + self.trans_B
             i_es = torch.einsum('bkd,kde->bke', i_es, self.trans_W) + self.trans_B
@@ -666,17 +668,24 @@ def train_model(model, partitioner, shard_data, n_items, device, batch_size=512,
 
 
 def train_aggregator(model, train_data, n_users, n_items, device, batch_size=512, lr=0.005, max_epochs=50):
-    """Train attention aggregator (Phase 2).
+    """Train attention aggregator (Phase 2) - KHỚP CODE GỐC TÁC GIẢ.
 
-    Chống NaN (đặc biệt trên dataset to/sparse như yelp):
-      - Adagrad `initial_accumulator_value=1.0` (chuẩn) thay vì 1e-8
-        (1e-8 -> update đầu cực lớn -> embedding "bay" -> reg/loss NaN).
-      - lr nhỏ (0.005), clip gradient, và SKIP batch NaN (không để NaN lan
-        sang optimizer / parameters).
-      - Giữ nguyên cơ chế ATTENTION (không phải mean).
+    Code gốc (`RecEraser_WMF.py` dòng 122 & 128) dùng `tf.stop_gradient` cho
+    CẢ user_embedding và item_embedding khi train aggregator:
+        u_es   = tf.stop_gradient(tf.nn.embedding_lookup(self.weights['user_embedding'], ...))
+        item_local_embs = tf.stop_gradient(self.weights['item_embedding'])
+    => aggregator CHỈ train attention params (WA/BA/HA, WB/BB/HB) + trans
+       (trans_W/trans_B); **KHÔNG cập nhật embedding của local model**.
+
+    Port cũ dùng `Adagrad(model.parameters())` => aggregator ghi đè embedding
+    đã train xong của 8 local model -> phá local model -> attention KÉM hơn mean.
+    Bản này: stop-gradient cho embedding + chỉ optimize params aggregator.
     """
-    # initial_accumulator_value=1.0: bước Adagrad đầu "đúng mức" (tránh NaN do update đầu)
-    optimizer = torch.optim.Adagrad(model.parameters(), lr=lr, initial_accumulator_value=1.0)
+    # Params được phép update (giống stop_gradient của code gốc):
+    # attention (WA/BA/HA/WB/BB/HB) + transformation (trans_W/trans_B)
+    agg_params = [model.WA, model.BA, model.HA, model.WB, model.BB, model.HB,
+                  model.trans_W, model.trans_B]
+    optimizer = torch.optim.Adagrad(agg_params, lr=lr, initial_accumulator_value=1.0)
     n_nan_skipped = 0
 
     # Create samples from full training data
@@ -730,9 +739,16 @@ def train_aggregator(model, train_data, n_users, n_items, device, batch_size=512
 # EVALUATION
 # ============================================================================
 
-def evaluate_model(model, partitioner, train_data, test_data, n_users, n_items, device):
+def evaluate_model(model, partitioner, train_data, test_data, n_users, n_items, device,
+                   Ks=(10, 20, 50)):
+    """Đo Recall@K và NDCG@K cho K = 10/20/50.
+
+    Trả về (recalls, ndcgs) - 2 list cùng độ dài len(Ks), tương ứng với K.
+    """
     model.eval()
-    rec_log, ndcg_log = [], []
+    max_k = max(Ks)
+    rec_log = {k: [] for k in Ks}
+    ndcg_log = {k: [] for k in Ks}
 
     # Check if model uses attention aggregation
     use_agg = hasattr(model, 'use_attention') and model.use_attention
@@ -756,21 +772,33 @@ def evaluate_model(model, partitioner, train_data, test_data, n_users, n_items, 
             for item in train_items:
                 scores[item] = -np.inf
 
-            rank_list = heapq.nlargest(10, range(len(scores)), key=scores.__getitem__)
+            rank_list = heapq.nlargest(max_k, range(len(scores)), key=scores.__getitem__)
             item_pos = test_data.get(user, [])
             item_set = set(item_pos)
 
-            hit_num = len(set(rank_list) & item_set)
-            rec = hit_num / len(item_pos) if len(item_pos) > 0 else 0
-            dcg = sum(1.0/np.log2(i+2) for i, item in enumerate(rank_list) if item in item_set)
-            idcg = sum(1.0/np.log2(i+2) for i in range(min(len(item_pos), 10)))
-            ndcg = dcg/idcg if idcg > 0 else 0
-
-            rec_log.append(rec)
-            ndcg_log.append(ndcg)
+            for k in Ks:
+                top_k = rank_list[:k]
+                hit_num = len(set(top_k) & item_set)
+                rec = hit_num / len(item_pos) if len(item_pos) > 0 else 0
+                dcg = sum(1.0/np.log2(i+2) for i, item in enumerate(top_k) if item in item_set)
+                idcg = sum(1.0/np.log2(i+2) for i in range(min(len(item_pos), k)))
+                ndcg = dcg/idcg if idcg > 0 else 0
+                rec_log[k].append(rec)
+                ndcg_log[k].append(ndcg)
 
     model.train()
-    return np.mean(rec_log), np.mean(ndcg_log)
+    recalls = [float(np.mean(rec_log[k])) for k in Ks]
+    ndcgs = [float(np.mean(ndcg_log[k])) for k in Ks]
+    return recalls, ndcgs
+
+
+def fmt_metrics(recalls, ndcgs, Ks=(10, 20, 50)):
+    """Format metrics thành 1 dòng dễ đọc + 1 dòng máy-parse."""
+    parts = [f"R@{k}: {r:.4f}" for k, r in zip(Ks, recalls)]
+    parts += [f"NDCG@{k}: {n:.4f}" for k, n in zip(Ks, ndcgs)]
+    return (", ".join(parts),
+            " | ".join(f"R@{k}={r:.4f}" for k, r in zip(Ks, recalls))
+            + " | " + " | ".join(f"NDCG@{k}={n:.4f}" for k, n in zip(Ks, ndcgs)))
 
 
 # ============================================================================
@@ -782,7 +810,8 @@ def run_receraser_v2(dataset='ml-1m', emb_dim=64, n_shards=8, partition_type=1,
                     unlearn_mode='random',
                     batch_size=512, lr=0.01, lr_finetune=0.001,
                     use_attention=True, output_suffix='',
-                    no_wmf_in_model=False, embed_source='wmf', pretrain=0):
+                    no_wmf_in_model=False, embed_source='wmf', pretrain=0,
+                    agg_lr=None, agg_epochs=None):
     """
     RecEraser với WMF pretrained embeddings
 
@@ -926,9 +955,13 @@ def run_receraser_v2(dataset='ml-1m', emb_dim=64, n_shards=8, partition_type=1,
 
         # Phase 2: Train aggregator (like original code)
         if use_attention:
-            print(f"  Training aggregator (attention)...")
+            # lr/epochs riêng cho aggregator: lr_finetune (0.05) quá cao cho
+            # attention -> embedding "bay" -> aggregator tệ hơn mean.
+            a_lr = agg_lr if agg_lr is not None else lr_finetune
+            a_ep = agg_epochs if agg_epochs is not None else max_epochs_local
+            print(f"  Training aggregator (attention) lr={a_lr} epochs={a_ep}...")
             train_aggregator(model, train_data, n_users, n_items, device,
-                           batch_size=batch_size, lr=lr_finetune, max_epochs=max_epochs_local)
+                           batch_size=batch_size, lr=a_lr, max_epochs=a_ep)
 
         # Save model after training
         # save_model(model, checkpoint_path)  # Disabled due to disk space
@@ -944,8 +977,9 @@ def run_receraser_v2(dataset='ml-1m', emb_dim=64, n_shards=8, partition_type=1,
     print(f"{'='*70}")
 
     # BEFORE: Evaluate on FULL test set (all users)
-    recall_before, ndcg_before = evaluate_model(model, partitioner, train_data, test_data, n_users, n_items, device)
-    print(f"  Before (FULL) - R@10: {recall_before:.4f}, NDCG@10: {ndcg_before:.4f}")
+    rec_b, ndcg_b = evaluate_model(model, partitioner, train_data, test_data, n_users, n_items, device)
+    _, before_line = fmt_metrics(rec_b, ndcg_b)
+    print(f"  Before (FULL) - {before_line}")
 
     # =========================================================================
     # STEP 5: Unlearn (retrain affected shards)
@@ -980,8 +1014,9 @@ def run_receraser_v2(dataset='ml-1m', emb_dim=64, n_shards=8, partition_type=1,
 
     # AFTER: Train on RETAINED data, evaluate on RETAINED test
     train_data_retained = {u: items for u, items in train_data.items() if u not in unlearn_users}
-    recall_after, ndcg_after = evaluate_model(model, partitioner, train_data_retained, test_data_retained, n_users, n_items, device)
-    print(f"  After (RETAINED, retrain) - R@10: {recall_after:.4f}, NDCG@10: {ndcg_after:.4f}")
+    rec_a, ndcg_a = evaluate_model(model, partitioner, train_data_retained, test_data_retained, n_users, n_items, device)
+    _, after_line = fmt_metrics(rec_a, ndcg_a)
+    print(f"  After (RETAINED, retrain) - {after_line}")
     print(f"  Unlearn time: {unlearn_time:.2f}s")
 
     # =========================================================================
@@ -1002,15 +1037,11 @@ def run_receraser_v2(dataset='ml-1m', emb_dim=64, n_shards=8, partition_type=1,
         },
         'unlearn_ratio': unlearn_ratio,
         'n_unlearn': n_unlearn,
-        'before': {
-            'recall@10': recall_before,
-            'ndcg@10': ndcg_before
-        },
-        'after': {
-            'recall@10': recall_after,
-            'ndcg@10': ndcg_after
-        },
-        'change_percent': (recall_after - recall_before) / recall_before * 100 if recall_before > 0 else 0,
+        'before': {f'recall@{k}': v for k, v in zip((10, 20, 50), rec_b)} |
+                  {f'ndcg@{k}': v for k, v in zip((10, 20, 50), ndcg_b)},
+        'after': {f'recall@{k}': v for k, v in zip((10, 20, 50), rec_a)} |
+                 {f'ndcg@{k}': v for k, v in zip((10, 20, 50), ndcg_a)},
+        'change_percent': (rec_a[0] - rec_b[0]) / rec_b[0] * 100 if rec_b[0] > 0 else 0,
         'unlearn_time': unlearn_time
     }
 
@@ -1047,6 +1078,11 @@ if __name__ == '__main__':
     parser.add_argument('--no_wmf_in_model', action='store_true',
                         help='skip load_pretrained_embeddings (random-init, same capacity); '
                              'WMF still used only for InP/UBP partition')
+    parser.add_argument('--agg_lr', type=float, default=None,
+                        help='lr riêng cho attention aggregator (default = lr_finetune). '
+                             'Giá trị nhỏ (0.005) + nhiều epoch giúp attention ổn hơn.')
+    parser.add_argument('--agg_epochs', type=int, default=None,
+                        help='epochs riêng cho attention aggregator (default = max_epochs_local)')
     parser.add_argument('--pretrain', type=int, default=0, choices=[0, 1],
                         help='0 = MẶC ĐỊNH (khớp tác giả pretrain=0): model random-init + train từ scratch, '
                              'embedding CHỈ dùng cho partition. 1 = warm-start model từ embedding (tác giả pretrain=1).')
@@ -1069,5 +1105,7 @@ if __name__ == '__main__':
         output_suffix=args.output_suffix,
         no_wmf_in_model=args.no_wmf_in_model,
         embed_source=args.embed_source,
-        pretrain=args.pretrain
+        pretrain=args.pretrain,
+        agg_lr=args.agg_lr,
+        agg_epochs=args.agg_epochs
     )
