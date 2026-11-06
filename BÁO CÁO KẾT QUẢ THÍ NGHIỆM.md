@@ -124,31 +124,35 @@ Cắt 2 "hiệu ứng" tách nhau:
 |-----------------|:---:|:---:|:---:|:---:|-----|
 | **Full Retrain** | 0.1032 | **0.1015** | 855s | 0% (trần, không shard) | trần utility |
 | **Ours · InP-frozen** ⭐ | 0.1017 | **0.1066** | 202s | **0%** | **best: utility ≥ Rec-InP, stable 0%** |
-| **Rec InP-mean (random-init, WMF-part)** | 0.0985 | 0.1052 | 310s | **~84% (giấu shard)** | Rec "nguyên tác" về utility, **bất ổn** |
-| Rec UBP-mean (random-init, WMF-part) | — | 0.0777 | ~405s | **~84%** | ≈ Ours-UBP |
-| Rec Random (modulo) | — | 0.0763 | ~395s | 0% (không sim-aware) | ≈ Ours-Random / SISA |
+| **Rec InP-mean (random-init, WMF-part)** | 0.0996 | 0.1052 | 387s | **~84% (giấu shard)** | Rec "nguyên tác" về utility, **bất ổn** |
+| Rec UBP-**mean** (random-init, WMF-part) | 0.0710 | 0.0777 | 291s | **~84%** | ≈ Ours-UBP |
+| **Rec UBP-**attention** (NGUYÊN TÁC, random-init)** | 0.0869 | **0.0637** | 276s | **~84%** | **attention aggregator TỤT so mean (0.0777)** |
+| Rec Random (modulo) | 0.0660 | 0.0763 | 347s | 0% (không sim-aware) | ≈ Ours-Random / SISA |
 | **Ours · UBP-frozen** | — | 0.0776 | 215s | **0%** | ≈ Rec-UBP, shard cân bằng |
 | Ours · signature | 0.0675 | 0.0756 | 214s | **0%** | base Ours |
 | Ours · Random-frozen | — | 0.0760 | 232s | **0%** | ≈ SISA (modulo) |
 | SISA | 0.0675 | 0.0742 | 233s | 0% (modulo) | baseline shard |
 | Rec UBP (WMF-in-model, `pretrain=1`) ⚠️ | 0.0857 | 0.0613 | 346s | ~84% | **KHÔNG phải config nguyên tác** — biến thể tự thêm |
 
-→ **Ours-InP-frozen (0.1066) ≥ Rec-InP (0.1052) về utility, NHANH hơn nhiều (202s vs 310s), và stable 0% (Rec = 84% + giấu shard).** → **thắng Rec cả 3 mặt (utility + thời gian + ổn định).**
+→ **Ours-InP-frozen (0.1066) ≥ Rec-InP (0.1052) về utility, NHANH hơn nhiều (202s vs 387s), và stable 0% (Rec = 84% + giấu shard).** → **thắng Rec cả 3 mặt (utility + thời gian + ổn định).**
 → **Ours ≈ SISA** ở partition không-embedding (0.0756 vs 0.0742) → **cơ chế unlearn không làm hỏng utility; lợi thế lớn của Ours đến từ việc dùng được partition tốt (InP) mà vẫn ổn định.**
-→ ⚠️ **Rec WMF-in (`pretrain=1`) = 0.0613, THẤP hơn Rec random-init (0.0777)** → **warm-start embedding KHÔNG giúp Rec** ở config này (và vốn không phải nguyên tác).
+→ ✅ **Rec "nguyên tác" (attention, random-init) = 0.0637 < Rec-mean 0.0777** → **attention aggregator KHÔNG giúp Rec ở điều kiện này** (khớp phát hiện cũ: attention chỉ có giá khi train đủ + khởi tạo tốt) → **càng củng cố: lợi thế utility của Rec đến từ PARTITION, không từ cơ chế attention/pretrain.**
+→ ⚠️ **Rec WMF-in (`pretrain=1`) = 0.0613 < Rec random-init (0.0777)** → **warm-start embedding KHÔNG giúp Rec** (vốn không phải nguyên tác).
 
 ## yelp
 
 | Method / Config | Before (FULL) | After (RETAINED) | Unlearn time | Ghi |
 |-----------------|:---:|:---:|:---:|-----|
-| **Full Retrain** | 0.0166 | **0.0158** | 3358s | trần |
-| **Ours · InP-frozen** ⭐ | 0.0110 | **0.0114** | 385s | **dẫn đầu shard-method, gần trần** |
-| Ours · UBP-frozen | ⏳ | ⏳ | ⏳ | *(đang chạy - chờ log `ours_ubpfrozen_yelp2018`)* |
-| SISA | 0.0049 | 0.0046 | 433s | |
-| Ours · signature | 0.0051 | 0.0044 | 462s | |
-| Rec UBP (WMF-in) | 0.0013 | 0.0013 | 810s | Rec "thật", utility thấp |
+| **Full Retrain** | 0.0168 | **0.0157** | **13317s (3.7h)** | trần |
+| **Ours · InP-frozen** ⭐ | 0.0110 | **0.0114** | 385s | **dẫn đầu shard-method, rẻ hơn Full ~34×** |
+| Ours · UBP-frozen | — | 0.0046 | ⏳ | ≈ SISA |
+| Ours · Random-frozen | — | 0.0045 | ⏳ | ≈ SISA |
+| Ours · signature | 0.0050 | 0.0043 | 390s | base |
+| SISA | 0.0050 | ⏳ | ⏳ | *(đang chạy)* |
+| Rec UBP (NGUYÊN TÁC, random-init, attn) | ⏳ | ⏳ | ⏳ | *(đang chạy)* |
+| Rec UBP (WMF-in) ⚠️ | 0.0013 | 0.0013 | 810s | **KHÔNG phải nguyên tác** — biến thể tự thêm |
 
-→ Trên **yelp, Ours-InP/UBP-frozen (0.0114) dẫn xa nhất**: ~2.5× signature/SISA (0.0044–0.0046), chỉ dưới Full trần (0.0158). **Frozen partition cứu được cả yelp.**
+→ Trên **yelp, Ours-InP-frozen (0.0114) dẫn xa nhất**: ~2.6× signature/SISA/UBP (0.0043–0.0046), chỉ dưới Full trần (0.0157) — **và rẻ hơn Full 34× (385s vs 13317s)**. **Frozen partition cứu được cả yelp.**
 
 ---
 
