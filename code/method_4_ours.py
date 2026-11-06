@@ -815,11 +815,20 @@ def build_frozen_partition(dataset, emb_dim, n_shards, train_data, n_users,
 
 
 def _partition_cache_path(dataset, partition_type, embed_source, n_shards):
-    """Đường dẫn file lưu FROZEN partition của Ours (dùng khi --persist_partition)."""
+    """Đường dẫn file lưu FROZEN partition của Ours (dùng khi --persist_partition).
+
+    Tên file KHÔNG chứa unlearn_ratio/unlearn_mode - ĐÚNG, vì partition luôn
+    được build trên FULL data (trước khi xóa) và giữ nguyên qua mọi lần xóa.
+    Nhờ vậy sweep ratio/mode dùng CHUNG đúng 1 partition -> phép so sánh
+    cô lập đúng yếu tố "ratio" (không lẫn yếu tố "partition").
+
+    Có 'v1' trong tên để bump version khi đổi logic partition (tránh dùng
+    nhầm cache cũ).
+    """
     base_dir = os.path.dirname(PROJ)
     name = {1: 'inp', 2: 'ubp', 3: 'random'}.get(partition_type, f'type{partition_type}')
     return os.path.join(base_dir, 'data', dataset,
-                        f'ours_partition_{name}_{embed_source}_k{n_shards}.npz')
+                        f'ours_partition_v1_{name}_{embed_source}_k{n_shards}.npz')
 
 
 # Giữ tên cũ (InP) cho tương thích

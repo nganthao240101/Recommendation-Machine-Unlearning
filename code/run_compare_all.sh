@@ -282,6 +282,11 @@ for k in 4 8 16; do
     python code/method_4_ours.py --dataset ml-1m --emb_dim 64 --n_shards $k \
       --signature_dim $D --max_epochs $E --unlearn_ratio $R --unlearn_mode $M
 done
+# NOTE: ablation chạy trên PARTITION SIGNATURE (native Ours) - build rất nhanh
+#       (matrix sparses x R), KẾT QUẢ DETERMINISTIC (seed 42) -> mọi giá trị
+#       ratio/mode đã dùng CHUNG 1 partition. KHÔNG cần --persist_partition.
+#       (Chỉ bật --persist_partition 1 khi sweep trên InP/UBP - partition k-means
+#        / bprfull đắt tiền, để reuse 1 partition + audit qua file .npz.)
 for r in 0.001 0.005 0.01 0.02; do
   run "logs/cmp5_r${r}.log" "M5 ratio=${r}" \
     python code/method_4_ours.py --dataset ml-1m --emb_dim 64 --n_shards $K \
