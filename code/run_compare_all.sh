@@ -9,7 +9,9 @@
 #                  WMF chỉ dùng cho partition, không nạp vào model)          - 2 ds
 #   2) OURS×PART : Ours × {signature,Random,UBP,InP}(frozen) × {wmf,bprfull}
 #   3) REC×PART  : Rec  × {InP,UBP,Random} × {wmf,bprfull} (no-WMF, mean, lr 0.05)
-#   4) EX6       : stability (flip%) 4 Ours-partition (không train, ~5p/ds)
+#   4) EX6       : stability (flip%) các method × partition (không train, ~5p/ds)
+#   5) ABLATION  : Ours (ml-1m, signature): K {4,8,16} · ratio {0.1..2%} ·
+#                   mode {random,most,fewest} · sig-dim {32,64,128}
 #   comb        : = KHỐI 1 + KHỐI 3 gộp 1 chỗ (4 method + Rec×3-partition×2-model,
 #                 CẢ 2 dataset, CẢ 2 model) -> "1 lệnh so tất cả"
 #
@@ -72,6 +74,24 @@ if [ "${1:-}" = "--grep" ]; then
   echo "########## KHỐI 4 - EX6 (flip% các method × partition) ##########"
   for ds in ml-1m yelp2018; do
     echo "----- $ds -----"; grep -hE "Ours|Rec|SISA|Instab" logs/cmp4_ex6_${ds}.log 2>/dev/null || echo "  (thiếu)"
+  done
+  echo ""
+  echo "########## KHỐI 5 - ABLATION (Ours, ml-1m) ##########"
+  echo "-- Shard K --"
+  for k in 4 8 16; do
+    printf "  K=%-4s : " "$k" "$(rnum logs/cmp5_k${k}.log)"
+  done
+  echo "-- Unlearn ratio --"
+  for r in 0.001 0.005 0.01 0.02; do
+    printf "  r=%-6s : " "$r" "$(rnum logs/cmp5_r${r}.log)"
+  done
+  echo "-- Unlearn mode --"
+  for m in random most fewest; do
+    printf "  %-8s : " "$m" "$(rnum logs/cmp5_mode_${m}.log)"
+  done
+  echo "-- Signature dim --"
+  for d in 32 64 128; do
+    printf "  d=%-4s : " "$d" "$(rnum logs/cmp5_sigd${d}.log)"
   done
   exit 0
 fi
@@ -207,6 +227,36 @@ for ds in ml-1m yelp2018; do
   run "logs/cmp4_ex6_${ds}.log" "M4 EX6 $ds (stability)" \
     python code/measure_stability.py --dataset $ds --n_shards $K --signature_dim $D \
       --unlearn_ratio $R --unlearn_mode $M
+done
+fi
+
+# ============================================================================
+# KHỐI 5 - ABLATION (Ours, ml-1m, signature base): mỗi yếu tố đổi 1, giữ nguyên
+#   K (shard):   4 / 8 / 16
+#   ratio:       0.001 / 0.005 / 0.01 / 0.02
+#   mode:        random / most / fewest
+#   sig_dim:     32 / 64 / 128
+# ============================================================================
+if echo " $BLOCKS " | grep -q " 5 "; then
+for k in 4 8 16; do
+  run "logs/cmp5_k${k}.log" "M5 K=${k}" \
+    python code/method_4_ours.py --dataset ml-1m --emb_dim 64 --n_shards $k \
+      --signature_dim $D --max_epochs $E --unlearn_ratio $R --unlearn_mode $M
+done
+for r in 0.001 0.005 0.01 0.02; do
+  run "logs/cmp5_r${r}.log" "M5 ratio=${r}" \
+    python code/method_4_ours.py --dataset ml-1m --emb_dim 64 --n_shards $K \
+      --signature_dim $D --max_epochs $E --unlearn_ratio $r --unlearn_mode $M
+done
+for m in random most fewest; do
+  run "logs/cmp5_mode_${m}.log" "M5 mode=${m}" \
+    python code/method_4_ours.py --dataset ml-1m --emb_dim 64 --n_shards $K \
+      --signature_dim $D --max_epochs $E --unlearn_ratio $R --unlearn_mode $m
+done
+for d in 32 64 128; do
+  run "logs/cmp5_sigd${d}.log" "M5 sigdim=${d}" \
+    python code/method_4_ours.py --dataset ml-1m --emb_dim 64 --n_shards $K \
+      --signature_dim $d --max_epochs $E --unlearn_ratio $R --unlearn_mode $M
 done
 fi
 
