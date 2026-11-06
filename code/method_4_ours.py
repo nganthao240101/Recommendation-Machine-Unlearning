@@ -774,12 +774,16 @@ def train_bpr_full_embeddings(n_users, n_items, emb_dim, train_data, device,
 
 def build_frozen_partition(dataset, emb_dim, n_shards, train_data, n_users,
                            partition_type=1, max_epochs_wmf=100, batch_size=512, lr=0.05,
-                           n_items=0, embed_source='wmf'):
+                           n_items=0, embed_source='wmf', persist=False):
     """Build Rec's partition (InP=1 user+item WMF k-means / UBP=2 user-only k-means)
     ONCE on full data, return FROZEN mapping (Ours unlearn KHÔNG re-cluster -> stable 0%).
 
     Dùng lại DataPartitioner + load_or_train_wmf của method_3.
     Result = user_to_shard (int32, len n_users).
+
+    persist=True: lưu mapping ra data/<dataset>/ours_partition_<type>_<src>_k<K>.npz
+    để dùng lại cho các lần xóa tiếp theo (multi-request / restart process).
+    Mặc định False = in-memory (đủ cho benchmark 1 lần xóa).
     """
     from method_3_receraser_v2 import DataPartitioner, load_or_train_wmf
     if partition_type == 3:
@@ -800,7 +804,22 @@ def build_frozen_partition(dataset, emb_dim, n_shards, train_data, n_users,
     name = {1: 'InP', 2: 'UBP', 3: 'Random'}.get(partition_type, f'type{partition_type}')
     print(f"  [frozen-{name}] partition built: {n_shards} shards, sizes min/max = "
           f"{int(counts.min())}/{int(counts.max())}")
+    if persist:
+        p = _partition_cache_path(dataset, partition_type, embed_source, n_shards)
+        os.makedirs(os.path.dirname(p), exist_ok=True)
+        np.savez_compressed(p, user_to_shard=user_to_shard,
+                            partition_type=partition_type, embed_source=embed_source,
+                            n_shards=n_shards, n_users=n_users)
+        print(f"  [frozen-{name}] partition SAVED: {p}")
     return user_to_shard
+
+
+def _partition_cache_path(dataset, partition_type, embed_source, n_shards):
+    """Đường dẫn file lưu FROZEN partition của Ours (dùng khi --persist_partition)."""
+    base_dir = os.path.dirname(PROJ)
+    name = {1: 'inp', 2: 'ubp', 3: 'random'}.get(partition_type, f'type{partition_type}')
+    return os.path.join(base_dir, 'data', dataset,
+                        f'ours_partition_{name}_{embed_source}_k{n_shards}.npz')
 
 
 # Giữ tên cũ (InP) cho tương thích
@@ -815,7 +834,8 @@ def run_ours(dataset='ml-1m', emb_dim=64, n_shards=8,
             batch_size=512, lr=0.05, max_epochs=100,
             unlearn_ratio=0.1, unlearn_mode='random', unlearn_user_id=None,
             retrain_epochs=50, signature_dim=64, use_mean=False, output_suffix='',
-            partition='signature', max_epochs_wmf=100, embed_source='wmf'):
+            partition='signature', max_epochs_wmf=100, embed_source='wmf',
+            persist_partition=False):
     """
     Chạy Ours method với 3 components đúng theo bài báo
     """
@@ -913,13 +933,29 @@ def run_ours(dataset='ml-1m', emb_dim=64, n_shards=8,
         if partition in _FROZEN:
             _pname = {1: 'InP', 2: 'UBP', 3: 'Random'}[_FROZEN[partition]]
             _kind = '(modulo, no WMF)' if _FROZEN[partition] == 3 else '(WMF k-means)'
-            print(f"\n  [frozen-{_pname}] building FROZEN {_pname} {_kind} partition "
-                  f"(Ours unlearn sẽ KHÔNG re-cluster -> stable 0% + utility {_pname})")
-            frozen = build_frozen_partition(
-                dataset, emb_dim, n_shards, train_data, n_users,
-                partition_type=_FROZEN[partition],
-                max_epochs_wmf=max_epochs_wmf, batch_size=batch_size, lr=lr,
-                n_items=n_items, embed_source=embed_source)
+            _cache_p = _partition_cache_path(dataset, _FROZEN[partition], embed_source, n_shards)
+            _loaded = False
+            if persist_partition and os.path.exists(_cache_p):
+                try:
+                    _z = np.load(_cache_p)
+                    _cached = _z['user_to_shard']
+                    if len(_cached) == n_users:
+                        frozen = _cached.astype(np.int32)
+                        print(f"\n  [frozen-{_pname}] LOADED saved partition: {_cache_p}")
+                        _loaded = True
+                    else:
+                        print(f"  [frozen-{_pname}] cache mismatch (len {len(_cached)} != {n_users}) -> rebuild")
+                except Exception as e:
+                    print(f"  [frozen-{_pname}] cache unreadable ({e}) -> rebuild")
+            if not _loaded:
+                print(f"\n  [frozen-{_pname}] building FROZEN {_pname} {_kind} partition "
+                      f"(Ours unlearn sẽ KHÔNG re-cluster -> stable 0% + utility {_pname})")
+                frozen = build_frozen_partition(
+                    dataset, emb_dim, n_shards, train_data, n_users,
+                    partition_type=_FROZEN[partition],
+                    max_epochs_wmf=max_epochs_wmf, batch_size=batch_size, lr=lr,
+                    n_items=n_items, embed_source=embed_source,
+                    persist=persist_partition)
             user_to_shard = method.train(train_data, device, user_to_shard=frozen)
         else:
             user_to_shard = method.train(train_data, device)
@@ -1039,6 +1075,10 @@ if __name__ == '__main__':
     parser.add_argument('--unlearn_user_id', type=int, default=None,
                        help='Chi dinh user ID cu the de unlearn (dung voi --unlearn_mode single)')
     parser.add_argument('--retrain_epochs', type=int, default=50)
+    parser.add_argument('--persist_partition', type=int, default=0, choices=[0, 1],
+                        help='1 = lưu FROZEN partition ra data/<dataset>/ours_partition_*.npz và '
+                             'DÙNG LẠI nếu đã có (cho multi-request / restart process). '
+                             '0 = in-memory (đủ cho benchmark 1 lần xóa).')
     parser.add_argument('--output_suffix', type=str, default='')
 
     args = parser.parse_args()
@@ -1059,5 +1099,6 @@ if __name__ == '__main__':
         output_suffix=args.output_suffix,
         partition=args.partition,
         max_epochs_wmf=args.max_epochs_wmf,
-        embed_source=args.embed_source
+        embed_source=args.embed_source,
+        persist_partition=bool(args.persist_partition)
     )
