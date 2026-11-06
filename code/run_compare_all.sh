@@ -52,22 +52,22 @@ if [ "${1:-}" = "--grep" ]; then
   echo "########## KHỐI 2 - Ours × 4 PARTITION × {wmf,bprfull} ##########"
   for ds in ml-1m yelp2018; do
     echo "----- $ds -----"
-    printf "%-16s : " "sig"        "$(rnum logs/cmp2_${ds}_signature.log)"
-    printf "  randomfrozen : " "$(rnum logs/cmp2_${ds}_randomfrozen.log)"
+    printf "  %-14s : %s\n" "sig"          "$(rnum logs/cmp2_${ds}_signature.log)"
+    printf "  %-14s : %s\n" "randomfrozen" "$(rnum logs/cmp2_${ds}_randomfrozen.log)"
     for part in ubpfrozen inpfrozen; do
-      printf "%-14s wmf : " "$part" "$(rnum logs/cmp2_${ds}_${part}_embwmf.log)"
-      printf "  bprfull : " "$(rnum logs/cmp2_${ds}_${part}_embbprfull.log)"
+      printf "  %-14s wmf     : %s\n" "$part" "$(rnum logs/cmp2_${ds}_${part}_embwmf.log)"
+      printf "  %-14s bprfull : %s\n" "$part" "$(rnum logs/cmp2_${ds}_${part}_embbprfull.log)"
     done
   done
   echo ""
   echo "########## KHỐI 3 - Rec × 3 PARTITION × {wmf,bprfull} ##########"
   for ds in ml-1m yelp2018; do
     echo "----- $ds -----"
-    printf "%-14s : " "Random(no-emb)" "$(rnum logs/cmp3_${ds}_pt3_random.log)"
+    printf "  %-14s : %s\n" "Random(no-emb)" "$(rnum logs/cmp3_${ds}_pt3_random.log)"
     for pt in 1 2; do
       pnm=$([ "$pt" = "1" ] && echo InP || echo UBP)
-      printf "%-14s wmf : " "$pnm" "$(rnum logs/cmp3_${ds}_pt${pt}_embwmf.log)"
-      printf "  bprfull : " "$(rnum logs/cmp3_${ds}_pt${pt}_embbprfull.log)"
+      printf "  %-14s wmf     : %s\n" "$pnm" "$(rnum logs/cmp3_${ds}_pt${pt}_embwmf.log)"
+      printf "  %-14s bprfull : %s\n" "$pnm" "$(rnum logs/cmp3_${ds}_pt${pt}_embbprfull.log)"
     done
   done
   echo ""
@@ -79,19 +79,19 @@ if [ "${1:-}" = "--grep" ]; then
   echo "########## KHỐI 5 - ABLATION (Ours, ml-1m) ##########"
   echo "-- Shard K --"
   for k in 4 8 16; do
-    printf "  K=%-4s : " "$k" "$(rnum logs/cmp5_k${k}.log)"
+    printf "  K=%-4s : %s\n" "$k" "$(rnum logs/cmp5_k${k}.log)"
   done
   echo "-- Unlearn ratio --"
   for r in 0.001 0.005 0.01 0.02; do
-    printf "  r=%-6s : " "$r" "$(rnum logs/cmp5_r${r}.log)"
+    printf "  r=%-6s : %s\n" "$r" "$(rnum logs/cmp5_r${r}.log)"
   done
   echo "-- Unlearn mode --"
   for m in random most fewest; do
-    printf "  %-8s : " "$m" "$(rnum logs/cmp5_mode_${m}.log)"
+    printf "  %-8s : %s\n" "$m" "$(rnum logs/cmp5_mode_${m}.log)"
   done
   echo "-- Signature dim --"
   for d in 32 64 128; do
-    printf "  d=%-4s : " "$d" "$(rnum logs/cmp5_sigd${d}.log)"
+    printf "  d=%-4s : %s\n" "$d" "$(rnum logs/cmp5_sigd${d}.log)"
   done
   exit 0
 fi
