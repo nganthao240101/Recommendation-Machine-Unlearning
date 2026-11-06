@@ -42,7 +42,7 @@ log(){ echo "=== $(date +%H:%M:%S) $1 ==="; }
 # ---------------------------------------------------------------------------
 if [ "${1:-}" = "--grep" ]; then
   # R@10 theo cả 2 format: cũ "R@10: 0.1234" và mới "R@10=0.1234 | ..."
-  rnum(){ grep -hE "After \(RETAINED" "$1" 2>/dev/null | grep -oE "R@10[ =:]+[0-9.]+" | grep -oE "[0-9.]+$" || echo "(thiếu)"; }
+  rnum(){ grep -hE "After \(RETAINED" "$1" 2>/dev/null | grep -oE "R@10[ =:]+[0-9.]+" | grep -oE "[0-9.]+$" | tail -1 || echo "(thiếu)"; }
   # Dòng metrics đầy đủ (R/NDCG @10,20,50) nếu log có
   rfull(){ grep -hE "After \(RETAINED" "$1" 2>/dev/null | tail -1 || echo "(thiếu)"; }
   echo "########## KHỐI 1 - 4 PHƯƠNG PHÁP (Before / After / Unlearn time) ##########"

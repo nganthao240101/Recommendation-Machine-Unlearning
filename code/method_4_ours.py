@@ -38,6 +38,8 @@ import heapq
 PROJ = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, PROJ)
 
+from metrics_fmt import fmt_metrics as _fmt
+
 
 # ============================================================================
 # CHECKPOINT HELPERS
@@ -980,8 +982,7 @@ def run_ours(dataset='ml-1m', emb_dim=64, n_shards=8,
 
     # BEFORE: Evaluate on FULL test set (all users)
     results_before = method.evaluate(train_data, test_data, user_to_shard, device, use_mean=use_mean)
-    print(f"\n  Before (FULL) - R@10: {results_before['recall'][0]:.4f}, "
-          f"NDCG@10: {results_before['ndcg'][0]:.4f}")
+    print("\n  Before (FULL) - " + _fmt(results_before))
 
     print(f"\n{'='*70}")
     print(f"--- Phase 2: Unlearn (Deletion-Stable 3 Components) ---")
@@ -998,8 +999,7 @@ def run_ours(dataset='ml-1m', emb_dim=64, n_shards=8,
     # AFTER: Evaluate on RETAINED test set (train on RETAINED data)
     train_data_retained = {u: items for u, items in train_data.items() if u not in unlearn_users}
     results_after = method.evaluate(train_data_retained, test_data_retained, user_to_shard, device, use_mean=use_mean)
-    print(f"\n  After (RETAINED, retrain) - R@10: {results_after['recall'][0]:.4f}, "
-          f"NDCG@10: {results_after['ndcg'][0]:.4f}")
+    print("\n  After (RETAINED, retrain) - " + _fmt(results_after))
     print(f"  Unlearn time: {unlearn_time:.2f}s")
 
     results = {

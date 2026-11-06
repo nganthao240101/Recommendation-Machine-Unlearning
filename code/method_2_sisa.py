@@ -23,6 +23,8 @@ import heapq
 PROJ = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, PROJ)
 
+from metrics_fmt import fmt_metrics as _fmt
+
 
 # ============================================================================
 # CHECKPOINT HELPERS
@@ -561,7 +563,7 @@ def run_sisa(model_name='BPRMF', dataset='ml-1m', emb_dim=64, n_shards=8,
 
     # BEFORE: Evaluate on FULL test set (all users)
     results_before = method.evaluate(train_data, test_data, device)
-    print(f"  Before (FULL) - R@10: {results_before['recall'][0]:.4f}, NDCG@10: {results_before['ndcg'][0]:.4f}")
+    print("  Before (FULL) - " + _fmt(results_before))
 
     print(f"\n--- Phase 2: Unlearn (retrain affected shards only) ---")
     t0 = time.time()
@@ -575,7 +577,7 @@ def run_sisa(model_name='BPRMF', dataset='ml-1m', emb_dim=64, n_shards=8,
     # AFTER: Evaluate on RETAINED test set (train on RETAINED data)
     train_data_retained = {u: items for u, items in train_data.items() if u not in unlearn_users}
     results_after = method.evaluate(train_data_retained, test_data_retained, device)
-    print(f"  After (RETAINED, retrain) - R@10: {results_after['recall'][0]:.4f}, NDCG@10: {results_after['ndcg'][0]:.4f}")
+    print("  After (RETAINED, retrain) - " + _fmt(results_after))
     print(f"  Unlearn time: {unlearn_time:.2f}s")
 
     results = {

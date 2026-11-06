@@ -24,6 +24,8 @@ import heapq
 PROJ = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, PROJ)
 
+from metrics_fmt import fmt_metrics as _fmt
+
 
 # ============================================================================
 # CUSTOM DATA LOADER - KHÔNG DÙNG UTILITY.PARSER
@@ -495,11 +497,11 @@ def run_full_retrain(model_name='BPRMF', dataset='ml-1m',
     # BEFORE: Evaluate on FULL test set (to see the effect of unlearning)
     print("  Evaluating BEFORE on FULL test set...")
     results_before_full = method.evaluate(train_data, test_data, device)
-    print(f"  Before (FULL) - R@10: {results_before_full['recall'][0]:.4f}, NDCG@10: {results_before_full['ndcg'][0]:.4f}")
+    print("  Before (FULL) - " + _fmt(results_before_full))
 
     # BEFORE: Evaluate on RETAINED test set (same as AFTER - fair comparison)
     results_before = method.evaluate(train_data, test_data_retained, device)
-    print(f"  Before (RETAINED) - R@10: {results_before['recall'][0]:.4f}, NDCG@10: {results_before['ndcg'][0]:.4f}")
+    print("  Before (RETAINED) - " + _fmt(results_before))
 
     # Unlearn
     print(f"\n--- Phase 2: Unlearn (oracle full retrain) ---")
@@ -511,7 +513,7 @@ def run_full_retrain(model_name='BPRMF', dataset='ml-1m',
     # AFTER: Train on RETAINED data, evaluate on RETAINED test
     train_data_retained = {u: items for u, items in train_data.items() if u not in unlearn_users}
     results_after = method.evaluate(train_data_retained, test_data_retained, device)
-    print(f"  After (RETAINED, retrain) - R@10: {results_after['recall'][0]:.4f}, NDCG@10: {results_after['ndcg'][0]:.4f}")
+    print("  After (RETAINED, retrain) - " + _fmt(results_after))
     print(f"  Unlearn time: {unlearn_time:.2f}s")
 
     # Results
