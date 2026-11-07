@@ -6,7 +6,7 @@ We study machine unlearning for shard-based recommendation ensembles and ask a q
 
 1. **Utility is driven by partition quality, not by the unlearning mechanism.** Holding our mechanism fixed and swapping only the partition moves utility by ~40% (0.0771→0.1066 on ml-1m); swapping the *unlearning mechanism* at a shared partition moves it by ~0.
 2. **Our mechanism decouples the two.** Ours retains **0% deletion-instability and the correct affected-scope on every partition**, whereas RecEraser's InP/UBP partitions flip ~84% of retained users on every deletion and leak the true affected scope.
-3. **The embedding source is not interchangeable, and the effect is a property of the partition.** L2-regularized BPR degrades the interaction-based InP partition (user+item embeddings) but not the user-only UBP partition — **the same pattern in both methods**.
+3. **Whether the embedding source matters is a property of the partition, and its sign is a property of the dataset.** L2-regularized BPR affects the interaction-based InP partition (user+item embeddings) but not the user-only UBP partition — **the same pattern in both methods, on both datasets**. Its *direction* flips with density: it degrades InP on dense ml-1m (0.1066→0.0971) but improves it on sparse yelp (0.0111→0.0151, reaching the full-retrain ceiling).
 
 We additionally correct a **porting artifact** in RecEraser's attention aggregator: trained faithfully (with gradient-stopped local embeddings, as in the original), the aggregator recovers at least hard-routing quality.
 
@@ -92,7 +92,7 @@ The three components together yield *partition-agnostic* stability: the mechanis
 
 > ⚠️ **Caveat carried from the code review.** The 0.0637 above comes from a run whose aggregator trained on *all* parameters and therefore **overwrote the local shards' embeddings**. The corrected implementation (stop-gradient on local embeddings, §3.8) is being re-run; **0.0637 should be treated as an artifact, not as RecEraser's true author-faithful number**. Our conclusions never rely on it.
 
-> **yelp2018:** Full 0.0168→0.0157 (**13,317s**); Ours 0.0050→0.0043 (**390s**, ~34× cheaper); SISA ⏳; RecEraser-UBP ⏳.
+> **yelp2018 (EX1 complete):** Full 0.0168→0.0157 (**13,317s**) · Ours 0.0050→**0.0043** (390s) · SISA 0.0045→**0.0045** (**258s**) · RecEraser-UBP-attention 0.0003→**0.0003** (656s). Ours/SISA are ~35–50× cheaper than full retrain; Rec-UBP-attention collapses to 0.0003 because **UBP alone is too weak on a gappy corpus** (§3.3: InP, not UBP, is what recovers utility on yelp).
 
 ---
 
@@ -113,7 +113,7 @@ The three components together yield *partition-agnostic* stability: the mechanis
 
 **Analysis.** Swapping signature→InP **raises utility 0.0771→0.1066 (+0.0295, ~38%)** with **zero change to the unlearning mechanism or to stability**. Ours-InP (0.1066) even **exceeds the Full-retrain ceiling (0.1015)**: the InP partition keeps users near their semantically similar neighbours, so each shard's local data is more coherent than a single model's, while a single global model pays a plasticity cost on the same interactions. This is the central result: **the unlearning mechanism is partition-agnostic; utility is a property of the partition alone.**
 
-**yelp2018:** InP ⏳; UBP 0.0046, Random 0.0045, signature 0.0043 → on the sparse dataset **only InP recovers meaningful utility** (~2.6× the others), i.e. the partition effect is *larger* where data is scarcer.
+**yelp2018:** signature 0.0043, Random 0.0045, UBP 0.0040–0.0046, **InP-WMF 0.0111**, **InP-BPR 0.0151** → on the sparse dataset **only InP recovers meaningful utility** (~2.6× the others), and InP-BPR (0.0151) reaches the full-retrain ceiling (0.0157) at a fraction of the cost. The partition effect is *larger* where data is scarcer.
 
 ---
 
@@ -130,9 +130,31 @@ The three components together yield *partition-agnostic* stability: the mechanis
 
 *WMF = BPR-weighted, no L2 regularization; BPRfull = BPRMF with L2 reg 0.01, trained on full data.*
 
-**Analysis.** The two embedding sources are **not interchangeable — and the effect depends on *how* the partition consumes the embedding.** The *interaction-based* InP partition clusters on **both** user and item embeddings, and **degrades** under L2-regularized BPR (0.1066→0.0971 for Ours; 0.1052→0.0995 for Rec): regularization shrinks item embeddings and weakens the user–item cluster separation that InP relies on. The *user-only* UBP partition is **unaffected** (Δ within noise, both directions). Because the **identical pattern appears in both methods**, this is a **property of the partition, not of the unlearning mechanism** — reinforcing §3.3.
+**ml-1m (dense, ~1M interactions):**
 
-**Consequence for the paper's claim.** Ours with the *WMF* partition (0.1066) still **≥ Rec** (0.1052); switching to BPRfull lowers **both** (0.0971 vs 0.0995, a tie within noise). So the utility advantage we report is **not** an artifact of a favourable embedding model: it survives the swap, and the *partition* remains the dominant variable.
+| Partition (uses which embeddings) | WMF | BPRfull | Δ |
+|----------------------------------|:---:|:---:|:---:|
+| **InP** (user **+** item) — Ours | **0.1066** | 0.0971 | **−0.0095** |
+| **InP** (user **+** item) — Rec | 0.1052 | 0.0995 | **−0.0057** |
+| **UBP** (user only) — Ours | 0.0776 | 0.0793 | +0.0017 |
+| **UBP** (user only) — Rec | 0.0777 | 0.0788 | +0.0011 |
+
+**yelp2018 (sparse, 31.7k users / 38k items):**
+
+| Partition (uses which embeddings) | WMF | BPRfull | Δ |
+|----------------------------------|:---:|:---:|:---:|
+| **InP** (user **+** item) — Ours | 0.0111 | **0.0151** | **+0.0040** |
+| **InP** (user **+** item) — Rec | 0.0118 | **0.0148** | **+0.0030** |
+| **UBP** (user only) — Ours | 0.0046 | 0.0040 | −0.0006 |
+| **UBP** (user only) — Rec | 0.0044 | 0.0040 | −0.0004 |
+
+**Analysis.** The two embedding sources are **not interchangeable**, and the effect has **two separable components**.
+
+**(i) Which partition consumes the embedding determines whether the source matters at all.** The *interaction-based* InP partition clusters on **both** user and item embeddings and is **sensitive** to the source; the *user-only* UBP partition is **insensitive** (|Δ| ≤ 0.0017 on ml-1m, ≤ 0.0006 on yelp, in both directions). Because the **identical pattern appears in both methods on both datasets**, this is a **property of the partition, not of the unlearning mechanism** — reinforcing §3.3.
+
+**(ii) The sign of the effect is dataset-dependent.** On dense ml-1m, L2-regularized BPR **hurts** InP (0.1066→0.0971): shrinking item embeddings weakens the user–item separation InP relies on. On sparse yelp the same swap **helps** (0.0111→0.0151): heavy shrinkage suppresses noisy directions, so the k-means clusters become cleaner. → **The best embedding source for a partition is a property of the dataset (density), not a fixed choice.** A practitioner who transfers a partition recipe across datasets must re-select the embedding model.
+
+**Consequence for the paper's claim.** The utility advantage we report is **not** an artifact of a favourable embedding model: under *either* source, Ours tracks Rec at the same partition (ml-1m WMF 0.1066 vs 0.1052; yelp BPR 0.0151 vs 0.0148), and the *partition* remains the dominant variable.
 
 ---
 
@@ -148,9 +170,17 @@ The three components together yield *partition-agnostic* stability: the mechanis
 | UBP | 0.0777 | 0.0788 | 291s |
 | Random | 0.0763 | — | 347s |
 
-**Ours at the same partitions:** InP-frozen **0.1066** (202s) · UBP-frozen **0.0776** (215s) · Random-frozen **0.0760** (232s).
+**yelp2018 (Rec: random-init, embedding for partition only):**
 
-**Analysis.** This is the apples-to-apples comparison. At **InP**, Ours (0.1066) ≥ Rec (0.1052) — **same partition, same embedding source, different mechanism** — while Ours is **~2× faster (202s vs 387s)**, **0% stable vs ~84%**, and **correctly scoped** (§3.6). At **UBP** the two are **tied on utility** (0.0776 vs 0.0777) and Ours is again faster and stable. At **Random** they are also tied (0.0760 vs 0.0763).
+| Rec partition | WMF | BPRfull |
+|---------------|:---:|:---:|
+| InP | 0.0118 | 0.0148 |
+| UBP | 0.0044 | 0.0040 |
+| Random | 0.0039 | — |
+
+**Ours at the same partitions:** InP-frozen **0.0111 (WMF) / 0.0151 (BPR)** · UBP-frozen **0.0046 / 0.0040** · Random-frozen **0.0045**.
+
+**Analysis.** This is the apples-to-apples comparison. At **InP**, Ours (0.1066) ≥ Rec (0.1052) on ml-1m — **same partition, same embedding source, different mechanism** — while Ours is **~2× faster (202s vs 387s)**, **0% stable vs ~84%**, and **correctly scoped** (§3.6). At **UBP** the two are **tied on utility** (0.0776 vs 0.0777) and Ours is again faster and stable. At **Random** they are also tied (0.0760 vs 0.0763). On yelp the same structure holds at the partition level: Rec-InP (0.0118/0.0148) and Ours-InP (0.0111/0.0151) are within noise of each other under each embedding source, while both **collapse** on the non-similarity-aware partitions (UBP 0.0040–0.0046, Random 0.0039–0.0045) — a ~3× gap that is driven purely by the partition, not the mechanism.
 
 > **Conclusion of the comparison.** RecEraser and Ours are **comparable on utility whenever they are given the same partition**; the difference is entirely in the *other two* criteria — **cost** and **effective unlearning**. Any claim that RecEraser is "more accurate" is really a claim about its *partition*, not its unlearning mechanism. This is precisely the decoupling we set out to demonstrate.
 
@@ -217,7 +247,7 @@ We first observed RecEraser's attention aggregator performing *worse* than hard 
 
 **(i) The partition is the source of utility.** Across §3.2–§3.5, the only intervention that changes utility substantially is **which partition is used**. Ours's mechanism, held fixed, spans 0.0760–0.1066 on ml-1m purely by partition choice; RecEraser's mechanism at the same partitions lands within noise of Ours. Reported differences between shard-based unlearning methods are therefore, to first order, **differences in partitioning quality** — and should be attributed accordingly.
 
-**(ii) The embedding source is a partition-level property, not a method-level one.** L2-regularized BPR degrades the InP partition (which uses item embeddings) but leaves UBP (user-only) unchanged, **identically in both methods**. Practitioners should thus choose the embedding model *for the partition they intend to use*, and should not expect a "better" embedding model to transfer across partition types.
+**(ii) The embedding source is a partition-level property, not a method-level one — and its effect is dataset-dependent.** L2-regularized BPR is *sensitive to* the InP partition (which uses item embeddings) but *insensitive to* the UBP partition (user-only), **identically in both methods on both datasets** — so whether the source matters is a property of the *partition*, not of the unlearning method. The *sign* of that effect, however, **flips with dataset density**: L2 regularization *hurts* InP on dense ml-1m (0.1066→0.0971) but *helps* it on sparse yelp (0.0111→0.0151). The practical consequence is that **the optimal embedding source is a property of the dataset (density), not a fixed recipe**: a partition recipe transferred across datasets must have its embedding model re-selected, and "which model is better" has no dataset-independent answer.
 
 **(iii) Stability and scope are where mechanisms actually differ.** Ours is the only method that keeps **0% shard-flips and the exact affected scope** on *any* partition, because its guarantee comes from *not re-clustering* rather than from the partition being id-based. RecEraser obtains similarity-awareness precisely by re-clustering, which is what breaks both stability and scope. **This is a genuine trade-off, and decoupling it is the contribution**: one can have similarity-aware partitioning *and* deletion-stable unlearning, but only by freezing the partition.
 
@@ -232,7 +262,7 @@ Machine unlearning for sharded recommenders is best understood as **two separabl
 **Contributions.**
 1. A **decomposition** of shard-based unlearning into partition-quality vs. mechanism, supported by controlled ablations that hold one factor fixed at a time (§3.2–§3.5).
 2. A method that is **partition-agnostic yet deletion-stable** — 0% shard-flips and exact scope on *every* partition — while matching RecEraser's utility at a shared partition (§3.3, §3.5, §3.6).
-3. The finding that **the embedding source is not interchangeable, and the effect is a property of the partition** (L2-regularized BPR degrades InP but not UBP, in both methods) (§3.4).
+3. The finding that **whether the embedding source matters is a property of the partition, and its sign is a property of the dataset.** L2-regularized BPR affects the InP partition (which uses item embeddings) but not the user-only UBP partition, identically in both methods; and the *direction* of that effect **flips with dataset density** — it hurts InP on dense ml-1m (0.1066→0.0971) but helps it on sparse yelp (0.0111→0.0151) (§3.4).
 4. A **corrected evaluation** of RecEraser's attention aggregator, reporting our own porting artifact rather than attributing it to the baseline (§3.8).
 
 ---

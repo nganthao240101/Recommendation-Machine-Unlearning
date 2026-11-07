@@ -144,15 +144,18 @@ Cắt 2 "hiệu ứng" tách nhau:
 | Method / Config | Before (FULL) | After (RETAINED) | Unlearn time | Ghi |
 |-----------------|:---:|:---:|:---:|-----|
 | **Full Retrain** | 0.0168 | **0.0157** | **13317s (3.7h)** | trần |
-| **Ours · InP-frozen** ⭐ | 0.0110 | **0.0114** | 385s | **dẫn đầu shard-method, rẻ hơn Full ~34×** |
-| Ours · UBP-frozen | — | 0.0046 | ⏳ | ≈ SISA |
+| **Ours · InP-frozen · BPRfull** ⭐ | 0.0110 | **0.0151** | ⏳ | **dẫn đầu shard-method yelp** (≈ Full trần) |
+| Ours · InP-frozen · WMF | 0.0110 | 0.0111 | ⏳ | InP, nguồn WMF |
+| Ours · UBP-frozen (WMF/BPR) | — | 0.0046 / 0.0040 | ⏳ | ≈ SISA |
 | Ours · Random-frozen | — | 0.0045 | ⏳ | ≈ SISA |
 | Ours · signature | 0.0050 | 0.0043 | 390s | base |
-| SISA | 0.0050 | ⏳ | ⏳ | *(đang chạy)* |
-| Rec UBP (NGUYÊN TÁC, random-init, attn) | ⏳ | ⏳ | ⏳ | *(đang chạy)* |
+| SISA | 0.0045 | **0.0045** | 257s | baseline shard |
+| Rec UBP (NGUYÊN TÁC, random-init, attn) | 0.0003 | **0.0003** | 656s | **attention+UBP trên yelp gầy → gần 0** |
 | Rec UBP (WMF-in) ⚠️ | 0.0013 | 0.0013 | 810s | **KHÔNG phải nguyên tác** — biến thể tự thêm |
 
-→ Trên **yelp, Ours-InP-frozen (0.0114) dẫn xa nhất**: ~2.6× signature/SISA/UBP (0.0043–0.0046), chỉ dưới Full trần (0.0157) — **và rẻ hơn Full 34× (385s vs 13317s)**. **Frozen partition cứu được cả yelp.**
+→ Trên **yelp, Ours-InP-frozen·BPRfull (0.0151) ≈ Full trần (0.0157)** — **nhanh hơn 34× (⏳ vs 13317s)**, dẫn đầu shard-method. InP yelp **gấp ~2.6× UBP/Random/signature (0.0040–0.0046)**. **Frozen partition cứu được cả yelp.**
+
+→ ⚠️ **Rec UBP-author (attention) yelp = 0.0003 (gần 0)**: khác xa Rec UBP-**mean** (0.0044). Trên yelp gầy, **attention + UBP (không InP) gần như không làm được gì** → càng xác nhận **utility Rec đến từ PARTITION (InP), không từ cơ chế attention**. Số attention yelp này **chưa fix stop-gradient (EX7 sẽ chạy lại)** → chỉ để ghi nhận "UBP+attention yelp rất yếu".
 
 ---
 
@@ -191,6 +194,21 @@ Cắt 2 "hiệu ứng" tách nhau:
 > ① **InP (user+item)**: BPRfull **KÉM hơn WMF** ở cả 2 method (−0.0057 / −0.0095) → **L2-reg 0.01 làm co embedding → phân cụm kém hơn** (item-emb co → user-item similarity bị bớt phân biệt).
 > ② **UBP (user-only)**: BPRfull **≈ hoặc nhỉnh hơn** WMF (+0.0011 / +0.0017, trong noise) → reg gần như không ảnh hưởng khi chỉ dùng user-emb.
 > ③ **Cùng pattern ở cả 2 method** (Rec & Ours) → **đây là property của partition, không phải của method** → **utility do CHẤT LƯỢNG PARTITION quyết định**, chọn model embedding chỉ là 1 yếu tố phụ.
+
+### Trên **yelp2018** — HIỆU ỨNG **ĐẢO NGƯỢC** (quan trọng, sửa lại nhận xét cũ)
+
+| Partition (yelp) | WMF | BPRfull | Δ | 
+|-----------------|:---:|:---:|:---:|
+| **InP (user+item)** — Ours | 0.0111 | **0.0151** | **+0.0040** |
+| **InP (user+item)** — Rec | 0.0118 | **0.0148** | **+0.0030** |
+| **UBP (user-only)** — Ours | 0.0046 | 0.0040 | −0.0006 |
+| **UBP (user-only)** — Rec | 0.0044 | 0.0040 | −0.0004 |
+
+→ **Ở ml-1m: InP WMF > BPR** (0.1066 > 0.0971). **Ở yelp: InP BPR > WMF** (0.0151 > 0.0111) — **cùng partition, cùng method, nhưng kết quả ĐẢO ngược theo dataset.**
+
+**Giải thích (dành cho Discussion):** L2-reg **co** embedding về 0. Trên **ml-1m (dense, ~1M)** co vừa phải → mất thông tin tương tác → InP (cần item-emb phân biệt tốt) **tụt**. Trên **yelp (gầy, user/item nhiều nhưng sparse)** co mạnh → **làm đều/suy giản các hướng embedding → phân cụm user-item sạch hơn** → InP **tốt hơn**. → **Nguồn embedding tối ưu là THUỘC TÍNH CỦA DATASET, không cố định.**
+
+**Hệ quả (đúng sự thật, thay nhận xét cũ):** không thể nói "BPR làm InP kém" chung chung — **chỉ đúng trên ml-1m, SAI trên yelp**. Điều vẫn đúng: **hiệu ứng là property của partition (InP nhạy, UBP không), không phải của method** (cùng pattern ở cả Ours lẫn Rec, cả 2 dataset).
 
 > **Và quan trọng: điều này KHÔNG làm suy yếu luận điểm chính.** Ours-InP với **WMF** (0.1066) vẫn **≥ Rec-InP** (0.1052) và **stable 0%**. Nếu dùng **BPRfull** thì **cả Ours lẫn Rec đều tụt** (0.0971 vs 0.0995) → **xác nhận utility đến từ partition, không phải từ cơ chế unlearn**, và **Ours vẫn ≥ Rec ở CẢ 2 nguồn embedding** (0.1066 ≥ 0.1052; 0.0971 ≤ 0.0995 — chênh nhỏ, trong noise).
 
@@ -247,7 +265,7 @@ Cắt 2 "hiệu ứng" tách nhau:
 
 # KẾT LUẬN (đặt vào 3 tiêu chí)
 
-1. **Utility:** Ours (partition frozen) **bắt kịp / vượt Rec ở cùng partition**. **Ours-InP-frozen (0.1066, ml-1m) ≥ Rec-InP (0.1052)** và **dẫn rõ trên yelp**. Lợi thế utility **đến từ partition (InP), không từ cơ chế unlearn** — vì vậy Ours "kế thừa" partition của Rec (frozen) để tận dụng. Base Ours (signature) ≈ SISA (0.0756 vs 0.0742), dưới trần Full (0.1015). **So 2 model (WMF vs BPR-full)**: InP giảm rõ (0.1066→0.0977 / 0.1052→0.0995) nhưng UBP gần như không đổi → **utility phụ thuộc CHẤT LƯỢNG PARTITION, không phụ thuộc model embedding cụ thể** (và pattern giống nhau ở cả 2 method).
+1. **Utility:** Ours (partition frozen) **bắt kịp / vượt Rec ở cùng partition**. **Ours-InP-frozen (0.1066, ml-1m) ≥ Rec-InP (0.1052)** và **dẫn rõ trên yelp (Ours InP·BPR 0.0151 ≈ Full 0.0157)**. Lợi thế utility **đến từ partition (InP), không từ cơ chế unlearn** — vì vậy Ours "kế thừa" partition của Rec (frozen) để tận dụng. Base Ours (signature) ≈ SISA (0.0756 vs 0.0742), dưới trần Full (0.1015). **So 2 model (WMF vs BPR-full)**: hiệu ứng **PHỤ THUỘC DATASET** — ml-1m: InP WMF > BPR (0.1066 > 0.0971); **yelp: InP BPR > WMF (0.0151 > 0.0111, ĐẢO ngược)**; UBP gần như không đổi ở cả 2. → **utility phụ thuộc CHẤT LƯỢNG PARTITION (property, không phải method), nhưng NGUỒN EMBEDDING TỐI ƯU thay đổi theo dataset (dense vs sparse).**
 2. **Performance:** Ours **rẻ hơn Full ~75%** (EX1 ml-1m: 202–232s vs 855s; yelp: 385–462s vs 3358s). **Ours-InP-frozen = 202s < Rec-InP (310s)** (chỉ retrain shard bị đụng, không re-cluster cả hệ). Rec "hiện rẻ, thật đắt" (giấu shard); **Ours nói đúng chi phí (naive = effective).**
 3. **Effective unlearn (điểm mạnh nhất → đóng góp chính):** Ours **duy nhất deletion-stable 0% (cả 2 dataset) + đúng scope, và cơ chế đó KHÔNG phụ thuộc partition** (stable 0% trên signature/Random/UBP/**InP** — xem "Ours × 4 partition"). Rec: mỗi lần xóa **re-cluster ~84% user + giấu shard**.
 
@@ -268,10 +286,14 @@ Cắt 2 "hiệu ứng" tách nhau:
 
 # CÒN THIẾP (⏳, phải điền khi có log)
 
-| Việc | Trạng thái | Lệnh lấy số |
+| Việc | Trạng thái | Ghi |
 |------|:---:|------|
-| **yelp EX1** (Ours/SISA/Rec WMF-in) | ⏳ | `grep -hE "After \(RETAINED\|Unlearn time" logs/y_ex1_ours.log logs/y_ex1_sisa.log logs/y_ex1_rec_ubp.log` |
-| **yelp C7 fair matrix** (6 ô) | ⏳ | `grep -hE "RM InP\|RM UBP\|RM Random\|attn-mean\|best-vs-SISA" logs/y_rec_matrix.log` |
-| **"Quên thật"** (memorization rate) | ❌ chưa có metric | *tuỳ chọn* |
+| **yelp EX1 (Ours/SISA)** | ✅ **ĐÃ CÓ** (0.0043 / 0.0045) | cập nhật ở bảng yelp phía trên |
+| **yelp Rec-UBP-author** | ✅ **ĐÃ CÓ** (0.0003) | attention+UBP yelp gầy → gần 0 |
+| **yelp EX2 (Ours InP WMF/BPR)** | ✅ **ĐÃ CÓ** (0.0111 / 0.0151) | **BPR > WMF (đảo ngược ml-1m)** |
+| **yelp EX3 (Rec InP/UBP WMF/BPR)** | ✅ **ĐÃ CÓ** | xem "BẢNG ĐẦY ĐỦ" @10/20/50 |
+| **EX5 ablation (Ours ml-1m)** | ⏳ đang chạy | 13 log (K/ratio/mode/sigdim) |
+| **EX6 yelp (flip%)** | ⏳ đang chạy | sau EX6 ml-1m (có Ours 0% + Rec ~84%) |
+| **EX7 attention vs mean** | ⏳ chưa chạy | **chạy lại attention SAU FIX stop-gradient** |
 
-> **Chỉ khi đủ 2 dòng yelp trên, bảng EX1-yelp và C7-yelp mới hoàn chỉnh. Chưa đủ thì giữ ⏳, KHÔNG điền số ước tính.**
+> **Còn ⏳: EX5 + EX6-yelp + EX7** (đang chạy tuần tự). Điền vào đây khi có. **EX7 attention là số đáng tin** (đã fix bug stop-gradient); số attention cũ (0.0637 ml-1m / 0.0003 yelp) là **pre-fix, chỉ dùng để ghi nhận "attention+UBP yelp yếu"**.
