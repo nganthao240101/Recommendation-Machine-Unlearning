@@ -416,10 +416,7 @@ def main():
     args = ap.parse_args()
 
     data_root = args.data_root or os.path.join(os.path.dirname(PROJ), 'data')
-    out_dir = args.out_dir or os.path.join(os.path.dirname(PROJ), 'results')
-    os.makedirs(out_dir, exist_ok=True)
     tag = args.tag or f'{args.dataset}_K{args.n_shards}'
-    csv_path = os.path.join(out_dir, f'partition_quality_{tag}.csv')
 
     device = 'cuda' if torch.cuda.is_available() else 'cpu'
     train_items, test_data, n_users, n_items = load_data(args.dataset, data_root)
@@ -428,21 +425,8 @@ def main():
     seeds = [int(s) for s in args.seeds.split(',') if s.strip()]
     arms = [a.strip() for a in args.arms.split(',') if a.strip()]
 
-    # append-only: never overwrite a per-seed file
-    write_header = not os.path.exists(csv_path)
-    fh = open(csv_path, 'a', newline='', encoding='utf-8')
-    import csv as _csv
-    writer = _csv.DictWriter(fh, fieldnames=[
-        'dataset', 'seed', 'arm', 'partition', 'K', 'deletion_ratio', 'deletion_mode',
-        'backbone', 'embedding_dim', 'epochs', 'learning_rate', 'regularization',
-        'recall_10', 'ndcg_10', 'recall_20', 'ndcg_20', 'recall_50', 'ndcg_50',
-        'intra_similarity', 'nr_10', 'nr_20', 'nr_50',
-        'user_load_cv', 'interaction_load_cv', 'max_mean_ratio',
-        'train_time', 'unlearn_time', 'affected_shards',
-    ])
-    if write_header:
-        writer.writeheader()
-        fh.flush()
+    # Results are printed to the console as they are produced; no CSV is written.
+    RESULTS = []
 
     for seed in seeds:
         if args.legacy_mode:
@@ -535,15 +519,102 @@ def main():
                 row[f'recall_{k}'] = res['recall'][i]
                 row[f'ndcg_{k}'] = res['ndcg'][i]
 
-            writer.writerow(row)
-            fh.flush()
-            print(f"  [CSV] {arm}: R@10={row['recall_10']:.4f} NDCG@10={row['ndcg_10']:.4f} "
-                  f"train={row['train_time']:.1f}s unlearn={row['unlearn_time']:.1f}s "
-                  f"-> {csv_path}")
+            RESULTS.append(row)
+            print(f"  [{arm}] R@10={row['recall_10']:.4f} NDCG@10={row['ndcg_10']:.4f} "
+                  f"| R@20={row['recall_20']:.4f} R@50={row['recall_50']:.4f} "
+                  f"| train={row['train_time']:.1f}s unlearn={row['unlearn_time']:.1f}s "
+                  f"shards={row['affected_shards']}")
+            print(f"       partition quality: IntraSim={row['intra_similarity']} "
+                  f"NR@10={row['nr_10']} NR@20={row['nr_20']} NR@50={row['nr_50']}")
+            print(f"       load: user_cv={row['user_load_cv']} "
+                  f"inter_cv={row['interaction_load_cv']} max/mean={row['max_mean_ratio']}")
 
-    fh.close()
-    print(f"\nDone. Raw results: {csv_path}")
-    print("Aggregate with: python code/aggregate_partition_quality.py")
+    print_console_summary(RESULTS, seeds, arms, args)
+
+
+def print_console_summary(results, seeds, arms, args):
+    """Print the per-arm summary and the paired PROPOSED-vs-RANDOM comparison."""
+    import statistics
+
+    print()
+    print('=' * 78)
+    print('CONSOLE SUMMARY')
+    print('=' * 78)
+
+    def get(arm, seed, key):
+        for r in results:
+            if r['arm'] == arm and int(r['seed']) == int(seed):
+                v = r.get(key, '')
+                try:
+                    return float(v)
+                except (TypeError, ValueError):
+                    return float('nan')
+        return float('nan')
+
+    metrics = ['recall_10', 'ndcg_10', 'recall_20', 'ndcg_20', 'recall_50', 'ndcg_50']
+    print(f"\n{'arm':<18}" + ''.join(f'{m:>16}' for m in metrics[:4]))
+    for arm in arms:
+        line = f'{arm:<18}'
+        for m in metrics[:4]:
+            vals = [get(arm, s, m) for s in seeds]
+            vals = [v for v in vals if v == v]
+            if vals:
+                sd = statistics.stdev(vals) if len(vals) > 1 else 0.0
+                line += f'{statistics.mean(vals):.4f}+-{sd:.4f}'.rjust(16)
+            else:
+                line += ''.rjust(16)
+        print(line)
+
+    # partition quality + cost, side by side
+    pqm = ['intra_similarity', 'nr_10', 'nr_20', 'nr_50',
+           'user_load_cv', 'interaction_load_cv', 'max_mean_ratio',
+           'train_time', 'unlearn_time']
+    print(f"\n{'arm':<18}" + ''.join(f'{m[:13]:>15}' for m in pqm))
+    for arm in arms:
+        line = f'{arm:<18}'
+        for m in pqm:
+            vals = [get(arm, s, m) for s in seeds]
+            vals = [v for v in vals if v == v]
+            if vals:
+                sd = statistics.stdev(vals) if len(vals) > 1 else 0.0
+                line += f'{statistics.mean(vals):.4f}+-{sd:.4f}'.rjust(15)
+            else:
+                line += ''.rjust(15)
+        print(line)
+
+    base = 'RANDOM_PERM' if any(r['arm'] == 'RANDOM_PERM' for r in results) else 'RANDOM_MODULO'
+    prop = 'PROPOSED'
+    paired = [s for s in seeds
+              if any(r['arm'] == prop and int(r['seed']) == int(s) for r in results)
+              and any(r['arm'] == base and int(r['seed']) == int(s) for r in results)]
+    if not paired:
+        return
+
+    print(f"\nPAIRED: {prop} vs {base}   seeds={paired} (n={len(paired)})")
+    for m in metrics:
+        pairs = [(get(prop, s, m), get(base, s, m)) for s in paired]
+        pairs = [(x, y) for x, y in pairs if x == x and y == y]
+        if not pairs:
+            continue
+        p = [x for x, _ in pairs]
+        b = [y for _, y in pairs]
+        d = [x - y for x, y in pairs]
+        md = statistics.mean(d)
+        sd = statistics.stdev(d) if len(d) > 1 else 0.0
+        rg = (statistics.mean([(x - y) / y * 100 for x, y in pairs])
+              if all(y != 0 for y in b) else float('nan'))
+        print(f'  {m:<12} {prop}={statistics.mean(p):.4f}  {base}={statistics.mean(b):.4f}  '
+              f'rel_gain={rg:+.2f}%  mean_delta={md:+.4f} (sd={sd:.4f})')
+
+    # mechanism check: does the partition actually co-locate similar users?
+    for m in ['intra_similarity', 'nr_10', 'nr_20', 'nr_50']:
+        pv = [get(prop, s, m) for s in paired]
+        bv = [get(base, s, m) for s in paired]
+        pv = [x for x in pv if x == x]
+        bv = [x for x in bv if x == x]
+        if pv and bv:
+            print(f'  {m:<12} {prop}={statistics.mean(pv):.4f}  {base}={statistics.mean(bv):.4f}  '
+                  f'{"HIGHER" if statistics.mean(pv) > statistics.mean(bv) else "NOT higher"}')
 
 
 if __name__ == '__main__':
