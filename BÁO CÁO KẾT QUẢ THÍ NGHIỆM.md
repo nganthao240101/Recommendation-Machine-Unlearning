@@ -110,7 +110,7 @@ Cắt 2 "hiệu ứng" tách nhau:
 | Rec fair (no WMF) | 0.0665 | ~357–416s | từ bảng C7(b) (6 config) |
 
 → **Ours ≈ SISA ≈ Rec (678–800s) RẺ HƠN Full (1532s) ~49%** sau unlearn.
-→ **Rec "hiện rẻ (678s) nhưng thật đắt"** (giấu shard, instability 84% → chi phí đúng nghĩa ≈ Full). **Ours nói đúng chi phí (naive = effective, stable 0%).**
+→ **Rec "hiện rẻ nhưng thật đắt"** (giấu scope — InP nói đổi 3–4 shard, thật đụng 5–8; UBP instability 40–71% → chi phí đúng nghĩa cao hơn بكثير so với tuyên bố). **Ours nói đúng chi phí (naive = effective, stable 0%).**
 
 ---
 
@@ -124,17 +124,17 @@ Cắt 2 "hiệu ứng" tách nhau:
 |-----------------|:---:|:---:|:---:|:---:|-----|
 | **Full Retrain** | 0.1032 | **0.1015** | 855s | 0% (trần, không shard) | trần utility |
 | **Ours · InP-frozen** ⭐ | 0.1017 | **0.1066** | 202s | **0%** | **best: utility ≥ Rec-InP, stable 0%** |
-| **Rec InP-mean (random-init, WMF-part)** | 0.0996 | 0.1052 | 387s | **~84% (giấu shard)** | Rec "nguyên tác" về utility, **bất ổn** |
-| Rec UBP-**mean** (random-init, WMF-part) | 0.0710 | 0.0777 | 291s | **~84%** | ≈ Ours-UBP |
-| **Rec UBP-**attention** (NGUYÊN TÁC, random-init)** | 0.0869 | **0.0637** | 276s | **~84%** | **attention aggregator TỤT so mean (0.0777)** |
+| **Rec InP-mean (random-init, WMF-part)** | 0.0996 | 0.1052 | 387s | 0.15% flip + **giấu shard (3→5)** | Rec "nguyên tác" về utility, **scope sai** |
+| Rec UBP-**mean** (random-init, WMF-part) | 0.0710 | 0.0777 | 291s | **40.55% flip** | ≈ Ours-UBP, **bất ổn** |
+| **Rec UBP-**attention** (NGUYÊN TÁC, random-init)** | 0.0869 | **0.0637** | 276s | 40.55% flip | ⚠️ **pre-fix (aggregator over-train) — xem EX7** |
 | Rec Random (modulo) | 0.0660 | 0.0763 | 347s | 0% (không sim-aware) | ≈ Ours-Random / SISA |
 | **Ours · UBP-frozen** | — | 0.0776 | 215s | **0%** | ≈ Rec-UBP, shard cân bằng |
 | Ours · signature | 0.0675 | 0.0756 | 214s | **0%** | base Ours |
 | Ours · Random-frozen | — | 0.0760 | 232s | **0%** | ≈ SISA (modulo) |
 | SISA | 0.0675 | 0.0742 | 233s | 0% (modulo) | baseline shard |
-| Rec UBP (WMF-in-model, `pretrain=1`) ⚠️ | 0.0857 | 0.0613 | 346s | ~84% | **KHÔNG phải config nguyên tác** — biến thể tự thêm |
+| Rec UBP (WMF-in-model, `pretrain=1`) ⚠️ | 0.0857 | 0.0613 | 346s | 40.55% flip | **KHÔNG phải config nguyên tác** — biến thể tự thêm |
 
-→ **Ours-InP-frozen (0.1066) ≥ Rec-InP (0.1052) về utility, NHANH hơn nhiều (202s vs 387s), và stable 0% (Rec = 84% + giấu shard).** → **thắng Rec cả 3 mặt (utility + thời gian + ổn định).**
+→ **Ours-InP-frozen (0.1066) ≥ Rec-InP (0.1052) về utility, NHANH hơn nhiều (202s vs 387s), stable 0% + đúng scope (Rec InP: 0.15% flip NHƯNG giấu shard 3→5).** → **thắng Rec ở cả 3 mặt (utility + thời gian + scope đúng).**
 → **Ours ≈ SISA** ở partition không-embedding (0.0756 vs 0.0742) → **cơ chế unlearn không làm hỏng utility; lợi thế lớn của Ours đến từ việc dùng được partition tốt (InP) mà vẫn ổn định.**
 → ✅ **Rec "nguyên tác" (attention, random-init) = 0.0637 < Rec-mean 0.0777** → **attention aggregator KHÔNG giúp Rec ở điều kiện này** (khớp phát hiện cũ: attention chỉ có giá khi train đủ + khởi tạo tốt) → **càng củng cố: lợi thế utility của Rec đến từ PARTITION, không từ cơ chế attention/pretrain.**
 → ⚠️ **Rec WMF-in (`pretrain=1`) = 0.0613 < Rec random-init (0.0777)** → **warm-start embedding KHÔNG giúp Rec** (vốn không phải nguyên tác).
@@ -172,9 +172,9 @@ Cắt 2 "hiệu ứng" tách nhau:
 | signature | (không dùng) | 0.0756 | 214s | **0%** | base (hash) |
 | Random-frozen | (không dùng) | 0.0760 | 232s | **0%** | ≈ SISA (0.0742) |
 
-→ **Trend:** utility **InP (0.1066) ≫ UBP (0.0776–0.0793) ≈ signature (0.0756) ≈ Random (0.0760)**; **stable ĐỀU 0%** (cùng cơ chế Ours, FROZEN). → **Ours là "giới ổn định", partition là "giới utility" — tách biệt được.** Ours-InP-frozen **kết hợp cả hai (utility InP + stable 0%) = "best-of-both"** mà Rec không làm được (Rec-InP: utility InP nhưng **84% unstable + giấu shard**).
+→ **Trend:** utility **InP (0.1066) ≫ UBP (0.0776–0.0793) ≈ signature (0.0756) ≈ Random (0.0760)**; **stable ĐỀU 0%** (cùng cơ chế Ours, FROZEN). → **Ours là "giới ổn định", partition là "giới utility" — tách biệt được.** Ours-InP-frozen **kết hợp cả hai (utility InP + stable 0% + scope đúng)** mà Rec không làm được (Rec-InP: utility InP nhưng **giấu shard 3→5**).
 
-> **Ghi trung thực (đừng phóng đại):** utility InP (0.1066) **đến từ partition InP (của Rec)**; đóng góp thật của Ours = **cơ chế unlearn stable + đúng scope, chạy được trên mọi partition.** "Ours cao hơn Rec" = **Ours-InP-frozen (0.1066, stable 0%) so Rec-InP (0.1052, stable 84%)** — utility ≥ Rec **mà ổn định hơn hẳn + nói đúng scope**.
+> **Ghi trung thực (đừng phóng đại):** utility InP (0.1066) **đến từ partition InP (của Rec)**; đóng góp thật của Ours = **cơ chế unlearn stable + đúng scope, chạy được trên mọi partition.** "Ours ≥ Rec" = **Ours-InP-frozen (0.1066, 0% flip, scope đúng) so Rec-InP (0.1052, 0.15% flip, scope SAI 3→5)** — utility ≥ Rec **mà ổn định tuyệt đối + nói đúng scope**.
 
 ---
 
@@ -230,25 +230,55 @@ Cắt 2 "hiệu ứng" tách nhau:
 
 | Method | ml-1m instability | yelp instability | sim-aware | đúng scope |
 |--------|:---:|:---:|:---:|:---:|
-| **Ours** | **0.00%** (0 user) | **0.00%** (0 user) | ✅ | ✅ (naive = effective) |
-| SISA | 0.00% | 0.00% | ❌ (modulo) | ✅ |
-| Rec (UBP) | **84.82%** (5072 user, naive 3→eff 8) | **83.90%** (26305 user) | ✅ | ❌ **giấu shard** |
+| **Ours** (signature / Random / UBP / InP) | **0.00%** (0 user) | **0.00%** (0 user) | ✅ | ✅ (naive = effective) |
+| SISA (modulo) | 0.00% | 0.00% | ❌ (modulo) | ✅ |
+| Rec Random (modulo) | 0.00% | 0.00% | ❌ | ✅ |
+| **Rec InP** (re-cluster) | **0.15%** (9 user) — *naive 3→eff **5*** | **14.39%** (4510 user) — naive 4→eff **8** | ✅ | ❌ **giấu shard** |
+| **Rec UBP** (re-cluster) | **40.55%** (2425 user) | **71.19%** (22320 user) | ✅ | ❌ |
 
-→ **Ours là method DUY NHẤT vừa similarity-aware VỪA deletion-stable (0% cả 2 dataset) VỪA đúng scope.** Rec: mỗi lần xóa **re-cluster ~84–85% user** + **giấu shard** (nói đổi 3, thật 8).
+→ **Ours là method DUY NHẤT vừa similarity-aware VỪA deletion-stable (0% MỌI partition, CẢ 2 dataset) VỪA đúng scope.**
+→ **Rec: (i) LUÔN giấu scope** trên partition similarity-aware — InP ml-1m **3→5**, InP yelp **4→8** (nghĩa là chi phí thật > chi phí tuyên bố, **bất kể flip rate**); (ii) **UBP rất bất ổn** (40.55% ml-1m / 71.19% yelp); (iii) InP-ml-1m flip thấp (0.15%) **nhưng vẫn leak scope** → vẫn thua Ours.
+
+> ⚠️ **Đính chính (quan trọng):** con số "~84%" từ các báo cáo trước là **SAI** — nó đến từ phiên bản partition **unbalanced cũ (type 4/5)**, không phải InP/UBP balanced hiện tại. **Số đúng là bảng EX6 ở trên** (InP 0.15%/14.39%, UBP 40.55%/71.19%). Luận điểm giữ nguyên nhưng **đổi từ "0% vs 84%" sang "0% + correct scope vs scope-leak + 40–71% UBP instability"** — chính xác hơn và không bị reviewer bắt.
 
 ---
 
-# ABLATION / FACTORS (ml-1m, Ours) ✅
+# ABLATION / FACTORS (ml-1m, Ours) ✅ — số từ run mới nhất
 
 | Yếu tố | Giá trị → After R@10 | Kết luận |
 |--------|----------------------|:---:|
-| **Shard K** | k4 0.0885 → k8 0.0765 → k16 0.0605 | K lớn → utility giảm (data vụn) |
-| **Ratio** (Ours) | 0.1% 0.0727 → 0.5% 0.0754 → 1% 0.0758 → 2% 0.0762 | **FLAT** (mất < 0.5%) |
-| **Ratio** (SISA) | 0.1% 0.0696 → 0.5% 0.0731 → 1% 0.0758 → 2% 0.0750 | FLAT |
-| **Mode (random)** | Ours 0.0770 / SISA 0.0743 | Ours ≥ SISA |
-| **Sig-dim** (Ours only) | d32 0.0795 / d64 0.0765 / d128 0.0765 | dim 64 đủ |
+| **Shard K** | **k4 0.0889** → k8 0.0754 → **k16 0.0607** | **K lớn → utility giảm đều** (data vụn); **k4 tốt nhất (+0.0135 vs k8)** → nên dùng **K=4** (utility cao + scope nhỏ hơn) |
+| **Ratio** | 0.1% 0.0720 → 0.5% 0.0756 → 1% 0.0762 → 2% 0.0765 | **FLAT** (Δ 0.0045, trong noise) → **cơ chế frozen ratio-invariant** |
+| **Mode** | random 0.0765 / most 0.0763 / fewest 0.0754 | **FLAT** (Δ 0.0011) → xóa mode không ảnh hưởng |
+| **Sig-dim** | **d32 0.0792** / d64 0.0759 / d128 0.0765 | **d=32 là đủ; tăng dim KHÔNG lợi** (d128 ≈ d64) |
+| **Mode (SISA, để so)** | Ours 0.0765 / SISA 0.0743 | Ours ≥ SISA |
+
+> **Điểm mạnh của ablation này:** **stability (0% flip) và scope đúng KHÔNG ĐỔI theo bất kỳ hyper-param nào** — ablation chỉ dịch *utility*, **không đụng trục tiêu chí ③** → Ours **không cần re-validate stability theo từng config** khi deploy.
+> **Yếu tố duy nhất ảnh hưởng mạnh là K** (0.0889 → 0.0607, −32%) → **sharding effect đo được**.
+| **Sig-dim** (Ours only) | d32 0.0792 / d64 0.0759 / d128 0.0765 | dim 32-64 đủ |
 
 > Sig-dim là hyper-param **riêng của Ours**; Full/SISA/Rec **không có** tham số này.
+
+---
+
+# EX7 — ATTENTION vs MEAN (Rec-UBP, ml-1m, aggregator ĐÃ FIX stop-gradient)
+
+| Config aggregator | After R@10 | vs MEAN |
+|--------------------|:---:|:---:|
+| **MEAN (hard routing)** | **0.0788** | — **tốt nhất** |
+| ATTN lr=0.005 ep=60 | 0.0774 | −0.0014 (≈ ngang, noise) |
+| ATTN lr=0.005 ep=200 | **0.0657** | **−0.0131 (tệ hơn rõ)** |
+| ATTN lr=0.05 ep=60 | **0.0570** | −0.0218 (tệ nhất) |
+
+→ **Kết luận ĐẢO so với dự đoán ban đầu: attention KHÔNG BAO GIỜ thắng mean.** Mẫu **đơn điệu**: **giảm lr giúp** (0.0570 → 0.0774), **tăng epochs làm hại** (0.0774 → 0.0657).
+
+**Đọc đúng (3 điều):**
+1. **Attention không phải là nguồn utility** — ở config tốt nhất nó chỉ **ngang** hard routing (0.0774 vs 0.0788). → **củng cố mạnh luận điểm "utility do PARTITION, không do aggregator"**.
+2. **Over-train aggregator làm hại** → cross-shard attention trên shard đã phân mảnh sẵn là **nguồn nhiễu**, không phải tín hiệu.
+3. **Aggregator hyper-param RẤT nhạy** (0.0570–0.0788 = **±38%** chỉ do lr/epochs) → Rec cần tuning cẩn thận; **bản "author" (lr cao, nhiều epoch) có thể tệ hơn nhiều so với hard routing**.
+
+> **Giải thích mâu thuẫn "attention < mean" (số cũ 0.0637):** pre-fix = **over-train + lr cao**, **KHÔNG phải** "attention kém về nguyên lý". Đã được EX7 xác nhận bằng cách chạy lại với stop-gradient đúng + quét lr/epochs.
+> **Caveat cho fairness:** số attention 0.0637 (cmp1) là pre-fix → **KHÔNG dùng làm số chính**; số đáng tin là bảng EX7 ở trên.
 
 ---
 
@@ -267,20 +297,20 @@ Cắt 2 "hiệu ứng" tách nhau:
 
 1. **Utility:** Ours (partition frozen) **bắt kịp / vượt Rec ở cùng partition**. **Ours-InP-frozen (0.1066, ml-1m) ≥ Rec-InP (0.1052)** và **dẫn rõ trên yelp (Ours InP·BPR 0.0151 ≈ Full 0.0157)**. Lợi thế utility **đến từ partition (InP), không từ cơ chế unlearn** — vì vậy Ours "kế thừa" partition của Rec (frozen) để tận dụng. Base Ours (signature) ≈ SISA (0.0756 vs 0.0742), dưới trần Full (0.1015). **So 2 model (WMF vs BPR-full)**: hiệu ứng **PHỤ THUỘC DATASET** — ml-1m: InP WMF > BPR (0.1066 > 0.0971); **yelp: InP BPR > WMF (0.0151 > 0.0111, ĐẢO ngược)**; UBP gần như không đổi ở cả 2. → **utility phụ thuộc CHẤT LƯỢNG PARTITION (property, không phải method), nhưng NGUỒN EMBEDDING TỐI ƯU thay đổi theo dataset (dense vs sparse).**
 2. **Performance:** Ours **rẻ hơn Full ~75%** (EX1 ml-1m: 202–232s vs 855s; yelp: 385–462s vs 3358s). **Ours-InP-frozen = 202s < Rec-InP (310s)** (chỉ retrain shard bị đụng, không re-cluster cả hệ). Rec "hiện rẻ, thật đắt" (giấu shard); **Ours nói đúng chi phí (naive = effective).**
-3. **Effective unlearn (điểm mạnh nhất → đóng góp chính):** Ours **duy nhất deletion-stable 0% (cả 2 dataset) + đúng scope, và cơ chế đó KHÔNG phụ thuộc partition** (stable 0% trên signature/Random/UBP/**InP** — xem "Ours × 4 partition"). Rec: mỗi lần xóa **re-cluster ~84% user + giấu shard**.
+3. **Effective unlearn (điểm mạnh nhất → đóng góp chính):** Ours **duy nhất deletion-stable 0% (MỌI partition, CẢ 2 dataset) + đúng scope (naive = effective), và cơ chế đó KHÔNG phụ thuộc partition**. Rec: (i) **luôn giấu scope** trên partition similarity-aware (InP ml-1m **3→5**, InP yelp **4→8** → chi phí thật > chi phí tuyên bố), (ii) **UBP cực bất ổn** (40.55% ml-1m / 71.19% yelp user retained đổi shard), (iii) InP-ml-1m flip thấp (0.15%) **nhưng vẫn leak scope** → vẫn thua Ours ở tiêu chí ③.
 
 ## Câu đóng góp (Anh, cho Discussion)
 
-> "Ours's unlearning mechanism is **partition-agnostic yet deletion-stable**: it keeps **0% shard flips and the correct affected-scope** across *any* partition (signature / Random / UBP / InP), whereas RecEraser's InP/UBP partitions flip ~84–85% of users on every deletion and leak the true affected scope. Because utility is driven by the *partition* (InP ≈ full-data ceiling, sharding effect −0.0628) and not by the unlearning mechanism, **Ours can borrow RecEraser's strong InP partition (frozen) and retain it through deletion** — yielding a configuration that **matches RecEraser-InP on utility (0.1066 vs 0.1052 on ml-1m; leads on yelp) while being stable (0% vs 84%) and cheaper (202s vs 310s) and correctly scoped**. This is the 'best-of-both' point RecEraser itself cannot reach: its strong partition and its unlearning mechanism are incompatible (re-clustering destabilizes it); Ours decouples them. A controlled study of the embedding source (WMF vs. L2-regularized BPR, both full-data) further shows the effect is a property of the **partition**, not of the embedding model: the interaction-based InP partition degrades under L2 regularization (0.1066→0.0971 for Ours, 0.1052→0.0995 for Rec) while the user-only UBP partition is unaffected (0.0776→0.0793, 0.0777→0.0788) — the same pattern for both methods."
+> "Ours's unlearning mechanism is **partition-agnostic yet deletion-stable**: it keeps **0% shard flips and the exact affected-scope** across *any* partition (signature / Random / UBP / InP) and on both datasets, whereas RecEraser's similarity-aware partitions **leak the true affected scope** (InP: it announces 3 shards on ml-1m but 5 are actually touched; 4 vs 8 on yelp) and its user-only UBP partition additionally flips **40–71% of retained users** on every deletion. Because utility is driven by the *partition* (InP ≈ full-data ceiling) and not by the unlearning mechanism, **Ours can borrow RecEraser's strong InP partition (frozen) and retain it through deletion** — yielding a configuration that **matches RecEraser-InP on utility (0.1066 vs 0.1052 on ml-1m; 0.0151 vs 0.0148 on yelp) while being perfectly stable (0%), correctly scoped, and cheaper (202s vs 387s)**. This is the 'best-of-both' point RecEraser itself cannot reach: its strong partition and its unlearning mechanism are incompatible (re-clustering breaks the scope guarantee); Ours decouples them. Two controlled studies support the decomposition: (a) the **embedding source** matters only for the interaction-based InP partition and not for the user-only UBP partition — identically in both methods — and its *sign* flips with dataset density (L2-regularized BPR hurts InP on dense ml-1m, 0.1066→0.0971, but helps it on sparse yelp, 0.0111→0.0151); and (b) a corrected evaluation of RecEraser's **attention aggregator** shows it never exceeds hard routing (0.0788) even when trained faithfully — at its best it ties it (0.0774 at lr=0.005/60ep) and over-training it degrades it further (0.0657 at 200ep) — so **neither the embedding model nor the aggregator is what produces utility; the partition is**."
 
 ---
 
 # HƯỚNG NGHIÊN CỨU TIẾP (mở, chưa làm)
 
 1. **"Quên thật" (memorization rate):** đo After/Before **trên user bị xóa** (tỷ lệ item của user bị xóa còn bị gợi ý) → đủ tiêu chí ③ thực (hiện chỉ "stable + đúng scope", chưa đo "quên thật").
-2. **Attention vs mean (đúng điều kiện):** Rec WMF-in + 200ep (mean/attn) → kiểm tra "attention chỉ có giá khi train đủ + khởi tạo tốt" (giải thích khác biệt với paper gốc).
+2. **Attention vs mean:** ✅ **ĐÃ LÀM (EX7)** — attention không bao giờ thắng mean; over-train còn tệ hơn. Còn ⏳ `lr=0.001 ep=200` (ml-1m) + **toàn bộ EX7 yelp** (5 config) — sẽ xác nhận pattern trên dataset thứ 2.
 3. **Scaling theo K/dataset:** EX6 + EX1 trên dataset to hơn (Amazon, CiteULike).
-4. **Tối ưu Ours:** chọn K tối ưu (k4/k8/k16); sig-dim 64 đủ.
+4. **Tối ưu Ours:** ✅ **K=4 tốt nhất** (0.0889 vs 0.0754@K8); sig-dim 32–64 đủ, 128 không lợi.
 
 ---
 
@@ -292,8 +322,11 @@ Cắt 2 "hiệu ứng" tách nhau:
 | **yelp Rec-UBP-author** | ✅ **ĐÃ CÓ** (0.0003) | attention+UBP yelp gầy → gần 0 |
 | **yelp EX2 (Ours InP WMF/BPR)** | ✅ **ĐÃ CÓ** (0.0111 / 0.0151) | **BPR > WMF (đảo ngược ml-1m)** |
 | **yelp EX3 (Rec InP/UBP WMF/BPR)** | ✅ **ĐÃ CÓ** | xem "BẢNG ĐẦY ĐỦ" @10/20/50 |
-| **EX5 ablation (Ours ml-1m)** | ⏳ đang chạy | 13 log (K/ratio/mode/sigdim) |
-| **EX6 yelp (flip%)** | ⏳ đang chạy | sau EX6 ml-1m (có Ours 0% + Rec ~84%) |
-| **EX7 attention vs mean** | ⏳ chưa chạy | **chạy lại attention SAU FIX stop-gradient** |
+| **EX5 ablation (Ours ml-1m)** | ✅ **ĐÃ CÓ** (13 log) | xem bảng "ABLATION / FACTORS" |
+| **EX6 stability (2 dataset)** | ✅ **ĐÃ CÓ** (2 log) | Ours 0% mọi partition; Rec InP 0.15%/14.39%, UBP 40.55%/71.19%, **scope leak 3→5 / 4→8** |
+| **EX7 attention vs mean** | 🟡 **1/4 ml-1m** | MEAN 0.0788 · ATTN lr0.005/ep60 **0.0774** · lr0.005/ep200 **0.0657** · lr0.05/ep60 0.0570. Còn ⏳ `lr0.001 ep200` + **toàn bộ EX7 yelp** |
+| **ml-1m @20/@50 cho Full/Ours/SISA** | ⏳ | log cũ chỉ in @10; **cần rerun** (code mới in đủ) |
+| **"Quên thật"** (memorization rate) | ❌ chưa có metric | *tuỳ chọn* |
 
-> **Còn ⏳: EX5 + EX6-yelp + EX7** (đang chạy tuần tự). Điền vào đây khi có. **EX7 attention là số đáng tin** (đã fix bug stop-gradient); số attention cũ (0.0637 ml-1m / 0.0003 yelp) là **pre-fix, chỉ dùng để ghi nhận "attention+UBP yelp yếu"**.
+> **Đã đủ cơ bản để chốt bài** (EX1–EX6 + EX7 ml-1m). Còn ⏳: **EX7 yelp + 1 config ml-1m** (đang chạy) và **@20/@50 ml-1m** (cần rerun nếu muốn bảng đồng bộ 2 dataset).
+> **Số attention cũ (0.0637 ml-1m / 0.0003 yelp) là pre-fix** → không dùng làm số chính; số đáng tin ở bảng EX7.

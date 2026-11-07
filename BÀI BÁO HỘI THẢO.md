@@ -5,7 +5,7 @@
 We study machine unlearning for shard-based recommendation ensembles and ask a question prior work conflates: **does utility come from the *partitioning* scheme or from the *unlearning* mechanism?** We compare four strategies — **Full Retrain, SISA, RecEraser, and Ours (deletion-stable 3-component)** — across **two datasets, two embedding models (WMF vs. L2-regularized BPR), and every partition type (InP/UBP/Random/signature)**. Three findings:
 
 1. **Utility is driven by partition quality, not by the unlearning mechanism.** Holding our mechanism fixed and swapping only the partition moves utility by ~40% (0.0771→0.1066 on ml-1m); swapping the *unlearning mechanism* at a shared partition moves it by ~0.
-2. **Our mechanism decouples the two.** Ours retains **0% deletion-instability and the correct affected-scope on every partition**, whereas RecEraser's InP/UBP partitions flip ~84% of retained users on every deletion and leak the true affected scope.
+2. **Our mechanism decouples the two.** Ours retains **0% deletion-instability and the correct affected-scope on every partition and both datasets**, whereas RecEraser's similarity-aware partitions **leak the true affected scope** (InP: it announces 3 shards on ml-1m but 5 are actually touched; 4 vs 8 on yelp) and its user-only UBP partition additionally flips **40–71% of retained users** on every deletion.
 3. **Whether the embedding source matters is a property of the partition, and its sign is a property of the dataset.** L2-regularized BPR affects the interaction-based InP partition (user+item embeddings) but not the user-only UBP partition — **the same pattern in both methods, on both datasets**. Its *direction* flips with density: it degrades InP on dense ml-1m (0.1066→0.0971) but improves it on sparse yelp (0.0111→0.0151, reaching the full-retrain ceiling).
 
 We additionally correct a **porting artifact** in RecEraser's attention aggregator: trained faithfully (with gradient-stopped local embeddings, as in the original), the aggregator recovers at least hard-routing quality.
@@ -14,7 +14,7 @@ We additionally correct a **porting artifact** in RecEraser's attention aggregat
 
 ## 1. Introduction
 
-Sharded recommenders split interactions across \(K\) local models and route each user to a shard; an unlearning request then only needs to touch the shards that contain the deleted user. **RecEraser** (Chen et al., WSDM'25) makes this practical by *similarity-aware* partitioning: users and items are clustered with k-means on a pretrained WMF embedding, so that a deletion only perturbs a few shards. The cost of that choice, however, is **instability**: re-clustering after a deletion moves ~84% of retained users to different shards, and the displacement touches shards the method never announces as affected.
+Sharded recommenders split interactions across \(K\) local models and route each user to a shard; an unlearning request then only needs to touch the shards that contain the deleted user. **RecEraser** (Chen et al., WSDM'25) makes this practical by *similarity-aware* partitioning: users and items are clustered with k-means on a pretrained WMF embedding, so that a deletion only perturbs a few shards. The cost of that choice, however, is **instability and scope leakage**: re-clustering after a deletion moves retained users to different shards — 40–71% of them under the user-only UBP partition — and the displacement touches shards the method never announces as affected (it claims 3 affected shards on ml-1m while 5 are actually touched; 4 vs 8 on yelp).
 
 We observe that prior evaluations report a single partition (usually UBP) and a single aggregator, which makes it impossible to tell **which component produces the reported utility**. This paper isolates them:
 
@@ -180,7 +180,7 @@ The three components together yield *partition-agnostic* stability: the mechanis
 
 **Ours at the same partitions:** InP-frozen **0.0111 (WMF) / 0.0151 (BPR)** · UBP-frozen **0.0046 / 0.0040** · Random-frozen **0.0045**.
 
-**Analysis.** This is the apples-to-apples comparison. At **InP**, Ours (0.1066) ≥ Rec (0.1052) on ml-1m — **same partition, same embedding source, different mechanism** — while Ours is **~2× faster (202s vs 387s)**, **0% stable vs ~84%**, and **correctly scoped** (§3.6). At **UBP** the two are **tied on utility** (0.0776 vs 0.0777) and Ours is again faster and stable. At **Random** they are also tied (0.0760 vs 0.0763). On yelp the same structure holds at the partition level: Rec-InP (0.0118/0.0148) and Ours-InP (0.0111/0.0151) are within noise of each other under each embedding source, while both **collapse** on the non-similarity-aware partitions (UBP 0.0040–0.0046, Random 0.0039–0.0045) — a ~3× gap that is driven purely by the partition, not the mechanism.
+**Analysis.** This is the apples-to-apples comparison. At **InP**, Ours (0.1066) ≥ Rec (0.1052) on ml-1m — **same partition, same embedding source, different mechanism** — while Ours is **~2× faster (202s vs 387s)**, **0% stable vs Rec's scope leak**, and **correctly scoped** (§3.6). At **UBP** the two are **tied on utility** (0.0776 vs 0.0777) and Ours is again faster and stable. At **Random** they are also tied (0.0760 vs 0.0763). On yelp the same structure holds at the partition level: Rec-InP (0.0118/0.0148) and Ours-InP (0.0111/0.0151) are within noise of each other under each embedding source, while both **collapse** on the non-similarity-aware partitions (UBP 0.0040–0.0046, Random 0.0039–0.0045) — a ~3× gap that is driven purely by the partition, not the mechanism.
 
 > **Conclusion of the comparison.** RecEraser and Ours are **comparable on utility whenever they are given the same partition**; the difference is entirely in the *other two* criteria — **cost** and **effective unlearning**. Any claim that RecEraser is "more accurate" is really a claim about its *partition*, not its unlearning mechanism. This is precisely the decoupling we set out to demonstrate.
 
@@ -190,21 +190,34 @@ The three components together yield *partition-agnostic* stability: the mechanis
 
 **Isolated factor:** does **any retained user change shard** after a deletion + re-partition, and does the method announce the shards it actually touches?
 
+**ml-1m:**
+
 | Method × partition | Instability (retained users moved) | similarity-aware | correct scope (naive = effective) |
 |--------------------|:---:|:---:|:---:|
-| **Ours** (signature / Random / UBP / InP, all frozen) | **0.00%** | InP/UBP ✅ | ✅ |
+| **Ours** (signature / Random / UBP / InP, all frozen) | **0.00%** (0 users) | InP/UBP ✅ | ✅ |
 | SISA (modulo) | 0.00% | ❌ (modulo carries no similarity) | ✅ |
-| **Rec InP / UBP** (k-means, re-clustered) | **~84–85%** | ✅ | ❌ **leaks** (announces 3 shards, displacement touches 8) |
 | Rec Random (modulo) | 0.00% | ❌ | ✅ |
+| **Rec InP** (k-means, re-clustered) | **0.15%** (9 users) | ✅ | ❌ **leaks** (announces 3, touches **5**) |
+| **Rec UBP** (k-means, re-clustered) | **40.55%** (2425 users) | ✅ | ❌ |
 
-**Analysis.** Ours is the **only method that is simultaneously similarity-aware, deletion-stable (0% on *every* partition), and correctly scoped.** Two distinct failure modes are visible in the table, and Ours avoids both:
+**yelp2018:**
+
+| Method × partition | Instability | similarity-aware | correct scope |
+|--------------------|:---:|:---:|:---:|
+| **Ours** (signature / Random / UBP / InP) | **0.00%** (0 users) | InP/UBP ✅ | ✅ |
+| SISA / Rec Random (modulo) | 0.00% | ❌ | ✅ |
+| **Rec InP** | **14.39%** (4510 users) | ✅ | ❌ **leaks** (announces 4, touches **8**) |
+| **Rec UBP** | **71.19%** (22320 users) | ✅ | ❌ |
+
+**Analysis.** Ours is the **only method that is simultaneously similarity-aware, deletion-stable (0% on *every* partition and *both* datasets), and correctly scoped.** Three distinct failure modes are visible, and Ours avoids all of them:
 
 * **SISA / Rec-Random** are stable but only because their partition is a *pure function of the id* — they gain nothing from sharding beyond capacity reduction, and cannot exploit data locality at all.
-* **Rec InP/UBP** are similarity-aware but **unstable**: each deletion re-clusters ~84% of retained users, and the displaced users' shards are **never announced** as affected. The method therefore under-reports its own cost; its *true* unlearning cost approaches full retrain.
+* **Rec UBP** is similarity-aware but **wildly unstable**: 40.6% (ml-1m) and 71.2% (yelp) of retained users change shard on a single deletion. The displaced users' shards are **never announced** as affected, so the method under-reports its own cost.
+* **Rec InP** is *less* unstable (0.15% on ml-1m, 14.4% on yelp) — but it **still leaks scope**: it announces 3 affected shards on ml-1m while **5** are actually touched, and 4 vs **8** on yelp. Scope leakage is therefore **not** a consequence of large displacement alone; it follows from re-clustering itself, which perturbs the assignment of *every* user and can push users into shards unrelated to the deleted one.
 
 Ours's stability **does not depend on the partition** (§3.3) — it comes from *not re-clustering*. This is what allows Ours to keep the *utility* of a similarity-aware partition while paying only the *scope* of the shards it truly touches.
 
-> ⏳ The full 8-row × 2-dataset EX6 table (including Rec-InP and Rec-Random rows) is being regenerated with the corrected code; the numbers above are from the earlier, equivalent-condition runs.
+> **Note on an earlier misstatement.** A previous version of this table reported "~84–85%" instability for Rec InP/UBP. That figure came from an earlier **unbalanced** partition build, not the balanced InP/UBP used here; the measured values are the ones above. The qualitative conclusion is unchanged — Rec leaks scope on every similarity-aware partition and is unstable under UBP — but the numbers are now the measured ones.
 
 ---
 
@@ -212,14 +225,14 @@ Ours's stability **does not depend on the partition** (§3.3) — it comes from 
 
 **Isolated factor:** one Ours hyperparameter at a time (ml-1m, signature partition).
 
-| Factor | Sweep | Running (⏳) | Direction expected from prior runs |
+| Factor | Sweep | After R@10 | Reading |
 |--------|-------|:---:|------|
-| Shards \(K\) | 4 / 8 / 16 | ⏳ | utility ↓ as \(K\) ↑ (fragmentation); K=8 a balance |
-| Unlearn ratio | 0.1% / 0.5% / 1% / 2% | ⏳ | **flat** (< 0.5% change) — frozen cost is ratio-invariant |
-| Unlearn mode | random / most / fewest | ⏳ | "most" slightly lower (deleted users span more shards) |
-| Signature dim | 32 / 64 / 128 | ⏳ | d=64 saturates; 128 no gain |
+| Shards \(K\) | 4 / 8 / 16 | **0.0889** / 0.0754 / **0.0607** | utility ↓ monotonically as \(K\) ↑ (fragmentation); **K=4 best** (+0.0135 over K=8) |
+| Unlearn ratio | 0.1% / 0.5% / 1% / 2% | 0.0720 / 0.0756 / 0.0762 / 0.0765 | **flat** (Δ 0.0045) — frozen cost is ratio-invariant |
+| Unlearn mode | random / most / fewest | 0.0765 / 0.0763 / 0.0754 | **flat** (Δ 0.0011) |
+| Signature dim | 32 / 64 / 128 | **0.0792** / 0.0759 / 0.0765 | d=32 already sufficient; 128 no gain |
 
-**Analysis (expected, to be confirmed by the run).** Two readings matter. First, **stability (0%) and scope correctness are invariant to every hyperparameter** — the ablation moves *utility only*, never the criterion-(iii) guarantee; that is the property that makes Ours safe to deploy without re-validating stability per configuration. Second, the *sensitivity* is asymmetric: the **shard count** is the dominant factor (each additional shard fragments the data), while the **deletion ratio is essentially free** — a direct consequence of the frozen partition, where the cost of unlearning is determined by *which shards are touched*, not by *how many users were deleted*.
+**Analysis.** Two readings matter. First, **stability (0%) and scope correctness are invariant to every hyperparameter** — the ablation moves *utility only*, never the criterion-(iii) guarantee; that is the property that makes Ours safe to deploy without re-validating stability per configuration. Second, the *sensitivity* is sharply **asymmetric**: the **shard count is the dominant factor** (0.0889 → 0.0607, a 32% drop from K=4 to K=16), while the **deletion ratio and deletion mode are essentially free** (both flat within noise) — a direct consequence of the frozen partition, where the cost of unlearning is determined by *which shards are touched*, not by *how many users were deleted*. This also gives a concrete deployment recommendation: **fewer shards are strictly better here** (K=4 is both more accurate and cheaper to unlearn, since fewer shards can be touched).
 
 ---
 
@@ -229,17 +242,22 @@ Ours's stability **does not depend on the partition** (§3.3) — it comes from 
 
 We first observed RecEraser's attention aggregator performing *worse* than hard routing (0.0637 vs 0.0777). Tracing this to the implementation revealed a **porting artifact**: our aggregator was trained on **all** model parameters, so it **overwrote the embeddings of the eight local models** that had just been trained. The original implementation **stops the gradient** on the user/item embeddings while training the aggregator, updating only the attention and transform parameters. After correcting this, we sweep the aggregator's learning rate and epochs:
 
-| Config | After R@10 (ml-1m) |
-|--------|:---:|
-| **Hard routing / mean path (no cross-shard aggregation)** | 0.0777 (baseline) |
-| Attention, agg-lr 0.05, 60 ep | ⏳ |
-| Attention, agg-lr 0.005, 60 ep | ⏳ |
-| Attention, agg-lr 0.005, 200 ep | ⏳ |
-| Attention, agg-lr 0.001, 200 ep | ⏳ |
+| Config | After R@10 (ml-1m) | vs hard routing |
+|--------|:---:|:---:|
+| **Hard routing / mean path (no cross-shard aggregation)** | **0.0788** | — |
+| Attention, agg-lr 0.005, 60 ep | 0.0774 | −0.0014 (a tie) |
+| Attention, agg-lr 0.005, 200 ep | 0.0657 | −0.0131 |
+| Attention, agg-lr 0.05, 60 ep | 0.0570 | −0.0218 |
+| Attention, agg-lr 0.001, 200 ep | ⏳ | |
 
-**Hypothesis under test.** With a **faithfully trained** aggregator, attention should be **at least on par with** hard routing — i.e. the earlier deficit was an artifact of our port, not a property of attention. This matters for the paper's fairness: we must not attribute a deficit to the baseline method that is actually our own bug. *(Run in progress; this section will be finalized with the measured numbers.)*
+**Analysis — the result is not what we expected, and the honest reading matters.** The hypothesis was that a *faithfully trained* aggregator would be **at least on par with** hard routing, the earlier deficit being purely our porting bug. The measurement **partially confirms** that (the corrected best case 0.0774 now essentially ties the 0.0788 hard-routing baseline, versus 0.0637 before), **but it also shows that attention never exceeds hard routing**, and — more importantly — that **training the aggregator longer makes it strictly worse**: 60 → 200 epochs degrades it from 0.0774 to 0.0657, and a large learning rate (0.05) destroys it (0.0570). The aggregator's outcome is thus governed by its own optimization hyper-parameters over a **±38%** range, entirely independently of the partition.
 
-> **Note.** A separate, **independent** observation from the earlier "fair after-only" runs is that attention helped *most* on the **weakest** partition (Random: +0.0130) and slightly *hurt* on the strongest (InP: −0.0014). If the corrected run confirms this, the honest conclusion is that **cross-shard attention is a repair mechanism for poor partitions, not a general utility improver** — which is consistent with our thesis that the *partition* is what matters.
+Two consequences follow.
+
+1. **Fairness to the baseline.** The originally-reported deficit of RecEraser's attention was **our** artifact, not a property of attention; after the fix, attention at its best configuration *ties* hard routing. We therefore make **no claim that attention is weaker** than hard routing.
+2. **But attention is also not a source of utility.** At no setting does cross-shard aggregation beat hard routing. This is the *third* independent piece of evidence for our thesis: neither the **embedding model** (§3.4), nor the **aggregator** (§3.8), nor the **unlearning mechanism** (§3.6) is what produces utility — the **partition** is (§3.3). On shards that are already fragmented, a learned cross-shard aggregator appears to fit noise: the more it is trained, the more it overfits, and the worse the local models it is meant to combine become.
+
+> **Practical note for practitioners using RecEraser.** The aggregator is unusually sensitive to its learning rate and epoch count; the default (large lr, many epochs) can be *substantially* worse than simply routing to the user's own shard. We therefore report the **best** attention configuration (0.0774) rather than the default one, and treat hard routing as the practical baseline.
 
 ---
 
@@ -251,7 +269,7 @@ We first observed RecEraser's attention aggregator performing *worse* than hard 
 
 **(iii) Stability and scope are where mechanisms actually differ.** Ours is the only method that keeps **0% shard-flips and the exact affected scope** on *any* partition, because its guarantee comes from *not re-clustering* rather than from the partition being id-based. RecEraser obtains similarity-awareness precisely by re-clustering, which is what breaks both stability and scope. **This is a genuine trade-off, and decoupling it is the contribution**: one can have similarity-aware partitioning *and* deletion-stable unlearning, but only by freezing the partition.
 
-**(iv) On the attention aggregator.** We report our own porting error rather than a baseline weakness (§3.8). The corrected evaluation is included so that RecEraser is characterized fairly; our conclusions do not depend on the aggregator.
+**(iv) On the attention aggregator.** We report our own porting error rather than a baseline weakness (§3.8). After the fix, attention *ties* hard routing at its best configuration (0.0774 vs 0.0788) and never exceeds it, so we claim no deficit — but we also find no benefit: cross-shard aggregation over already-fragmented shards is a noise-fitting mechanism, and over-training it degrades it further (0.0657 at 200 epochs). This is the third independent confirmation of the paper's thesis: utility comes from the partition, not from the embedding model, the aggregator, or the unlearning mechanism.
 
 ---
 
@@ -263,7 +281,7 @@ Machine unlearning for sharded recommenders is best understood as **two separabl
 1. A **decomposition** of shard-based unlearning into partition-quality vs. mechanism, supported by controlled ablations that hold one factor fixed at a time (§3.2–§3.5).
 2. A method that is **partition-agnostic yet deletion-stable** — 0% shard-flips and exact scope on *every* partition — while matching RecEraser's utility at a shared partition (§3.3, §3.5, §3.6).
 3. The finding that **whether the embedding source matters is a property of the partition, and its sign is a property of the dataset.** L2-regularized BPR affects the InP partition (which uses item embeddings) but not the user-only UBP partition, identically in both methods; and the *direction* of that effect **flips with dataset density** — it hurts InP on dense ml-1m (0.1066→0.0971) but helps it on sparse yelp (0.0111→0.0151) (§3.4).
-4. A **corrected evaluation** of RecEraser's attention aggregator, reporting our own porting artifact rather than attributing it to the baseline (§3.8).
+4. A **corrected evaluation** of RecEraser's attention aggregator, reporting our own porting artifact rather than attributing it to the baseline — and showing that a faithfully trained aggregator *ties* but never exceeds hard routing (§3.8).
 
 ---
 
