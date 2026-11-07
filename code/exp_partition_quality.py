@@ -152,6 +152,57 @@ def partition_proposed(train_items, n_users, n_items, n_shards, sig_dim, seed):
     return assigner.assign_users(sigs)
 
 
+def partition_proposed_balanced(train_items, n_users, n_items, n_shards, sig_dim, seed):
+    """PROPOSED but LOAD-BALANCED: same LSH cells (so similar users still
+    co-locate), only the cell->shard mapping is rebalanced by interaction load.
+
+    Motivation (measured on ml-1m, K=8): the default mapping in
+    DeletionStableAssignment balances the NUMBER OF CELLS per shard, not the
+    number of interactions, so shard loads came out very uneven
+    (interaction CV 0.668, max/mean 2.39) against 0.047 / 1.06 for a modulo
+    partition. With hard routing, the lean shards drag the average utility
+    down. This arm isolates that: if it beats a random partition, the
+    similarity-aware routing does carry utility and the imbalance was the
+    confound; if it ties random, similarity in user space does not help here.
+    """
+    builder = UserSignatureBuilder(n_users, n_items, d=sig_dim, seed=seed)
+    sigs = builder.build_signature(train_items)
+    assigner = DeletionStableAssignment(n_shards=n_shards, d=sig_dim, seed=seed)
+
+    # Use MORE hash cells than shards so the cell->shard mapping has freedom
+    # to balance load. With B == K the default mapping gives each shard exactly
+    # one cell, and no rebalancing is possible (measured: same CV as PROPOSED).
+    extra_bits = max(1, int(np.ceil(np.log2(n_shards))))
+    b = assigner.b + extra_bits
+    hp = np.random.RandomState(seed).randn(b, sig_dim)
+
+    h_bits = (sigs @ hp.T) >= 0
+    h_codes = np.zeros(n_users, dtype=np.int32)
+    for t in range(b):
+        h_codes += h_bits[:, t].astype(np.int32) * (2 ** (b - 1 - t))
+    B = 2 ** b
+
+    # interaction load per cell
+    cell_load = np.zeros(B, dtype=np.float64)
+    for u, items in train_items.items():
+        cell_load[h_codes[u]] += len(items)
+
+    # greedy: repeatedly give the heaviest cell to the currently lightest shard
+    order = np.argsort(-cell_load)
+    cell_to_shard = np.zeros(B, dtype=np.int32)
+    shard_load = np.zeros(n_shards, dtype=np.float64)
+    for c in order:
+        s = int(np.argmin(shard_load))
+        cell_to_shard[c] = s
+        shard_load[s] += cell_load[c]
+
+    umap = cell_to_shard[h_codes]
+    counts = np.bincount(umap, minlength=n_shards)
+    print(f"    [PROPOSED_BAL] b={b} bits, {B} cells -> {n_shards} shards, "
+          f"users min={counts.min()} max={counts.max()} mean={counts.mean():.1f}")
+    return umap
+
+
 # ----------------------------------------------------------------------------
 # partition-quality metrics
 # ----------------------------------------------------------------------------
@@ -249,13 +300,17 @@ def run_sharded_arm(train_items, test_data, n_users, n_items, n_shards,
     train_time = time.time() - t0
 
     # ---- unlearn: remove deleted users, retrain ONLY affected shards ----
+    # NOTE: matches the original method_4_ours.unlearn(): the shard model is
+    # RETRAINED FROM ITS CURRENT WEIGHTS (not reset), as in the original paper
+    # ("retrain only Mj from scratch using Sj-"). Creating a fresh model here
+    # would change the measured utility relative to the earlier logs.
     affected = sorted({int(user_to_shard[u]) for u in del_users if u < len(user_to_shard)})
     retained = {u: it for u, it in train_items.items() if u not in del_users}
     retained_shard_data = build_shard_data(retained, user_to_shard, n_shards)
 
     t0 = time.time()
     for sid in affected:
-        model = shard_models.create_model(sid, device)
+        model = shard_models.get_model(sid)
         train_shard_model(model, retained_shard_data[sid], n_items, device,
                           batch_size=batch_size, lr=lr, n_epochs=retrain_epochs)
     unlearn_time = time.time() - t0
@@ -344,10 +399,20 @@ def main():
     ap.add_argument('--unlearn_ratio', type=float, default=0.01)
     ap.add_argument('--unlearn_mode', default='most')
     ap.add_argument('--seeds', default='0,1,2,3,4')
-    ap.add_argument('--arms', default='PROPOSED,RANDOM_PERM,RANDOM_MODULO,SISA,GLOBAL')
+    ap.add_argument('--arms', default='PROPOSED,PROPOSED_BAL,RANDOM_PERM,RANDOM_MODULO,SISA,GLOBAL')
     ap.add_argument('--data_root', default=None)
     ap.add_argument('--out_dir', default=None)
     ap.add_argument('--tag', default='')
+    ap.add_argument('--legacy_seed', type=int, default=42,
+                    help='Seed used INSIDE the partition builders (signature matrix R and '
+                         'LSH hyperplanes). The original runs hard-code 42; keep it to stay '
+                         'comparable with the existing logs.')
+    ap.add_argument('--legacy_mode', action='store_true',
+                    help='Pick the deletion set exactly like the original method_4_ours.py: '
+                         'sort by interaction count and take the top n (mode=most/fewest), '
+                         'ignoring the run seed. Use this to reproduce an existing log '
+                         'exactly; otherwise the deletion set varies per seed as the '
+                         'experiment spec requires.')
     args = ap.parse_args()
 
     data_root = args.data_root or os.path.join(os.path.dirname(PROJ), 'data')
@@ -380,7 +445,13 @@ def main():
         fh.flush()
 
     for seed in seeds:
-        del_users = pick_deletion_users(train_items, args.unlearn_ratio, args.unlearn_mode, seed)
+        if args.legacy_mode:
+            # exactly reproduce the original method_4_ours.py deletion set
+            ui = sorted(train_items.items(), key=lambda kv: len(kv[1]), reverse=True)
+            del_users = {u for u, _ in ui[:int(len(train_items) * args.unlearn_ratio)]}
+        else:
+            del_users = pick_deletion_users(train_items, args.unlearn_ratio,
+                                            args.unlearn_mode, seed)
         print(f"\n{'='*70}\nSEED {seed} | deleted {len(del_users)} users "
               f"({args.unlearn_ratio*100:.1f}%, {args.unlearn_mode})\n{'='*70}")
 
@@ -406,9 +477,18 @@ def main():
                 })
             else:
                 if arm == 'PROPOSED':
+                    # legacy_seed keeps the signature matrix R and the LSH
+                    # hyperplanes identical to the earlier runs (seed 42),
+                    # so PROPOSED is directly comparable with the old logs.
                     umap = partition_proposed(train_items, n_users, n_items,
-                                              args.n_shards, args.sig_dim, seed)
+                                              args.n_shards, args.sig_dim,
+                                              args.legacy_seed)
                     pname = 'signature_lsh'
+                elif arm == 'PROPOSED_BAL':
+                    umap = partition_proposed_balanced(
+                        train_items, n_users, n_items, args.n_shards,
+                        args.sig_dim, args.legacy_seed)
+                    pname = 'signature_lsh_balanced'
                 elif arm == 'RANDOM_PERM':
                     umap = partition_random_perm(n_users, args.n_shards, seed)
                     pname = 'random_perm'
@@ -429,7 +509,7 @@ def main():
                 # partition-quality metrics need the user embeddings.
                 # Each shard model owns a FULL n_users x emb_dim table (only its own
                 # users' rows were trained), so index by the real user ids.
-                uemb = torch.zeros(n_users, args.emb_dim)
+                uemb = np.zeros((n_users, args.emb_dim), dtype=np.float32)
                 for sid in range(args.n_shards):
                     m = shard_models.get_model(sid)
                     if m is None:
