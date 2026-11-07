@@ -42,6 +42,14 @@ import torch
 PROJ = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, PROJ)
 
+from partition_variants import (
+    build_signature as pv_build_signature,
+    route_hyperplane,
+    route_minhash,
+    random_perm as pv_random_perm,
+    random_perm_balanced,
+    random_modulo as pv_random_modulo,
+)
 from method_4_ours import (
     UserSignatureBuilder,
     DeletionStableAssignment,
@@ -144,12 +152,26 @@ def partition_random_modulo(n_users, n_shards, seed):
     return (np.arange(n_users) % n_shards).astype(np.int32)
 
 
-def partition_proposed(train_items, n_users, n_items, n_shards, sig_dim, seed):
-    """Ours: user-local signature + deletion-stable similarity-aware routing."""
-    builder = UserSignatureBuilder(n_users, n_items, d=sig_dim, seed=seed)
-    sigs = builder.build_signature(train_items)
-    assigner = DeletionStableAssignment(n_shards=n_shards, d=sig_dim, seed=seed)
-    return assigner.assign_users(sigs)
+def partition_proposed(train_items, n_users, n_items, n_shards, sig_dim, seed,
+                       router='hyperplane', sig_weighting='binary'):
+    """Ours: user-local signature + deletion-stable similarity-aware routing.
+
+    router:
+      'hyperplane'  cosine LSH via random hyperplanes (shipped Ours Component II)
+      'minhash'     MinHash/LSH banding - Jaccard-style, better suited to the
+                    binary user-item vectors that Ours builds (spec ablation 8)
+    sig_weighting:
+      'binary'      phi(y)=1  (shipped)
+      'log_count'   phi(y)=1+log(count) - magnitude-aware preference profile
+                   (spec ablation 8)
+    """
+    sigs = pv_build_signature(train_items, n_users, n_items, d=sig_dim,
+                              seed=seed, weighting=sig_weighting, verbose=True)
+    if router == 'minhash':
+        return route_minhash(train_items, n_users, n_items, n_shards,
+                             num_perm=64, bands=8, seed=seed,
+                             weighting=sig_weighting)
+    return route_hyperplane(sigs, n_shards, seed=seed)
 
 
 def partition_proposed_balanced(train_items, n_users, n_items, n_shards, sig_dim, seed):
@@ -413,6 +435,13 @@ def main():
                          'ignoring the run seed. Use this to reproduce an existing log '
                          'exactly; otherwise the deletion set varies per seed as the '
                          'experiment spec requires.')
+    ap.add_argument('--router', default='hyperplane',
+                    choices=['hyperplane', 'minhash'],
+                    help='LSH router for the PROPOSED partition (spec ablation 8). '
+                         'hyperplane = shipped cosine LSH; minhash = Jaccard-style.')
+    ap.add_argument('--sig_weighting', default='binary',
+                    choices=['binary', 'log_count'],
+                    help='User profile weighting for the signature (spec ablation 8).')
     args = ap.parse_args()
 
     data_root = args.data_root or os.path.join(os.path.dirname(PROJ), 'data')
@@ -438,6 +467,15 @@ def main():
                                             args.unlearn_mode, seed)
         print(f"\n{'='*70}\nSEED {seed} | deleted {len(del_users)} users "
               f"({args.unlearn_ratio*100:.1f}%, {args.unlearn_mode})\n{'='*70}")
+
+        # Build the signature ONCE per seed, shared by every arm. The
+        # partition-quality metrics (intra-similarity, neighbour retention)
+        # are measured on this ORIGINAL signature - not on the post-train
+        # embeddings, which carry no useful user similarity yet at few
+        # epochs (NR@q would read ~1.0 for every arm and tell us nothing).
+        sigs_for_metrics = pv_build_signature(
+            train_items, n_users, n_items, d=args.sig_dim,
+            seed=args.legacy_seed, weighting=args.sig_weighting, verbose=False)
 
         for arm in arms:
             print(f"\n--- ARM {arm} (seed {seed}) ---")
@@ -466,21 +504,36 @@ def main():
                     # so PROPOSED is directly comparable with the old logs.
                     umap = partition_proposed(train_items, n_users, n_items,
                                               args.n_shards, args.sig_dim,
-                                              args.legacy_seed)
-                    pname = 'signature_lsh'
+                                              args.legacy_seed,
+                                              router=args.router,
+                                              sig_weighting=args.sig_weighting)
+                    pname = f'signature_{args.router}_{args.sig_weighting}'
+                elif arm == 'PROPOSED_MINHASH':
+                    umap = partition_proposed(train_items, n_users, n_items,
+                                              args.n_shards, args.sig_dim,
+                                              args.legacy_seed,
+                                              router='minhash',
+                                              sig_weighting=args.sig_weighting)
+                    pname = f'signature_minhash_{args.sig_weighting}'
                 elif arm == 'PROPOSED_BAL':
                     umap = partition_proposed_balanced(
                         train_items, n_users, n_items, args.n_shards,
                         args.sig_dim, args.legacy_seed)
                     pname = 'signature_lsh_balanced'
                 elif arm == 'RANDOM_PERM':
-                    umap = partition_random_perm(n_users, args.n_shards, seed)
+                    umap = pv_random_perm(n_users, args.n_shards, seed)
                     pname = 'random_perm'
+                elif arm == 'RANDOM_BAL':
+                    # random, greedy-balanced by interaction load: the control
+                    # that removes the "one large shard ~= global model" confound
+                    umap = random_perm_balanced(train_items, n_users,
+                                                args.n_shards, seed)
+                    pname = 'random_balanced'
                 elif arm == 'RANDOM_MODULO':
-                    umap = partition_random_modulo(n_users, args.n_shards, seed)
+                    umap = pv_random_modulo(n_users, args.n_shards, seed)
                     pname = 'random_modulo'
                 elif arm == 'SISA':
-                    umap = partition_random_modulo(n_users, args.n_shards, seed)
+                    umap = pv_random_modulo(n_users, args.n_shards, seed)
                     pname = 'sisa_modulo'
                 else:
                     raise ValueError(f'unknown arm {arm}')
@@ -490,22 +543,18 @@ def main():
                     args.emb_dim, umap, del_users, args.epochs, args.lr,
                     args.batch_size, device, seed, args.retrain_epochs)
 
-                # partition-quality metrics need the user embeddings.
-                # Each shard model owns a FULL n_users x emb_dim table (only its own
-                # users' rows were trained), so index by the real user ids.
-                uemb = np.zeros((n_users, args.emb_dim), dtype=np.float32)
-                for sid in range(args.n_shards):
-                    m = shard_models.get_model(sid)
-                    if m is None:
-                        continue
-                    idx = np.where(umap == sid)[0]
-                    if len(idx):
-                        uemb[idx] = (m.user_embedding.weight
-                                     .detach().cpu().numpy()[idx])
-                isim = intra_similarity(uemb, umap, args.n_shards, seed=seed)
-                nr10 = neighbour_retention(uemb, umap, q=10, seed=seed)
-                nr20 = neighbour_retention(uemb, umap, q=20, seed=seed)
-                nr50 = neighbour_retention(uemb, umap, q=50, seed=seed)
+                # Partition-quality metrics are measured on the ORIGINAL
+                # signature (built once per seed above), not on post-train
+                # embeddings: the latter carry no useful user similarity at a
+                # few epochs, so NR@q reads ~1.0 for every arm and proves nothing
+                # about the partition. The signature is the quantity the
+                # partition was actually designed to co-locate, so it is the
+                # honest measure of co-location quality (spec section 6).
+                isim = intra_similarity(sigs_for_metrics, umap,
+                                        args.n_shards, seed=seed)
+                nr10 = neighbour_retention(sigs_for_metrics, umap, q=10, seed=seed)
+                nr20 = neighbour_retention(sigs_for_metrics, umap, q=20, seed=seed)
+                nr50 = neighbour_retention(sigs_for_metrics, umap, q=50, seed=seed)
                 ucv, icv, mmr = load_balance(umap, train_items, args.n_shards)
 
                 row.update({
