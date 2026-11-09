@@ -396,10 +396,20 @@ def run_full_retrain_v2(dataset='ml-1m', emb_dim=64, max_epochs=100,
 
     if unlearn_mode == 'single' and unlearn_user_id is not None:
         unlearn_users = {unlearn_user_id}
+    elif unlearn_mode == 'fewest':
+        # it interaction nhat - giong y nghia cua method_2/3/4
+        user_interactions = [(u, len(items)) for u, items in train_data.items()]
+        user_interactions.sort(key=lambda kv: kv[1])
+        unlearn_users = set([u for u, _ in user_interactions[:n_unlearn]])
+    elif unlearn_mode == 'most':
+        # nhieu interaction nhat - giong y nghia cua method_2/3/4
+        user_interactions = [(u, len(items)) for u, items in train_data.items()]
+        user_interactions.sort(key=lambda kv: kv[1], reverse=True)
+        unlearn_users = set([u for u, _ in user_interactions[:n_unlearn]])
     else:
         unlearn_users = set(random.sample(all_users, n_unlearn))
 
-    print(f"\nUnlearn: {len(unlearn_users)} users ({unlearn_ratio*100}%)")
+    print(f"\nUnlearn: {len(unlearn_users)} users ({unlearn_ratio*100}%, mode={unlearn_mode})")
 
     # Train BEFORE
     print(f"\n{'='*70}")
@@ -500,7 +510,8 @@ if __name__ == '__main__':
     parser.add_argument('--emb_dim', type=int, default=64)
     parser.add_argument('--max_epochs', type=int, default=100)
     parser.add_argument('--unlearn_ratio', type=float, default=0.1)
-    parser.add_argument('--unlearn_mode', type=str, default='random')
+    parser.add_argument('--unlearn_mode', type=str, default='random',
+                       choices=['random', 'fewest', 'most', 'single'])
     parser.add_argument('--unlearn_user_id', type=int, default=None)
     parser.add_argument('--seed', type=int, default=42, help='model-init / random-deletion seed')
     parser.add_argument('--output_suffix', type=str, default='')
