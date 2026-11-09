@@ -15,9 +15,18 @@ Design (paired runs - the only valid way to compare two partitions):
 
 Arms
   PROPOSED       Ours signature + deletion-stable similarity-aware routing (LSH)
+  PROPOSED_BAL   same, but the cell->shard mapping is load-balanced by
+                 interaction count (removes the "one huge shard" confound)
+  RANDOM_EMB    random user embedding routed through the SAME LSH router -
+                 the control that isolates the value of the signature itself
   RANDOM_PERM    random permutation of user ids -> K shards   (primary baseline)
+  RANDOM_BAL     random permutation, greedy-balanced by interaction load
+                 (the load-matched control)
   RANDOM_MODULO  user_id % K                                   (sanity check)
   SISA           user_id % K, frozen mapping (simple deletion-stable baseline)
+  INP / UBP      embedding-based (k-means over WMF) partition, frozen -
+                 UPPER REFERENCE for partition quality, not part of the
+                 PROPOSED-vs-RANDOM claim
   GLOBAL         one BPRMF trained on all retained data         (utility/cost reference)
 
 Partition-quality metrics (explain WHY utility differs)
@@ -44,6 +53,7 @@ sys.path.insert(0, PROJ)
 
 from partition_variants import (
     build_signature as pv_build_signature,
+    random_embedding as pv_random_embedding,
     route_hyperplane,
     route_minhash,
     random_perm as pv_random_perm,
@@ -174,6 +184,24 @@ def partition_proposed(train_items, n_users, n_items, n_shards, sig_dim, seed,
     return route_hyperplane(sigs, n_shards, seed=seed)
 
 
+def partition_random_embedding(train_items, n_users, n_items, n_shards,
+                                sig_dim, seed, router='hyperplane'):
+    """RANDOM_EMB control: random user embedding, SAME LSH router as Ours.
+
+    Only the source of the user representation differs from Ours-signature:
+    z_u ~ N(0,I) instead of z_u = R*x_u/||R*x_u||. Everything downstream
+    (hyperplane LSH, balanced cell map, isolated shard training, hard routing)
+    is identical, so a difference in utility is attributable to the signature
+    carrying user information (or not).
+    """
+    sigs = pv_random_embedding(n_users, d=sig_dim, seed=seed)
+    if router == 'minhash':
+        return route_minhash(train_items, n_users, n_items, n_shards,
+                             num_perm=64, bands=8, seed=seed,
+                             weighting='binary')
+    return route_hyperplane(sigs, n_shards, seed=seed)
+
+
 def partition_proposed_balanced(train_items, n_users, n_items, n_shards, sig_dim, seed):
     """PROPOSED but LOAD-BALANCED: same LSH cells (so similar users still
     co-locate), only the cell->shard mapping is rebalanced by interaction load.
@@ -222,6 +250,59 @@ def partition_proposed_balanced(train_items, n_users, n_items, n_shards, sig_dim
     counts = np.bincount(umap, minlength=n_shards)
     print(f"    [PROPOSED_BAL] b={b} bits, {B} cells -> {n_shards} shards, "
           f"users min={counts.min()} max={counts.max()} mean={counts.mean():.1f}")
+    return umap
+
+
+def partition_embedding_based(train_items, n_users, n_items, n_shards, seed,
+                              kind='inp', data_root=None):
+    """Embedding-based partition (InP / UBP) as an UPPER REFERENCE.
+
+    The spec asks for an embedding-based partition as a reference point for
+    partition quality; it is explicitly NOT part of the exact claim, which is
+    PROPOSED vs RANDOM. This is the frozen version of RecEraser's partition:
+    k-means over WMF embeddings, then the mapping is held fixed, so the
+    unlearning mechanism stays identical to every other arm here.
+
+      kind='inp' : k-means over (user emb, item-weighted profile)
+      kind='ubp' : k-means over user embeddings only
+    """
+    import numpy as _np
+    from sklearn.cluster import KMeans
+
+    if data_root is None:
+        data_root = os.path.join(os.path.dirname(PROJ), 'data')
+    emb_path = os.path.join(data_root, 'wmf_embeddings.npz')
+    if not os.path.exists(emb_path):
+        raise FileNotFoundError(
+            f'WMF embeddings not found at {emb_path}. Train them first with '
+            f'code/train_wmf_pretrain.py --dataset <ds>')
+
+    data = _np.load(emb_path)
+    user_emb = data['user_embeddings']
+    item_emb = data['item_embeddings']
+    u = user_emb[:n_users]
+    u = u / _np.maximum(_np.linalg.norm(u, axis=1, keepdims=True), 1e-10)
+
+    if kind == 'inp':
+        # interaction-based: append the (normalised) item-embedding centroid
+        # of each user's consumed items
+        prof = _np.zeros((n_users, item_emb.shape[1]), dtype=_np.float32)
+        for uid, its in train_items.items():
+            if uid >= n_users:
+                continue
+            idx = [i for i in its if i < item_emb.shape[0]]
+            if idx:
+                prof[uid] = item_emb[idx].mean(axis=0)
+        prof = prof / _np.maximum(_np.linalg.norm(prof, axis=1, keepdims=True), 1e-10)
+        feats = _np.hstack([u, prof])
+    else:
+        feats = u
+
+    km = KMeans(n_clusters=n_shards, n_init=10, random_state=seed).fit(feats)
+    umap = km.labels_.astype(_np.int32)
+    counts = _np.bincount(umap, minlength=n_shards)
+    print(f"    [{kind.upper()}-frozen] k-means over WMF -> users "
+          f"min={counts.min()} max={counts.max()} mean={counts.mean():.1f}")
     return umap
 
 
@@ -421,7 +502,7 @@ def main():
     ap.add_argument('--unlearn_ratio', type=float, default=0.01)
     ap.add_argument('--unlearn_mode', default='most')
     ap.add_argument('--seeds', default='0,1,2,3,4')
-    ap.add_argument('--arms', default='PROPOSED,PROPOSED_BAL,RANDOM_PERM,RANDOM_MODULO,SISA,GLOBAL')
+    ap.add_argument('--arms', default='PROPOSED,PROPOSED_BAL,RANDOM_EMB,RANDOM_PERM,RANDOM_BAL,RANDOM_MODULO,SISA,GLOBAL')
     ap.add_argument('--data_root', default=None)
     ap.add_argument('--out_dir', default=None)
     ap.add_argument('--tag', default='')
@@ -520,6 +601,13 @@ def main():
                         train_items, n_users, n_items, args.n_shards,
                         args.sig_dim, args.legacy_seed)
                     pname = 'signature_lsh_balanced'
+                elif arm == 'RANDOM_EMB':
+                    # control for the signature: random user embedding routed
+                    # through the SAME LSH router as Ours-signature
+                    umap = partition_random_embedding(
+                        train_items, n_users, n_items, args.n_shards,
+                        args.sig_dim, seed, router=args.router)
+                    pname = f'random_embedding_{args.router}'
                 elif arm == 'RANDOM_PERM':
                     umap = pv_random_perm(n_users, args.n_shards, seed)
                     pname = 'random_perm'
@@ -535,6 +623,19 @@ def main():
                 elif arm == 'SISA':
                     umap = pv_random_modulo(n_users, args.n_shards, seed)
                     pname = 'sisa_modulo'
+                elif arm == 'INP':
+                    # embedding-based upper reference (frozen k-means over WMF)
+                    umap = partition_embedding_based(train_items, n_users, n_items,
+                                                     args.n_shards, seed,
+                                                     kind='inp',
+                                                     data_root=data_root)
+                    pname = 'inp_frozen'
+                elif arm == 'UBP':
+                    umap = partition_embedding_based(train_items, n_users, n_items,
+                                                     args.n_shards, seed,
+                                                     kind='ubp',
+                                                     data_root=data_root)
+                    pname = 'ubp_frozen'
                 else:
                     raise ValueError(f'unknown arm {arm}')
 
@@ -614,10 +715,9 @@ def print_console_summary(results, seeds, arms, args):
                 line += ''.rjust(16)
         print(line)
 
-    # partition quality + cost, side by side
+    # partition quality + load balance
     pqm = ['intra_similarity', 'nr_10', 'nr_20', 'nr_50',
-           'user_load_cv', 'interaction_load_cv', 'max_mean_ratio',
-           'train_time', 'unlearn_time']
+           'user_load_cv', 'interaction_load_cv', 'max_mean_ratio']
     print(f"\n{'arm':<18}" + ''.join(f'{m[:13]:>15}' for m in pqm))
     for arm in arms:
         line = f'{arm:<18}'
@@ -631,39 +731,92 @@ def print_console_summary(results, seeds, arms, args):
                 line += ''.rjust(15)
         print(line)
 
-    base = 'RANDOM_PERM' if any(r['arm'] == 'RANDOM_PERM' for r in results) else 'RANDOM_MODULO'
-    prop = 'PROPOSED'
-    paired = [s for s in seeds
-              if any(r['arm'] == prop and int(r['seed']) == int(s) for r in results)
-              and any(r['arm'] == base and int(r['seed']) == int(s) for r in results)]
-    if not paired:
-        return
+    # COST: train time / unlearn time / affected shards. Kept in its own table
+    # because the spec asks for the cost of one deletion alongside utility:
+    # a partition that wins on recall but has to retrain every shard is not a
+    # win. affected_shards is the mechanistic driver of unlearn cost.
+    cost = ['train_time', 'unlearn_time', 'affected_shards']
+    print(f"\n{'arm':<18}" + ''.join(f'{m[:14]:>16}' for m in cost))
+    for arm in arms:
+        line = f'{arm:<18}'
+        for m in cost:
+            vals = [get(arm, s, m) for s in seeds]
+            vals = [v for v in vals if v == v]
+            if vals:
+                sd = statistics.stdev(vals) if len(vals) > 1 else 0.0
+                line += f'{statistics.mean(vals):.2f}+-{sd:.2f}'.rjust(16)
+            else:
+                line += ''.rjust(16)
+        print(line)
 
-    print(f"\nPAIRED: {prop} vs {base}   seeds={paired} (n={len(paired)})")
-    for m in metrics:
-        pairs = [(get(prop, s, m), get(base, s, m)) for s in paired]
-        pairs = [(x, y) for x, y in pairs if x == x and y == y]
-        if not pairs:
+    # Print every meaningful paired comparison. The load-matched pair
+    # (PROPOSED_BAL vs RANDOM_BAL) is the decisive one: it removes the
+    # "one large shard ~= global model" confound, so any difference left is
+    # attributable to the partition's similarity structure.
+    available = {r['arm'] for r in results}
+    comparisons = [
+        ('PROPOSED', 'RANDOM_EMB', 'SIGNATURE vs random embedding (same router)'),
+        ('PROPOSED_BAL', 'RANDOM_EMB', 'load-matched LSH vs random embedding'),
+        ('PROPOSED', 'RANDOM_PERM', 'raw LSH vs random'),
+        ('PROPOSED_BAL', 'RANDOM_BAL', 'LOAD-MATCHED: LSH vs random'),
+        ('PROPOSED_MINHASH', 'RANDOM_PERM', 'minhash LSH vs random'),
+        ('PROPOSED_BAL', 'RANDOM_PERM', 'load-matched LSH vs random perm'),
+    ]
+
+    for prop, base, label in comparisons:
+        if prop not in available or base not in available:
             continue
-        p = [x for x, _ in pairs]
-        b = [y for _, y in pairs]
-        d = [x - y for x, y in pairs]
-        md = statistics.mean(d)
-        sd = statistics.stdev(d) if len(d) > 1 else 0.0
-        rg = (statistics.mean([(x - y) / y * 100 for x, y in pairs])
-              if all(y != 0 for y in b) else float('nan'))
-        print(f'  {m:<12} {prop}={statistics.mean(p):.4f}  {base}={statistics.mean(b):.4f}  '
-              f'rel_gain={rg:+.2f}%  mean_delta={md:+.4f} (sd={sd:.4f})')
+        paired = [s for s in seeds
+                  if any(r['arm'] == prop and int(r['seed']) == int(s) for r in results)
+                  and any(r['arm'] == base and int(r['seed']) == int(s) for r in results)]
+        if not paired:
+            continue
 
-    # mechanism check: does the partition actually co-locate similar users?
-    for m in ['intra_similarity', 'nr_10', 'nr_20', 'nr_50']:
-        pv = [get(prop, s, m) for s in paired]
-        bv = [get(base, s, m) for s in paired]
-        pv = [x for x in pv if x == x]
-        bv = [x for x in bv if x == x]
-        if pv and bv:
-            print(f'  {m:<12} {prop}={statistics.mean(pv):.4f}  {base}={statistics.mean(bv):.4f}  '
-                  f'{"HIGHER" if statistics.mean(pv) > statistics.mean(bv) else "NOT higher"}')
+        print(f"\nPAIRED: {prop} vs {base}   [{label}]   seeds={paired} (n={len(paired)})")
+        for m in metrics:
+            pairs = [(get(prop, s, m), get(base, s, m)) for s in paired]
+            pairs = [(x, y) for x, y in pairs if x == x and y == y]
+            if not pairs:
+                continue
+            p = [x for x, _ in pairs]
+            b = [y for _, y in pairs]
+            d = [x - y for x, y in pairs]
+            md = statistics.mean(d)
+            sd = statistics.stdev(d) if len(d) > 1 else 0.0
+            rg = (statistics.mean([(x - y) / y * 100 for x, y in pairs])
+                  if all(y != 0 for y in b) else float('nan'))
+            # paired t-test on the per-seed differences (n>=3)
+            pval = float('nan')
+            if len(d) >= 3:
+                try:
+                    from scipy import stats as _st
+                    pval = float(_st.ttest_1samp(d, 0.0).pvalue)
+                except Exception:
+                    pval = float('nan')
+            ptag = '' if pval != pval else (f"  p={pval:.4f}" + (" *" if pval < 0.05 else ""))
+            print(f'  {m:<12} {prop}={statistics.mean(p):.4f}  {base}={statistics.mean(b):.4f}  '
+                  f'rel_gain={rg:+.2f}%  mean_delta={md:+.4f} (sd={sd:.4f}){ptag}')
+
+        # mechanism check: does the partition actually co-locate similar users?
+        for m in ['intra_similarity', 'nr_10', 'nr_20', 'nr_50']:
+            pv = [x for x in [get(prop, s, m) for s in paired] if x == x]
+            bv = [x for x in [get(base, s, m) for s in paired] if x == x]
+            if pv and bv:
+                print(f'  {m:<12} {prop}={statistics.mean(pv):.4f}  {base}={statistics.mean(bv):.4f}  '
+                      f'{"HIGHER" if statistics.mean(pv) > statistics.mean(bv) else "NOT higher"}')
+
+        # cost of ONE deletion: how long the unlearning took and how many
+        # shards it had to retrain. A partition that wins on recall but
+        # retrains more shards is not a free win, so this is reported next
+        # to the utility comparison rather than in a separate table.
+        for m in ['unlearn_time', 'affected_shards']:
+            pv = [x for x in [get(prop, s, m) for s in paired] if x == x]
+            bv = [x for x in [get(base, s, m) for s in paired] if x == x]
+            if pv and bv:
+                mp, mb = statistics.mean(pv), statistics.mean(bv)
+                print(f'  {m:<12} {prop}={mp:.2f}  {base}={mb:.2f}  '
+                      f'delta={mp - mb:+.2f}  '
+                      f'{"CHEAPER" if mp < mb else ("costlier" if mp > mb else "equal")}')
 
 
 if __name__ == '__main__':

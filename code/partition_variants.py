@@ -172,6 +172,28 @@ def _print_assign(umap, n_shards, label):
 # ----------------------------------------------------------------------------
 # Random baselines
 # ----------------------------------------------------------------------------
+def random_embedding(n_users, d=64, seed=42):
+    """Random user embedding z_u ~ N(0, I_d), one vector per user.
+
+    This is the CONTROL for the signature: it keeps the entire downstream
+    pipeline identical to Ours (same LSH router, same balanced cell map, same
+    isolated training, same hard routing) and changes only ONE thing - where
+    the user representation comes from. Ours derives z_u from the user's own
+    interaction vector; here z_u carries no information about the user at all.
+
+    Comparing Ours-signature against this arm isolates the value of the
+    signature itself, separately from the value of routing through LSH at all
+    (which the RANDOM_PERM arm measures).
+    """
+    rng = np.random.RandomState(seed)
+    sigs = rng.randn(n_users, d).astype(np.float32)
+    # normalise so the router sees the same scale as a real signature
+    norms = np.maximum(np.linalg.norm(sigs, axis=1, keepdims=True), 1e-10)
+    sigs = sigs / norms
+    print(f"    [Signature] RANDOM embedding (control) d={d} shape={sigs.shape}")
+    return sigs
+
+
 def random_perm(n_users, n_shards, seed):
     """Random permutation of user ids -> K shards, balanced by USER COUNT."""
     rng = np.random.RandomState(seed)
