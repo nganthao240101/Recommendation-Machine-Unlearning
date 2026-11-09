@@ -846,7 +846,7 @@ def run_ours(dataset='ml-1m', emb_dim=64, n_shards=8,
             unlearn_ratio=0.1, unlearn_mode='random', unlearn_user_id=None,
             retrain_epochs=50, signature_dim=64, use_mean=False, output_suffix='',
             partition='signature', max_epochs_wmf=100, embed_source='wmf',
-            persist_partition=False):
+            persist_partition=False, seed=42):
     """
     Chạy Ours method với 3 components đúng theo bài báo
     """
@@ -882,7 +882,10 @@ def run_ours(dataset='ml-1m', emb_dim=64, n_shards=8,
     train_data = data.train_items
     test_data = data.test_set
 
-    random.seed(42)
+    import torch as _torch
+    random.seed(seed)
+    np.random.seed(seed)
+    _torch.manual_seed(seed)
     all_users = list(train_data.keys())
     n_unlearn = int(len(all_users) * unlearn_ratio)
 
@@ -1088,6 +1091,8 @@ if __name__ == '__main__':
                         help='1 = lưu FROZEN partition ra data/<dataset>/ours_partition_*.npz và '
                              'DÙNG LẠI nếu đã có (cho multi-request / restart process). '
                              '0 = in-memory (đủ cho benchmark 1 lần xóa).')
+    parser.add_argument('--seed', type=int, default=42,
+                    help='seed cho model-init (partition LSH vẫn dùng seed=42 công khai, frozen)')
     parser.add_argument('--output_suffix', type=str, default='')
 
     args = parser.parse_args()
@@ -1109,5 +1114,6 @@ if __name__ == '__main__':
         partition=args.partition,
         max_epochs_wmf=args.max_epochs_wmf,
         embed_source=args.embed_source,
-        persist_partition=bool(args.persist_partition)
+        persist_partition=bool(args.persist_partition),
+        seed=args.seed
     )

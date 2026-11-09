@@ -811,7 +811,7 @@ def run_receraser_v2(dataset='ml-1m', emb_dim=64, n_shards=8, partition_type=1,
                     batch_size=512, lr=0.01, lr_finetune=0.001,
                     use_attention=True, output_suffix='',
                     no_wmf_in_model=False, embed_source='wmf', pretrain=0,
-                    agg_lr=None, agg_epochs=None):
+                    agg_lr=None, agg_epochs=None, seed=42):
     """
     RecEraser với WMF pretrained embeddings
 
@@ -845,7 +845,10 @@ def run_receraser_v2(dataset='ml-1m', emb_dim=64, n_shards=8, partition_type=1,
     train_data, test_data = data.train_items, data.test_set
 
     # Select unlearn users
-    random.seed(42)
+    import torch as _torch
+    random.seed(seed)
+    np.random.seed(seed)
+    _torch.manual_seed(seed)
     all_users = list(train_data.keys())
     n_unlearn = int(len(all_users) * unlearn_ratio)
 
@@ -1045,7 +1048,7 @@ def run_receraser_v2(dataset='ml-1m', emb_dim=64, n_shards=8, partition_type=1,
         'unlearn_time': unlearn_time
     }
 
-    output_path = f'results_receraser_{partition_name.lower()}{output_suffix}.json'
+    output_path = os.path.join(PROJ, f'results_receraser_{partition_name.lower()}{output_suffix}.json')
     with open(output_path, 'w') as f:
         json.dump(results, f, indent=2)
 
@@ -1071,6 +1074,7 @@ if __name__ == '__main__':
     parser.add_argument('--lr', type=float, default=0.01)
     parser.add_argument('--lr_finetune', type=float, default=0.001)
     parser.add_argument('--use_attention', type=int, default=1, help='1: use attention aggregation, 0: use mean aggregation')
+    parser.add_argument('--seed', type=int, default=42, help='seed model-init')
     parser.add_argument('--output_suffix', type=str, default='')
     parser.add_argument('--embed_source', type=str, default='wmf', choices=['wmf', 'bprfull'],
                        help='Nguồn embedding cho partition InP/UBP: wmf (wmf_embeddings.npz - BPR-trọng-1, không reg) '
@@ -1102,6 +1106,7 @@ if __name__ == '__main__':
         lr=args.lr,
         lr_finetune=args.lr_finetune,
         use_attention=bool(args.use_attention),
+        seed=args.seed,
         output_suffix=args.output_suffix,
         no_wmf_in_model=args.no_wmf_in_model,
         embed_source=args.embed_source,

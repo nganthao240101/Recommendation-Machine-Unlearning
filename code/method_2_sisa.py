@@ -477,7 +477,7 @@ class SISAMethod:
 def run_sisa(model_name='BPRMF', dataset='ml-1m', emb_dim=64, n_shards=8,
            batch_size=512, lr=0.05, max_epochs=1000,
            unlearn_ratio=0.1, unlearn_mode='random', unlearn_user_id=None,
-           retrain_epochs=50, output_suffix=''):
+           retrain_epochs=50, output_suffix='', seed=42):
     print(f"\n{'='*60}")
     print(f"METHOD 2: SISA")
     print(f"{'='*60}")
@@ -499,7 +499,10 @@ def run_sisa(model_name='BPRMF', dataset='ml-1m', emb_dim=64, n_shards=8,
     train_data = data.train_items
     test_data = data.test_set
 
-    random.seed(42)
+    import torch as _torch
+    random.seed(seed)
+    np.random.seed(seed)
+    _torch.manual_seed(seed)
     all_users = list(train_data.keys())
     n_unlearn = int(len(all_users) * unlearn_ratio)
 
@@ -641,6 +644,7 @@ if __name__ == '__main__':
     parser.add_argument('--unlearn_user_id', type=int, default=None,
                        help='Chi dinh user ID cu the de unlearn (dung voi --unlearn_mode single)')
     parser.add_argument('--retrain_epochs', type=int, default=50)
+    parser.add_argument('--seed', type=int, default=42, help='model-init / random-deletion seed')
     parser.add_argument('--output_suffix', type=str, default='')
 
     args = parser.parse_args()
@@ -657,5 +661,6 @@ if __name__ == '__main__':
         unlearn_mode=args.unlearn_mode,
         unlearn_user_id=args.unlearn_user_id,
         retrain_epochs=args.retrain_epochs,
-        output_suffix=args.output_suffix
+        output_suffix=args.output_suffix,
+        seed=args.seed
     )

@@ -373,7 +373,7 @@ def evaluate_on_full(model, train_data, test_data, unlearn_users, n_users, n_ite
 
 def run_full_retrain_v2(dataset='ml-1m', emb_dim=64, max_epochs=100,
                        unlearn_ratio=0.1, unlearn_mode='random',
-                       unlearn_user_id=None, output_suffix=''):
+                       unlearn_user_id=None, output_suffix='', seed=42):
     print(f"\n{'='*70}")
     print(f"METHOD 1: FULL RETRAIN V2 - 2 CÁCH ĐÁNH GIÁ")
     print(f"{'='*70}")
@@ -387,7 +387,10 @@ def run_full_retrain_v2(dataset='ml-1m', emb_dim=64, max_epochs=100,
     train_data, test_data = data.train_items, data.test_set
 
     # Select unlearn users
-    random.seed(42)
+    import torch as _torch
+    random.seed(seed)
+    np.random.seed(seed)
+    _torch.manual_seed(seed)
     all_users = list(train_data.keys())
     n_unlearn = int(len(all_users) * unlearn_ratio)
 
@@ -483,7 +486,7 @@ def run_full_retrain_v2(dataset='ml-1m', emb_dim=64, max_epochs=100,
         'unlearn_time': unlearn_time
     }
 
-    output_path = f'results_fullretrain_v2_{output_suffix}.json'
+    output_path = os.path.join(PROJ, f'results_fullretrain_v2_{output_suffix}.json')
     with open(output_path, 'w') as f:
         json.dump(results, f, indent=2)
 
@@ -499,6 +502,7 @@ if __name__ == '__main__':
     parser.add_argument('--unlearn_ratio', type=float, default=0.1)
     parser.add_argument('--unlearn_mode', type=str, default='random')
     parser.add_argument('--unlearn_user_id', type=int, default=None)
+    parser.add_argument('--seed', type=int, default=42, help='model-init / random-deletion seed')
     parser.add_argument('--output_suffix', type=str, default='')
     args = parser.parse_args()
 
@@ -509,5 +513,6 @@ if __name__ == '__main__':
         unlearn_ratio=args.unlearn_ratio,
         unlearn_mode=args.unlearn_mode,
         unlearn_user_id=args.unlearn_user_id,
-        output_suffix=args.output_suffix
+        output_suffix=args.output_suffix,
+        seed=args.seed
     )
