@@ -65,11 +65,22 @@ stage_main () {
     banner "MAIN - ml-1m, K=8, 5 seeds (all arms, includes GLOBAL)"
     run ex1_ml1m_serial code/exp_partition_quality.py --dataset ml-1m \
         --n_shards 8 $COMMON --arms $MAIN_ARMS
+}
 
-    banner "MAIN - ml-1m, K=8, unlearn_mode=most (ablation: deletion mode)"
+# Deletion-mode ablation: which users get deleted. 'random' is the main run
+# (ex1_ml1m_serial). 'most' and 'fewest' run with the SAME arms, K and seeds,
+# so all three deletion policies can be compared directly on ml-1m.
+stage_mode () {
+    banner "ABLATION - deletion mode: most (1% most-active users)"
     run abl_mode_most_serial code/exp_partition_quality.py --dataset ml-1m \
         --n_shards 8 --sig_dim 64 --emb_dim 64 --epochs 50 --retrain_epochs 50 \
         --lr 0.05 --batch_size 512 --unlearn_ratio 0.01 --unlearn_mode most \
+        --seeds 0,1,2,3,4 --arms $ABL_ARMS
+
+    banner "ABLATION - deletion mode: fewest (1% least-active users)"
+    run abl_mode_fewest_serial code/exp_partition_quality.py --dataset ml-1m \
+        --n_shards 8 --sig_dim 64 --emb_dim 64 --epochs 50 --retrain_epochs 50 \
+        --lr 0.05 --batch_size 512 --unlearn_ratio 0.01 --unlearn_mode fewest \
         --seeds 0,1,2,3,4 --arms $ABL_ARMS
 }
 
@@ -117,6 +128,7 @@ stage_summary () {
     python code/summarize_partition_logs.py \
         logs/ex1_ml1m_serial.out \
         logs/abl_mode_most_serial.out \
+        logs/abl_mode_fewest_serial.out \
         logs/abl_K4_serial.out logs/abl_K16_serial.out \
         logs/ex1_yelp_serial.out \
         logs/abl_dim32_serial.out logs/abl_dim64_serial.out \
@@ -127,11 +139,12 @@ stage_summary () {
 
 case "$STAGE" in
     main)      stage_main ;;
+    mode)      stage_mode ;;
     yelp)      stage_yelp ;;
     ablation)  stage_ablation ;;
     summary)   stage_summary ;;
-    all)       stage_main; stage_yelp; stage_ablation; stage_summary ;;
-    *) echo "unknown stage: $STAGE (use main|yelp|ablation|summary|all)"; exit 1 ;;
+    all)       stage_main; stage_mode; stage_yelp; stage_ablation; stage_summary ;;
+    *) echo "unknown stage: $STAGE (use main|mode|yelp|ablation|summary|all)"; exit 1 ;;
 esac
 
 echo ""
