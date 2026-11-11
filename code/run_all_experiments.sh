@@ -134,7 +134,9 @@ stage_summary () {
         logs/abl_dim32_serial.out logs/abl_dim64_serial.out \
         logs/abl_dim128_serial.out logs/abl_dim256_serial.out \
         logs/abl_router_serial.out logs/abl_weight_serial.out \
-        --baseline RANDOM_PERM --json logs/SUMMARY.json
+        --baseline RANDOM_PERM \
+        --json logs/SUMMARY.json \
+        --csv  logs/partition_results
 }
 
 case "$STAGE" in
