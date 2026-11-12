@@ -29,3 +29,6 @@ weights/
 *.log
 *.tmp
 
+
+# Claude Code local settings
+.claude/
