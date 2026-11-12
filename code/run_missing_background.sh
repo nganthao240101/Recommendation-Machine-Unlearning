@@ -40,12 +40,15 @@ run () {
 }
 
 # ---------------------------------------------------------------------------
-# [0] PREFLIGHT - in ra cảnh báo, KHÔNG chặn job.
-#     Quan trọng: nếu torch.cuda.is_available() == False thì mọi thí nghiệm
-#     chạy CPU và số đo thời gian sẽ tệ hơn hẳn bản GPU.
+# [0] PREFLIGHT
+#     CUDA là bắt buộc: nếu chạy CPU thì unlearn_time là số đo của một máy
+#     khác hẳn và không dùng được cho bảng trong bài. Nên chặn job, trừ khi
+#     đặt RECUNLEARN_ALLOW_CPU=1 (chỉ để smoke test).
 # ---------------------------------------------------------------------------
 banner "PREFLIGHT"
-python - <<'PY' 2>&1 | sed 's/^/  /'
+# Ghi ra file roi doc exit code cua python - pipe se lam mat exit code.
+PREFLIGHT_LOG="logs/_preflight.log"
+if ! python - > "$PREFLIGHT_LOG" 2>&1 <<'PY'
 import torch, sys
 print(f"torch {torch.__version__}  cuda_build={torch.version.cuda}")
 print(f"cuda_available={torch.cuda.is_available()}  n_gpu={torch.cuda.device_count()}")
@@ -57,31 +60,46 @@ for m in ("numpy", "scipy", "sklearn"):
         __import__(m); print(f"  {m}: ok")
     except Exception as e:
         print(f"  {m}: THIEU -> {e}")
+sys.exit(0 if torch.cuda.is_available() else 1)
 PY
+then
+  sed 's/^/  /' "$PREFLIGHT_LOG"
+  if [ "${RECUNLEARN_ALLOW_CPU:-0}" = "1" ]; then
+    echo "  -> RECUNLEARN_ALLOW_CPU=1: van chay tren CPU."
+  else
+    echo ""
+    echo "!! DUNG o day: CUDA chua bat. Sua torch truoc, hoac dat RECUNLEARN_ALLOW_CPU=1"
+    echo "   de chi smoke-test. Thoat."
+    exit 1
+  fi
+else
+  sed 's/^/  /' "$PREFLIGHT_LOG"
+fi
 echo ""
 
 # ---------------------------------------------------------------------------
-# [1] WMF embeddings cho RecEraser.
-#     Đã có sẵn trên máy (data/<ds>/wmf_embeddings.npz) -> không cần train lại.
-#     Nếu chỉ có .pk thì convert (convert_wmf_pk.py), vẫn không train lại.
-#     Chỉ khi thiếu cả hai mới train WMF từ đầu (chậm nhất).
+# [1] WMF embeddings cho RecEraser - ĐÃ CÓ SẴN trên máy.
+#     Không convert, không train lại: chỉ kiểm tra data/<ds>/wmf_embeddings.npz
+#     có tồn tại không. Thiếu thì dừng luôn, vì arm RECERASER sẽ crash giữa
+#     chừng và làm mất thời gian chạy cả chuỗi.
 # ---------------------------------------------------------------------------
+MISSING_EMB=0
 for DS in ml-1m yelp2018; do
   NPZ="data/${DS}/wmf_embeddings.npz"
   if [ -f "$NPZ" ]; then
-    echo "[skip] ${DS}: $NPZ đã tồn tại"
-    continue
+    echo "[ok] ${DS}: $NPZ (đã có sẵn, không convert, không train lại)"
+  else
+    echo "[THIEU] ${DS}: $NPZ"
+    MISSING_EMB=1
   fi
-  if [ -f "data/${DS}/user_pretrain.pk" ] && [ -f "data/${DS}/item_pretrain.pk" ]; then
-    banner "CONVERT WMF PK -> NPZ - $DS"
-    python code/convert_wmf_pk.py --dataset "$DS" 2>&1 | tee "logs/convert_wmf_${DS}.out"
-    continue
-  fi
-  banner "PRETRAIN WMF - $DS"
-  python code/pretrain_wmf.py --dataset "$DS" --emb_dim 64 \
-    --batch_size 512 --learning_rate 0.05 --max_epochs 100 \
-    2>&1 | tee "logs/pretrain_wmf_${DS}.out"
 done
+if [ "$MISSING_EMB" = "1" ]; then
+  echo ""
+  echo "!! Thiếu wmf_embeddings.npz. Không chạy tiếp."
+  echo "   (đã có sẵn trên máy - kiểm tra lại đường dẫn data/<ds>/)"
+  exit 1
+fi
+echo ""
 
 # ---------------------------------------------------------------------------
 # [2] R1 - main: random deletion, 5 seeds, 6 arms, 2 dataset
