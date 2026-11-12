@@ -16,6 +16,8 @@
 #     bash code/run_blocks.sh all          # liên tiếp các khối (vẫn 1 job/lần)
 #     bash code/run_blocks.sh status       # khối nào xong / đang chạy / thiếu
 #     bash code/run_blocks.sh csv          # in bảng kết quả ra results/csv/*.csv
+#     bash code/run_blocks.sh check        # tiến độ + log cũ/mới + bảng kết quả mới nhất
+#     bash code/run_blocks.sh clean        # xóa log/kết quả cũ (nén backup trước)
 #
 #   Chạy NGẦM (để thoát kết nối mà job vẫn chạy):
 #     nohup bash code/run_blocks.sh main > logs/block_main.out 2>&1 &
@@ -37,15 +39,25 @@ banner () {
   echo "=============================================================="
 }
 
+# log do code HIỆN TẠI sinh ra? (xem code/clean_old_results.py)
+is_new () { python code/clean_old_results.py --is-new "$1"; }
+
 run () {
   local name="$1"; shift
-  if [ -f "logs/${name}.out" ] && grep -q "CONSOLE SUMMARY" "logs/${name}.out" 2>/dev/null; then
-    echo "[skip] $name  (log đã có CONSOLE SUMMARY)"
-    return 0
+  local f="logs/${name}.out"
+  if [ -f "$f" ] && grep -q "CONSOLE SUMMARY" "$f" 2>/dev/null; then
+    if is_new "$f"; then
+      echo "[skip] $name  (đã xong bằng code hiện tại)"
+      return 0
+    fi
+    # log CŨ trùng tên: đổi tên để chạy lại, không ghi đè mất
+    local old="logs/${name}.out.old_$(date +%Y%m%d_%H%M%S)"
+    mv "$f" "$old"
+    echo "[rerun] $name  (log cũ -> $old)"
   fi
   banner "START $name"
   local t0=$SECONDS
-  python "$@" 2>&1 | tee "logs/${name}.out"
+  "$@" 2>&1 | tee "logs/${name}.out"
   local rc=${PIPESTATUS[0]}
   echo "--------------------------------------------------------------"
   echo "DONE $name  (rc=$rc, $((SECONDS-t0))s)  -> logs/${name}.out"
@@ -172,6 +184,8 @@ block_status () {
     f="logs/${n}.out"
     if [ ! -f "$f" ]; then
       printf '  %-24s MISSING\n' "$n"; miss=$((miss+1))
+    elif grep -q "CONSOLE SUMMARY" "$f" && ! is_new "$f"; then
+      printf '  %-24s OLD      (log code cu - khoi se chay lai)\n' "$n"; miss=$((miss+1))
     elif grep -q "CONSOLE SUMMARY" "$f"; then
       printf '  %-24s DONE\n' "$n"; done=$((done+1))
     elif grep -q "Traceback" "$f"; then
@@ -182,7 +196,7 @@ block_status () {
     fi
   done
   echo ""
-  echo "  done=$done  running/crashed=$run  missing=$miss  (tong 12)"
+  echo "  done=$done  running/crashed=$run  missing/old=$miss  (tong 12)"
   echo ""
   ps -eo pid,etime,cmd | grep -E "run_blocks|exp_partition_quality|exp_single_request" \
     | grep -v grep || echo "  (khong co job nao dang chay)"
@@ -199,7 +213,10 @@ block_status () {
 csv_group () {   # csv_group <ten> <log1> [log2 ...]
   local name="$1"; shift
   local have=()
-  for n in "$@"; do [ -f "logs/${n}.out" ] && have+=("logs/${n}.out"); done
+  # chỉ đọc log của code hiện tại, để không trộn số cũ vào bảng
+  for n in "$@"; do
+    [ -f "logs/${n}.out" ] && is_new "logs/${n}.out" && have+=("logs/${n}.out")
+  done
   if [ ${#have[@]} -eq 0 ]; then
     echo "  [skip] $name - chua co log nao"
     return
@@ -232,6 +249,33 @@ block_csv () {
   ls -la results/csv
 }
 
+# ------------------------------------------------------------------ check
+# Kiểm tra log + kết quả mới nhất: tiến độ 12 log, log nào CŨ / MỚI,
+# rồi xuất lại CSV và in bảng kết quả gọn. Không train, không xóa gì.
+block_check () {
+  block_status
+  banner "LOG CU / MOI (chi liet ke, khong xoa)"
+  python code/clean_old_results.py
+  block_csv > /dev/null
+  banner "KET QUA MOI NHAT"
+  python code/show_latest_results.py
+}
+
+# ------------------------------------------------------------------ clean
+# Xóa log/kết quả CŨ. Mặc định nén vào ../old_results_<giờ>.tar.gz trước
+# rồi mới xóa; đặt NO_BACKUP=1 để xóa hẳn. Sau đó xuất lại CSV từ log mới.
+block_clean () {
+  banner "XOA KET QUA CU"
+  if [ "${NO_BACKUP:-0}" = "1" ]; then
+    python code/clean_old_results.py --yes --no-backup
+  else
+    python code/clean_old_results.py --yes
+  fi
+  block_csv > /dev/null
+  echo ""
+  echo "Da xuat lai results/csv/ tu cac log con lai."
+}
+
 case "${1:-main}" in
   torch)     block_torch ;;
   main)      block_main ;;
@@ -242,5 +286,7 @@ case "${1:-main}" in
   all)       block_main; block_single; block_receraser; block_modes; block_dims; block_csv ;;
   status)    block_status ;;
   csv)       block_csv ;;
-  *) echo "dùng: bash code/run_blocks.sh <torch|main|single|receraser|modes|dims|all|status|csv>"; exit 1 ;;
+  check)     block_check ;;
+  clean)     block_clean ;;
+  *) echo "dùng: bash code/run_blocks.sh <torch|main|single|receraser|modes|dims|all|status|csv|check|clean>"; exit 1 ;;
 esac

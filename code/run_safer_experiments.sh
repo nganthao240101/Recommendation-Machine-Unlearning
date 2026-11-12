@@ -39,7 +39,7 @@ run () {
   local name="$1"; shift
   banner "START $name"
   local t0=$SECONDS
-  python "$@" 2>&1 | tee "logs/${name}.out"
+  "$@" 2>&1 | tee "logs/${name}.out"
   local rc=${PIPESTATUS[0]}
   echo "--------------------------------------------------------------"
   echo "DONE $name  (rc=$rc, $((SECONDS-t0))s)  -> logs/${name}.out"
