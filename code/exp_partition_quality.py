@@ -23,7 +23,8 @@ Arms
   RANDOM_BAL     random permutation, greedy-balanced by interaction load
                  (the load-matched control)
   RANDOM_MODULO  user_id % K                                   (sanity check)
-  SISA           user_id % K, frozen mapping (simple deletion-stable baseline)
+  SISA           user_id % K, frozen mapping, evaluated with the mean
+                 aggregation over all K models, which is the original SISA
   INP / UBP      embedding-based (k-means over WMF) partition, frozen -
                  UPPER REFERENCE for partition quality, not part of the
                  PROPOSED-vs-RANDOM claim
@@ -490,6 +491,72 @@ def load_balance(user_to_shard, train_items, n_shards):
 # ----------------------------------------------------------------------------
 # train / unlearn / evaluate
 # ----------------------------------------------------------------------------
+def evaluate_sisa_mean_aggregation(shard_models, train_data, test_data,
+                                   n_users, n_items, device, Ks=KS):
+    """Evaluate SISA the way SISA does it: mean aggregation over all shards.
+
+    The SISA paper splits the users over K shards, trains one model per
+    shard, and at inference time averages the scores of all K models. The
+    arm SISA in this experiment used to be evaluated with hard routing, which
+    is not SISA: it drops the aggregation that is the defining part of the
+    method. This is the original aggregation, ported from method_2_sisa.py.
+
+    A user that lives in shard j is trained in shard j's model; the other
+    models still hold a row for that user, which stays at its initial value.
+    Averaging therefore mixes the trained representation with K-1 untrained
+    ones, which is exactly what the original method does.
+    """
+    import heapq
+    n_shards = len(shard_models.models)
+    rec = {k: [] for k in Ks}
+    ndcg = {k: [] for k in Ks}
+
+    with torch.no_grad():
+        for user in range(n_users):
+            if user not in test_data or not test_data[user]:
+                continue
+            scores_sum = np.zeros(n_items)
+            for sid in range(n_shards):
+                model = shard_models.get_model(sid)
+                if model is None:
+                    continue
+                user_t = torch.LongTensor([user]).to(device)
+                scores = []
+                for i in range(0, n_items, 256):
+                    batch_items = torch.arange(i, min(i + 256, n_items),
+                                               device=device)
+                    s = model.predict_user_items(user_t, batch_items).cpu().numpy()
+                    scores.extend(s.tolist())
+                scores_sum += np.array(scores)
+            scores = scores_sum / max(n_shards, 1)
+
+            for it in set(train_data.get(user, [])):
+                scores[it] = -np.inf
+
+            rank_list = heapq.nlargest(max(Ks), range(len(scores)),
+                                       key=scores.__getitem__)
+            item_set = set(test_data[user])
+            for k in Ks:
+                hit = rank_list[:k]
+                hits = len(set(hit) & item_set)
+                rec[k].append(hits / len(item_set) if item_set else 0)
+                dcg = sum(1.0 / np.log2(i + 2) for i, x in enumerate(hit)
+                          if x in item_set)
+                idcg = sum(1.0 / np.log2(i + 2) for i in range(min(len(item_set), k)))
+                ndcg[k].append(dcg / idcg if idcg > 0 else 0)
+
+    return {
+        'recall': [float(np.nanmean(rec[k])) if rec[k] else 0.0 for k in Ks],
+        'ndcg': [float(np.nanmean(ndcg[k])) if ndcg[k] else 0.0 for k in Ks],
+    }
+
+
+def _mean(vals):
+    """Mean of a list, or None if it is empty."""
+    vals = [v for v in vals if v is not None]
+    return sum(vals) / len(vals) if vals else None
+
+
 def build_shard_data(train_items, user_to_shard, n_shards):
     shard_data = [{} for _ in range(n_shards)]
     for u, items in train_items.items():
@@ -499,7 +566,8 @@ def build_shard_data(train_items, user_to_shard, n_shards):
 
 def run_sharded_arm(train_items, test_data, n_users, n_items, n_shards,
                     emb_dim, user_to_shard, del_users, epochs, lr, batch_size,
-                    device, seed, retrain_epochs, reset_on_retrain=False):
+                    device, seed, retrain_epochs, reset_on_retrain=False,
+                    eval_mode='hard'):
     """Train K shard models, delete users, retrain affected shards, evaluate.
 
     The per-shard retrain times and interaction counts are returned so the
@@ -553,15 +621,32 @@ def run_sharded_arm(train_items, test_data, n_users, n_items, n_shards,
 
     # ---- evaluate on retained test users only ----
     test_retained = {u: it for u, it in test_data.items() if u not in del_users}
-    res = evaluate_hard_routing(shard_models, user_to_shard, retained,
-                                 test_retained, n_users, n_items, device, Ks=KS)
+    if eval_mode == 'sisa_mean':
+        # the original SISA inference: average the scores of all K models
+        res = evaluate_sisa_mean_aggregation(shard_models, retained,
+                                             test_retained, n_users, n_items,
+                                             device, Ks=KS)
+    else:
+        res = evaluate_hard_routing(shard_models, user_to_shard, retained,
+                                     test_retained, n_users, n_items, device,
+                                     Ks=KS)
     return (res, train_time, unlearn_time, affected, shard_models,
             parallel_time, per_shard_time, per_shard_inter)
 
 
 def _train_bprmf(train_items, n_users, n_items, emb_dim, epochs, lr,
                  batch_size, device, seed):
-    """Train one BPRMF on the given interactions. Returns (model, elapsed)."""
+    """Train one BPRMF on the given interactions.
+
+    Returns (model, elapsed_seconds, n_samples, per_epoch_seconds).
+
+    The per-epoch times are what make the cost comparable across arms: the
+    seconds per epoch divided by the number of interactions is a rate that
+    should be the same for every shard and for the global model. If a small
+    shard takes as long per epoch as the global model, the training loop is
+    iterating over more than that shard's data, and the reported cost would
+    be measuring the wrong thing.
+    """
     from method_4_ours import BPRMF
     set_all_seeds(seed)
     model = BPRMF(n_users, n_items, emb_dim).to(device)
@@ -575,11 +660,13 @@ def _train_bprmf(train_items, n_users, n_items, emb_dim, epochs, lr,
                 neg = random.randint(0, n_items - 1)
             samples.append((u, pos, neg))
     if not samples:
-        return model, 0.0, 0
+        return model, 0.0, 0, []
 
+    per_epoch = []
     t0 = time.time()
     for ep in range(epochs):
         random.shuffle(samples)
+        ep_t0 = time.time()
         nb = max(1, len(samples) // batch_size)
         for b in range(nb):
             chunk = samples[b * batch_size:(b + 1) * batch_size]
@@ -592,7 +679,8 @@ def _train_bprmf(train_items, n_users, n_items, emb_dim, epochs, lr,
             opt.zero_grad()
             loss.backward()
             opt.step()
-    return model, time.time() - t0, len(samples)
+        per_epoch.append(time.time() - ep_t0)
+    return model, time.time() - t0, len(samples), per_epoch
 
 
 def run_global_arm(train_items, test_data, n_users, n_items, del_users,
@@ -611,17 +699,19 @@ def run_global_arm(train_items, test_data, n_users, n_items, del_users,
     measured and train_time and unlearn_time were identical by construction.
     The evaluation uses the retrained model, which is the model that would
     actually be deployed after the deletion request.
+
+    The per-epoch times of both models are returned as well, so the retrain
+    can be compared with the shard retrains on a rate rather than on a total.
     """
     retained = {u: it for u, it in train_items.items() if u not in del_users}
 
     # ---- the original model, on the full dataset ----
-    _, train_time, n_full = _train_bprmf(train_items, n_users, n_items,
-                                         emb_dim, epochs, lr, batch_size,
-                                         device, seed)
+    _, train_time, n_full, ep_full = _train_bprmf(train_items, n_users, n_items,
+                                                   emb_dim, epochs, lr,
+                                                   batch_size, device, seed)
     # ---- the retrained model, on the data with the deleted users removed ----
-    model, unlearn_time, n_ret = _train_bprmf(retained, n_users, n_items,
-                                              emb_dim, epochs, lr, batch_size,
-                                              device, seed)
+    model, unlearn_time, n_ret, ep_ret = _train_bprmf(
+        retained, n_users, n_items, emb_dim, epochs, lr, batch_size, device, seed)
 
     test_retained = {u: it for u, it in test_data.items() if u not in del_users}
     rec, ndcg = {k: [] for k in KS}, {k: [] for k in KS}
@@ -646,7 +736,8 @@ def run_global_arm(train_items, test_data, n_users, n_items, del_users,
     out = {'recall': [np.nanmean(rec[k]) if rec[k] else 0 for k in KS],
            'ndcg': [np.nanmean(ndcg[k]) if ndcg[k] else 0 for k in KS]}
     # the retrain is a single model, so parallel_time == unlearn_time
-    return out, train_time, unlearn_time, unlearn_time, n_full, n_ret
+    return (out, train_time, unlearn_time, unlearn_time, n_full, n_ret,
+            ep_full, ep_ret)
 
 
 # ----------------------------------------------------------------------------
@@ -750,7 +841,7 @@ def main():
             }
 
             if arm == 'GLOBAL':
-                res, tt, ut, ptime, n_full, n_ret = run_global_arm(
+                res, tt, ut, ptime, n_full, n_ret, ep_full, ep_ret = run_global_arm(
                     train_items, test_data, n_users, n_items, del_users,
                     args.emb_dim, args.epochs, args.lr, args.batch_size, device, seed)
                 row.update({
@@ -762,6 +853,9 @@ def main():
                     'instability_label': '', 'instability_pairwise': '',
                     'shard_interactions_total': n_full,
                     'shard_interactions_unlearn': n_ret,
+                    'sec_per_epoch_global': (_mean(ep_ret) if ep_ret else ''),
+                    'sec_per_interaction_global': (
+                        (_mean(ep_ret) / n_ret) if ep_ret and n_ret else ''),
                 })
                 per_shard_time, per_shard_inter = {}, {}
             else:
@@ -849,12 +943,17 @@ def main():
                         args.batch_size, device, seed, args.retrain_epochs,
                         data_root=data_root, agg_epochs=args.agg_epochs)
                 else:
+                    # SISA is evaluated with its own mean aggregation, which
+                    # is what makes it SISA. Every other arm keeps the hard
+                    # routing the spec fixes for the experiment.
+                    eval_mode = ('sisa_mean' if arm == 'SISA' else 'hard')
                     (res, tt, ut, affected, _sm, ptime,
                      per_shard_time, per_shard_inter) = run_sharded_arm(
                         train_items, test_data, n_users, n_items, args.n_shards,
                         args.emb_dim, umap, del_users, args.epochs, args.lr,
                         args.batch_size, device, seed, args.retrain_epochs,
-                        reset_on_retrain=not args.keep_weights_on_retrain)
+                        reset_on_retrain=not args.keep_weights_on_retrain,
+                        eval_mode=eval_mode)
 
                 # Partition-quality metrics are measured on the ORIGINAL
                 # signature (built once per seed above), not on post-train
@@ -898,6 +997,8 @@ def main():
                     'shard_interactions_total': sum(per_shard_inter.values()),
                     'shard_interactions_unlearn': sum(
                         per_shard_inter[s] for s in affected if s in per_shard_inter),
+                    'sec_per_epoch_global': '',
+                    'sec_per_interaction_global': '',
                 })
 
             for i, k in enumerate(KS):
@@ -926,6 +1027,32 @@ def main():
                                   for s in sorted(per_shard_time))
                       + f"  | sum={sum(per_shard_time.values()):.1f}s "
                         f"vs unlearn_time={row['unlearn_time']:.1f}s")
+
+                # S5 check: the time per epoch should scale with the number
+                # of interactions a shard holds. If a small shard takes about
+                # as long per epoch as a large one (or as the global model),
+                # the training loop is iterating over more than that shard's
+                # data.
+                rate = {}
+                for s in per_shard_time:
+                    n_int = per_shard_inter.get(s, 0)
+                    per_epoch = per_shard_time[s] / max(args.retrain_epochs, 1)
+                    rate[s] = (per_epoch / n_int) if n_int else float('nan')
+                if len(rate) > 1:
+                    ok = [r for r in rate.values() if r == r]
+                    span = (max(ok) - min(ok)) / max(_mean(ok), 1e-12) \
+                        if ok else 0.0
+                    flag = "OK" if span < 1.5 else \
+                        "CHECK: per-epoch time does not scale with the " \
+                        f"shard size (spread {span:.2f}x)"
+                    print(f"       S5 rate check: sec/epoch per interaction "
+                          f"= " + ", ".join(f"s{s}={rate[s]:.2e}"
+                                            for s in sorted(rate))
+                          + f"  [{flag}]")
+                    if row.get('sec_per_epoch_global'):
+                        print(f"       global (GLOBAL arm) "
+                              f"sec/epoch/interaction="
+                              f"{row.get('sec_per_interaction_global', ''):.2e}")
 
     print_console_summary(RESULTS, seeds, arms, args)
 

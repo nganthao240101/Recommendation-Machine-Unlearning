@@ -73,7 +73,7 @@ stage_verify () {
     2>&1 | tee logs/verify_ml1m.out
   echo ""
   echo "--- the lines that matter ---"
-  grep -E "instability:|per-shard retrain|unlearn:|cost:|R@10=" logs/verify_ml1m.out
+  grep -E "instability:|per-shard retrain|S5 rate|cost:|R@10=" logs/verify_ml1m.out
 }
 
 stage_main () {

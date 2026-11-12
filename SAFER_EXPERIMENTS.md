@@ -107,6 +107,56 @@ ordered by hash rather than by similarity, which is why its IntraSim sat at
 the random level (0.0794). Fixing that is a change to the router, not to the
 experiment, and is left for a later pass.
 
+### The SISA arm was not SISA
+
+The SISA arm was evaluated with hard routing, which drops the aggregation
+that is the defining part of SISA. `method_2_sisa.py`, the original
+implementation in this repository, averages the scores of **all K** models at
+inference time. `evaluate_sisa_mean_aggregation()` now does the same, so the
+arm in the table is the method the paper names.
+
+The other arms keep the hard routing that the spec fixes for the experiment.
+
+### The backbone is consistent across the arms
+
+Every arm trains BPRMF:
+
+| arm | model | loss |
+|---|---|---|
+| PROPOSED, PROPOSED_BAL, RANDOM_EMB, RANDOM_PERM, SISA, RANDOM_MODULO | `method_4_ours.BPRMF` | `-log(sigmoid(diff)) + 0.01 L2` |
+| GLOBAL (Retrain) | `method_4_ours.BPRMF` | the same |
+| RECERASER | `RecEraserModel` | `softplus(-diff) + 0.01 L2` |
+
+`softplus(-x)` and `-log(sigmoid(x))` are the same function: checked
+numerically, the largest difference over a range of scores is 2.98e-08, which
+is float rounding.
+
+The `WMF` class in the repository is **not** a backbone here. It produces the
+pretrained embeddings (`wmf_embeddings.npz`) that feed RecEraser's partition,
+which is how the original RecEraser works. No arm is trained or evaluated
+with it.
+
+`code/check_stale_retrain_cost.py` also reports the backbone of every log, so
+a table cannot end up mixing a BPRMF arm with a WMF arm.
+
+### The retrain cost in the old logs is not a measurement
+
+The old `run_global_arm` trained one model on the reduced data and returned
+that single duration for both the train and the unlearn column. In those logs
+the retrain cost of the reference arm reads exactly the same as its training
+cost, so it was never measured.
+
+`code/check_stale_retrain_cost.py` finds those logs:
+
+```
+log                                 seed    train(s)   unlearn(s)   rel.diff  verdict
+main_yelp_old                        0      1544.6       1544.6     0.0000  STALE (train == unlearn)
+main_ml1m_new                        0      1544.6       1602.3     0.0374  ok
+```
+
+Those logs must not be merged with the new ones. Either re-run them with the
+fixed code, or keep them apart and say so in the paper.
+
 ### One more thing that was wrong: the retrain did not remove the user
 
 The affected shards were retrained **from their current weights**. The retrain
