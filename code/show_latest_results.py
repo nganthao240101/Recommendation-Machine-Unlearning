@@ -10,7 +10,7 @@ import os
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 CSV_DIR = os.path.join(ROOT, 'results', 'csv')
-GROUPS = ('main', 'receraser', 'modes', 'dims')
+GROUPS = ('main', 'modes', 'shards', 'dims', 'recpart')
 
 
 def pm(row, key, prec=4):
@@ -57,7 +57,7 @@ def main():
                   f'{r.get("delta_R10_vs_RANDOM_PERM", "") or "-":>13}'
                   f'{r.get("delta_R10_p", "") or "-":>8}')
 
-    sp = os.path.join(CSV_DIR, 'single_request.csv')
+    sp = os.path.join(CSV_DIR, 'single.csv')
     if os.path.exists(sp):
         rows = list(csv.DictReader(open(sp, encoding='utf-8')))
         if rows:
@@ -65,11 +65,11 @@ def main():
             print('=' * 118)
             print(f'SINGLE REQUEST   ({os.path.relpath(sp, ROOT)})')
             print('=' * 118)
-            print(f'{"arm":<18}{"mean(s)":>12}{"std":>10}{"min":>10}{"max":>10}'
+            print(f'{"log":<14}{"arm":<18}{"mean(s)":>12}{"std":>10}{"min":>10}{"max":>10}'
                   f'{"n":>5}{"x Retrain":>11}')
             print('-' * 118)
             for r in rows:
-                print(f'{r["arm"]:<18}{r["time_mean_s"]:>12}{r["time_std_s"]:>10}'
+                print(f'{r["log"]:<14}{r["arm"]:<18}{r["time_mean_s"]:>12}{r["time_std_s"]:>10}'
                       f'{r["time_min_s"]:>10}{r["time_max_s"]:>10}'
                       f'{r["n_requests"]:>5}{r["ratio_to_global"] or "-":>11}')
 

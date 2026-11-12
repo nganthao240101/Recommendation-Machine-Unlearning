@@ -49,11 +49,13 @@ LIVE_FALLBACK_S = 60 * 60
 
 # the logs run_blocks.sh writes, in run order
 EXPERIMENT_LOGS = [
-    'main_ml1m', 'main_yelp', 'single_request_ml1m', 'receraser_ml1m',
-    'receraser_yelp', 'receraser_ml1m_most', 'receraser_ml1m_fewest',
-    'mode_most_ml1m', 'mode_fewest_ml1m', 'dim32_ml1m', 'dim128_ml1m',
-    'dim256_ml1m',
+    f'{b}_{ds}' for ds in ('ml1m', 'yelp')
+    for b in ('main', 'mode_most', 'mode_fewest', 'single', 'k4', 'k16',
+              'dim32', 'dim128', 'recinp', 'recrand')
 ]
+# the RECERASER arm prints this since it starts from a random model, as the
+# original does; before that it was seeded with a scrambled WMF vector
+REC_MARK = '[RecEraser] init='
 
 
 def live_logs():
@@ -116,7 +118,9 @@ def classify_log(path):
     arms = set(ARM_HDR.findall(text)) | set(runs)
     finished = 'CONSOLE SUMMARY' in text
 
-    if name.startswith('single_request') and finished:
+    if 'RECERASER' in arms | set(re.findall(r'^(RECERASER)\s', text, re.M))             and REC_MARK not in text and (runs or finished):
+        return 'OLD', 'RECERASER seeded with the scrambled WMF vector (old code)'
+    if name.startswith('single_') and finished:
         return 'NEW', 'single-request experiment, finished'
     if 'S5 rate check' in text:
         return ('NEW', f'{len(runs)} runs, current code'

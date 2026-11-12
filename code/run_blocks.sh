@@ -2,35 +2,58 @@
 # ============================================================================
 # run_blocks.sh - chạy thí nghiệm SAFER TỪNG KHỐI một, NỀN.
 #
-#   Mỗi khối là 1 lệnh nohup độc lập, log riêng (logs/block_<tên>.out),
-#   nên có thể chạy theo thứ tự, xem/xử lý từng khối, hoặc bỏ qua khối nào
-#   thiếu. SKIP tự động: log đã có "CONSOLE SUMMARY" thì bỏ qua.
+#   7 arm chính, chạy trên CẢ 2 dataset (ml-1m, yelp2018):
+#     PROPOSED      SAFER A - partition theo signature
+#     PROPOSED_BAL  SAFER B - signature + cân bằng tải
+#     SISA          random user%K, suy luận = trung bình K model
+#     RANDOM_PERM   partition ngẫu nhiên (baseline cho delta / p-value)
+#     RANDOM_EMB    partition theo embedding ngẫu nhiên (đối chứng)
+#     RECERASER     RecEraser: partition UBP (k-means trên WMF) + attention,
+#                   model khởi tạo NGẪU NHIÊN như bản gốc, WMF chỉ để chia
+#     GLOBAL        retrain toàn bộ (trần)
+#
+#   Cấu hình gốc: K=8, emb_dim=64, sig_dim=64, xóa 1% user ngẫu nhiên,
+#   50 epoch train + 50 epoch retrain, lr 0.05, batch 512, 5 seed.
+#   Mỗi khối chỉ đổi MỘT yếu tố so với cấu hình gốc:
+#
+#     main     mode random                    main_<ds>
+#     modes    mode most / fewest             mode_most_<ds>, mode_fewest_<ds>
+#     single   xóa TỪNG user (20 request)     single_<ds>
+#     shards   K = 4 / 16   (K=8 là main)     k4_<ds>, k16_<ds>
+#     dims     emb_dim = 32 / 128 (64 là main) dim32_<ds>, dim128_<ds>
+#     recpart  [chạy sau] chỉ RECERASER, partition InP / random
+#                                             recinp_<ds>, recrand_<ds>
+#   <ds> = ml1m | yelp
+#
+#   Mọi log đo: R/NDCG @10/20/50, chất lượng partition (IntraSim, NR@k,
+#   độ lệch tải), instability, thời gian train/unlearn/parallel, số shard bị
+#   ảnh hưởng. Riêng single đo thời gian 1 request xóa.
 #
 #   Cách dùng (trên máy SSH, tại thư mục repo):
-#     bash code/run_blocks.sh torch        # kiểm tra CUDA trước khi chạy
-#     bash code/run_blocks.sh main         # R1
-#     bash code/run_blocks.sh single       # N2
-#     bash code/run_blocks.sh receraser    # N1
-#     bash code/run_blocks.sh modes        # R2
-#     bash code/run_blocks.sh dims         # R3
-#     bash code/run_blocks.sh all          # liên tiếp các khối (vẫn 1 job/lần)
-#     bash code/run_blocks.sh status       # khối nào xong / đang chạy / thiếu
-#     bash code/run_blocks.sh csv          # in bảng kết quả ra results/csv/*.csv
-#     bash code/run_blocks.sh check        # tiến độ + log cũ/mới + bảng kết quả mới nhất
+#     bash code/run_blocks.sh torch        # kiểm tra CUDA + WMF embedding
+#     bash code/run_blocks.sh main         # (tương tự: modes single shards dims recpart)
+#     bash code/run_blocks.sh all          # main modes single shards dims, rồi csv
+#     bash code/run_blocks.sh status       # tiến độ từng log
+#     bash code/run_blocks.sh csv          # xuất bảng kết quả ra results/csv/
+#     bash code/run_blocks.sh check        # tiến độ + log cũ/mới + bảng mới nhất
 #     bash code/run_blocks.sh clean        # xóa log/kết quả cũ (nén backup trước)
+#   Chỉ 1 dataset:  DATASETS="ml-1m" bash code/run_blocks.sh main
 #
-#   Chạy NGẦM (để thoát kết nối mà job vẫn chạy):
-#     nohup bash code/run_blocks.sh main > logs/block_main.out 2>&1 &
-#     tail -f logs/block_main.out
+#   Chạy NGẦM (thoát kết nối job vẫn chạy):
+#     nohup bash code/run_blocks.sh all > logs/block_all.out 2>&1 &
+#     tail -f logs/block_all.out
 # ============================================================================
 set -u
 cd "$(dirname "$0")/.."
 mkdir -p logs
 
-COMMON="--n_shards 8 --emb_dim 64 --sig_dim 64 --epochs 50 --retrain_epochs 50 \
---lr 0.05 --batch_size 512 --unlearn_ratio 0.01 --seeds 0,1,2,3,4"
-MAIN_ARMS="PROPOSED,PROPOSED_BAL,SISA,RANDOM_PERM,RANDOM_EMB,GLOBAL"
-REC_ARMS="PROPOSED,PROPOSED_BAL,SISA,RANDOM_PERM,RANDOM_EMB,RECERASER,GLOBAL"
+DATASETS="${DATASETS:-ml-1m yelp2018}"
+SEEDS="0,1,2,3,4"
+ARMS="PROPOSED,PROPOSED_BAL,SISA,RANDOM_PERM,RANDOM_EMB,RECERASER,GLOBAL"
+# cấu hình gốc; mỗi khối đè lên đúng 1 yếu tố
+K=8; DIM=64; SIG=64; MODE=random
+
+short () { case "$1" in ml-1m) echo ml1m ;; yelp2018) echo yelp ;; *) echo "$1" ;; esac; }
 
 banner () {
   echo ""
@@ -65,11 +88,26 @@ run () {
   return $rc
 }
 
+# exp_partition_quality với cấu hình gốc, đè bằng: k=<K> dim=<D> mode=<M> arms=<..> extra=<..>
+pq () {   # pq <log> <ds> [k=..] [dim=..] [mode=..] [arms=..] [-- extra args]
+  local name="$1" ds="$2"; shift 2
+  local k=$K d=$DIM m=$MODE a=$ARMS
+  while [ $# -gt 0 ] && [ "$1" != "--" ]; do
+    case "$1" in k=*) k="${1#k=}" ;; dim=*) d="${1#dim=}" ;;
+                 mode=*) m="${1#mode=}" ;; arms=*) a="${1#arms=}" ;; esac
+    shift
+  done
+  [ "${1:-}" = "--" ] && shift
+  run "$name" python code/exp_partition_quality.py --dataset "$ds" \
+    --unlearn_mode "$m" --n_shards "$k" --emb_dim "$d" --sig_dim $SIG \
+    --epochs 50 --retrain_epochs 50 --lr 0.05 --batch_size 512 \
+    --unlearn_ratio 0.01 --seeds $SEEDS --arms "$a" "$@"
+}
+
 # ------------------------------------------------------------------ preflight
 # CUDA là bắt buộc: số đo thời gian chỉ so sánh được trong cùng một máy.
-# Thiếu embedding cho RECERASER thì cũng dừng, thay vì để job crash giữa chừng.
+# RECERASER cần data/<ds>/wmf_embeddings.npz cho partition: thiếu thì dừng.
 preflight () {
-  local need_emb="${1:-0}"
   local rc=0
   PREFLIGHT_LOG="logs/_preflight.log"
   if ! python - > "$PREFLIGHT_LOG" 2>&1 <<'PY'
@@ -97,93 +135,77 @@ PY
     sed 's/^/  /' "$PREFLIGHT_LOG"
   fi
 
-  if [ "$need_emb" = "1" ]; then
-    for DS in ml-1m yelp2018; do
-      NPZ="data/${DS}/wmf_embeddings.npz"
-      if [ -f "$NPZ" ]; then
-        echo "  [ok] ${DS}: $NPZ"
-      else
-        echo "  [THIEU] ${DS}: $NPZ"; rc=1
-      fi
-    done
-    if [ "$rc" = "1" ]; then
-      echo "!! Thiếu wmf_embeddings.npz -> khong chay."
-      exit 1
+  for DS in $DATASETS; do
+    NPZ="data/${DS}/wmf_embeddings.npz"
+    if [ -f "$NPZ" ]; then
+      echo "  [ok] ${DS}: $NPZ"
+    else
+      echo "  [THIEU] ${DS}: $NPZ"; rc=1
     fi
+  done
+  if [ "$rc" = "1" ]; then
+    echo "!! Thiếu wmf_embeddings.npz -> khong chay."
+    exit 1
   fi
   echo ""
 }
 
-# ------------------------------------------------------------------ torch
-block_torch () {
-  banner "Torch / CUDA + embedding check"
-  preflight 1
-  echo "OK - co the chay cac khoi."
-}
+# ------------------------------------------------------------------ blocks
+block_torch () { banner "Torch / CUDA + embedding check"; preflight; echo "OK - co the chay cac khoi."; }
 
-# ------------------------------------------------------------------ main (R1)
 block_main () {
-  preflight 0
-  run main_ml1m  python code/exp_partition_quality.py --dataset ml-1m   \
-    --unlearn_mode random $COMMON --arms $MAIN_ARMS
-  run main_yelp  python code/exp_partition_quality.py --dataset yelp2018 \
-    --unlearn_mode random $COMMON --arms $MAIN_ARMS
+  preflight
+  for ds in $DATASETS; do pq "main_$(short $ds)" "$ds"; done
 }
 
-# ------------------------------------------------------------------ single (N2)
-block_single () {
-  preflight 1
-  run single_request_ml1m python code/exp_single_request.py --dataset ml-1m \
-    --n_shards 8 --emb_dim 64 --sig_dim 64 --epochs 50 --retrain_epochs 50 \
-    --lr 0.05 --batch_size 512 --n_users 20 --seeds 0,1,2,3,4 \
-    --arms $REC_ARMS
-}
-
-# ------------------------------------------------------------------ receraser (N1)
-block_receraser () {
-  preflight 1
-  run receraser_ml1m      python code/exp_partition_quality.py --dataset ml-1m    \
-    --unlearn_mode random $COMMON --arms RECERASER
-  run receraser_yelp      python code/exp_partition_quality.py --dataset yelp2018 \
-    --unlearn_mode random $COMMON --arms RECERASER
-  run receraser_ml1m_most python code/exp_partition_quality.py --dataset ml-1m    \
-    --unlearn_mode most   $COMMON --arms RECERASER
-  run receraser_ml1m_fewest python code/exp_partition_quality.py --dataset ml-1m  \
-    --unlearn_mode fewest $COMMON --arms RECERASER
-}
-
-# ------------------------------------------------------------------ modes (R2)
 block_modes () {
-  preflight 0
-  run mode_most_ml1m   python code/exp_partition_quality.py --dataset ml-1m \
-    --unlearn_mode most   $COMMON --arms $MAIN_ARMS
-  run mode_fewest_ml1m python code/exp_partition_quality.py --dataset ml-1m \
-    --unlearn_mode fewest $COMMON --arms $MAIN_ARMS
+  preflight
+  for ds in $DATASETS; do
+    for m in most fewest; do pq "mode_${m}_$(short $ds)" "$ds" mode=$m; done
+  done
 }
 
-# ------------------------------------------------------------------ dims (R3)
+block_single () {
+  preflight
+  for ds in $DATASETS; do
+    run "single_$(short $ds)" python code/exp_single_request.py --dataset "$ds" \
+      --n_shards $K --emb_dim $DIM --sig_dim $SIG --epochs 50 --retrain_epochs 50 \
+      --lr 0.05 --batch_size 512 --n_users 20 --seeds $SEEDS --arms "$ARMS"
+  done
+}
+
+block_shards () {
+  preflight
+  for ds in $DATASETS; do
+    for k in 4 16; do pq "k${k}_$(short $ds)" "$ds" k=$k; done
+  done
+}
+
 block_dims () {
-  preflight 0
-  for D in 32 128 256; do
-    run dim${D}_ml1m python code/exp_partition_quality.py --dataset ml-1m \
-      --unlearn_mode random --n_shards 8 --emb_dim $D --sig_dim 64 \
-      --epochs 50 --retrain_epochs 50 --lr 0.05 --batch_size 512 \
-      --unlearn_ratio 0.01 --seeds 0,1,2,3,4 --arms $MAIN_ARMS
+  preflight
+  for ds in $DATASETS; do
+    for d in 32 128; do pq "dim${d}_$(short $ds)" "$ds" dim=$d; done
+  done
+}
+
+# [chạy sau] RecEraser với partition khác: cùng cấu hình gốc, chỉ arm RECERASER.
+# So với RECERASER (UBP) trong main_<ds> để tách phần đóng góp của partition.
+block_recpart () {
+  preflight
+  for ds in $DATASETS; do
+    pq "recinp_$(short $ds)"  "$ds" arms=RECERASER -- --receraser_partition inp
+    pq "recrand_$(short $ds)" "$ds" arms=RECERASER -- --receraser_partition random
   done
 }
 
 # ------------------------------------------------------------------ status
-ALL_LOGS="main_ml1m main_yelp single_request_ml1m receraser_ml1m receraser_yelp
-receraser_ml1m_most receraser_ml1m_fewest mode_most_ml1m mode_fewest_ml1m
-dim32_ml1m dim128_ml1m dim256_ml1m"
-
 block_status () {
   banner "STATUS"
   # DONE / RUNNING (co job dang ghi) / FAILED (dung giua chung) / OLD / MISSING
   python code/clean_old_results.py --status
   echo ""
   echo "  Job dang chay:"
-  ps -eo pid,etime,args | grep -E "exp_partition_quality|exp_single_request|run_blocks\.sh (main|single|receraser|modes|dims|all)" \
+  ps -eo pid,etime,args | grep -E "exp_partition_quality|exp_single_request|run_blocks\.sh (main|modes|single|shards|dims|recpart|all)" \
     | grep -v grep | sed 's/^/    /' || echo "    (khong co job nao)"
 }
 
@@ -192,8 +214,8 @@ block_status () {
 #   <khoi>_raw.csv    1 dòng / (log, arm, seed)
 #   <khoi>_mean.csv   1 dòng / (log, arm): mean, std, delta vs RANDOM_PERM, p
 #   <khoi>_tables.txt bảng đầy đủ dạng text (utility, partition, instability, cost, paired)
-#   all_*.csv         gộp mọi log partition-quality
-#   single_request.csv thời gian 1 request xóa, mỗi arm
+#   all_*.csv         gộp mọi log của exp_partition_quality
+#   single.csv        thời gian 1 request xóa, mỗi arm, mỗi dataset
 # Log chưa xong vẫn được đọc phần đã chạy; cột n_seeds cho biết đủ 5 seed chưa.
 csv_group () {   # csv_group <ten> <log1> [log2 ...]
   local name="$1"; shift
@@ -214,28 +236,38 @@ csv_group () {   # csv_group <ten> <log1> [log2 ...]
 block_csv () {
   banner "EXPORT CSV -> results/csv/"
   mkdir -p results/csv
+  local all_ds="ml1m yelp"
+  local L_main="" L_modes="" L_shards="" L_dims="" L_rec="" L_single=""
+  for s in $all_ds; do
+    L_main="$L_main main_$s"
+    L_modes="$L_modes mode_most_$s mode_fewest_$s"
+    L_shards="$L_shards k4_$s main_$s k16_$s"      # K=8 là main
+    L_dims="$L_dims dim32_$s main_$s dim128_$s"    # dim=64 là main
+    L_rec="$L_rec main_$s recinp_$s recrand_$s"    # RECERASER UBP nằm trong main
+    L_single="$L_single logs/single_$s.out"
+  done
+  csv_group main    $L_main
+  csv_group modes   $L_main $L_modes
+  csv_group shards  $L_shards
+  csv_group dims    $L_dims
+  csv_group recpart $L_rec
+  csv_group all     $L_main $L_modes k4_ml1m k16_ml1m k4_yelp k16_yelp \
+                    dim32_ml1m dim128_ml1m dim32_yelp dim128_yelp \
+                    recinp_ml1m recrand_ml1m recinp_yelp recrand_yelp
 
-  csv_group main      main_ml1m main_yelp
-  csv_group receraser receraser_ml1m receraser_yelp receraser_ml1m_most receraser_ml1m_fewest
-  csv_group modes     mode_most_ml1m mode_fewest_ml1m
-  csv_group dims      dim32_ml1m dim128_ml1m dim256_ml1m
-  csv_group all       main_ml1m main_yelp receraser_ml1m receraser_yelp \
-                      receraser_ml1m_most receraser_ml1m_fewest \
-                      mode_most_ml1m mode_fewest_ml1m dim32_ml1m dim128_ml1m dim256_ml1m
-
-  if [ -f logs/single_request_ml1m.out ]; then
-    python code/export_single_request_csv.py logs/single_request_ml1m.out \
-      --out results/csv/single_request.csv | sed 's/^/  /'
+  local have=()
+  for f in $L_single; do [ -f "$f" ] && is_new "$f" && have+=("$f"); done
+  if [ ${#have[@]} -gt 0 ]; then
+    python code/export_single_request_csv.py "${have[@]}" --out results/csv/single.csv | sed 's/^/  /'
   else
-    echo "  [skip] single_request - chua co log"
+    echo "  [skip] single - chua co log"
   fi
-
   echo ""
   ls -la results/csv
 }
 
 # ------------------------------------------------------------------ check
-# Kiểm tra log + kết quả mới nhất: tiến độ 12 log, log nào CŨ / MỚI,
+# Kiểm tra log + kết quả mới nhất: tiến độ từng log, log nào CŨ / MỚI,
 # rồi xuất lại CSV và in bảng kết quả gọn. Không train, không xóa gì.
 block_check () {
   block_status
@@ -261,17 +293,18 @@ block_clean () {
   echo "Da xuat lai results/csv/ tu cac log con lai."
 }
 
-case "${1:-main}" in
-  torch)     block_torch ;;
-  main)      block_main ;;
-  single)    block_single ;;
-  receraser) block_receraser ;;
-  modes)     block_modes ;;
-  dims)      block_dims ;;
-  all)       block_main; block_single; block_receraser; block_modes; block_dims; block_csv ;;
-  status)    block_status ;;
-  csv)       block_csv ;;
-  check)     block_check ;;
-  clean)     block_clean ;;
-  *) echo "dùng: bash code/run_blocks.sh <torch|main|single|receraser|modes|dims|all|status|csv|check|clean>"; exit 1 ;;
+case "${1:-}" in
+  torch)   block_torch ;;
+  main)    block_main ;;
+  modes)   block_modes ;;
+  single)  block_single ;;
+  shards)  block_shards ;;
+  dims)    block_dims ;;
+  recpart) block_recpart ;;
+  all)     block_main; block_modes; block_single; block_shards; block_dims; block_csv ;;
+  status)  block_status ;;
+  csv)     block_csv ;;
+  check)   block_check ;;
+  clean)   block_clean ;;
+  *) echo "dùng: bash code/run_blocks.sh <torch|main|modes|single|shards|dims|recpart|all|status|csv|check|clean>"; exit 1 ;;
 esac
