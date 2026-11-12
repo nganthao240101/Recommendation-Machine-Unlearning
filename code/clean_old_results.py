@@ -56,11 +56,14 @@ EXPERIMENT_LOGS = (
     + [f'single_{d}' for d in _DS]
     + [f'k{k}_{d}' for d in _DS for k in (4, 16)]
     + [f'dim{x}_{d}' for d in _DS for x in (32, 128)]
-    + [f'rec{p}_{d}' for d in _DS for p in ('inp', 'rand')]
+    + [f'recrand_{d}' for d in _DS]
 )
 # the RECERASER arm prints this since it starts from a random model, as the
 # original does; before that it was seeded with a scrambled WMF vector
 REC_MARK = '[RecEraser] init='
+# printed by the UBP partition since it follows the authors' balanced k-means
+# (user-count cap); the earlier port balanced interaction counts instead
+UBP_MARK = 'empty-shard restart'
 
 
 def live_logs():
@@ -125,6 +128,8 @@ def classify_log(path):
 
     if 'RECERASER' in arms | set(re.findall(r'^(RECERASER)\s', text, re.M))             and REC_MARK not in text and (runs or finished):
         return 'OLD', 'RECERASER seeded with the scrambled WMF vector (old code)'
+    if 'RECERASER' in arms and not name.startswith('recrand')             and UBP_MARK not in text and (runs or finished):
+        return 'OLD', 'RECERASER with the earlier UBP port (interaction-balanced)'
     if name.startswith('single_') and finished:
         return 'NEW', 'single-request experiment, finished'
     if 'S5 rate check' in text:

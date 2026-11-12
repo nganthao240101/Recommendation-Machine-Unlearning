@@ -21,8 +21,9 @@
 #     single   xóa TỪNG user (20 request)     single_<ds>
 #     shards   K = 4 / 16   (K=8 là main)     k4_<ds>, k16_<ds>
 #     dims     emb_dim = 32 / 128 (64 là main) dim32_<ds>, dim128_<ds>
-#     recpart  [chạy sau] chỉ RECERASER, partition InP / random
-#                                             recinp_<ds>, recrand_<ds>
+#     recpart  [chạy sau] chỉ RECERASER, partition random  recrand_<ds>
+#              (InP chưa có: InP của RecEraser chia TƯƠNG TÁC, pipeline này chia
+#               theo user - xem exp_receraser_arm.py, kind='inp')
 #   <ds> = ml1m | yelp
 #
 #   Mọi log đo: R/NDCG @10/20/50, chất lượng partition (IntraSim, NR@k,
@@ -228,12 +229,13 @@ block_dims () {
   done
 }
 
-# [chạy sau] RecEraser với partition khác: cùng cấu hình gốc, chỉ arm RECERASER.
-# So với RECERASER (UBP) trong main_<ds> để tách phần đóng góp của partition.
+# [chạy sau] RecEraser với partition ngẫu nhiên: cùng cấu hình gốc, chỉ arm
+# RECERASER. So với RECERASER (UBP) trong main_<ds> để tách phần đóng góp của
+# partition. InP không chạy ở đây: --receraser_partition inp chỉ là bản thay
+# thế theo user, không phải InP (chia tương tác) của RecEraser.
 block_recpart () {
   preflight
   for ds in $DATASETS; do
-    pq "recinp_$(short $ds)"  "$ds" arms=RECERASER -- --receraser_partition inp
     pq "recrand_$(short $ds)" "$ds" arms=RECERASER -- --receraser_partition random
   done
 }
@@ -283,7 +285,7 @@ block_csv () {
     L_modes="$L_modes mode_most_$s mode_fewest_$s"
     L_shards="$L_shards k4_$s main_$s k16_$s"      # K=8 là main
     L_dims="$L_dims dim32_$s main_$s dim128_$s"    # dim=64 là main
-    L_rec="$L_rec main_$s recinp_$s recrand_$s"    # RECERASER UBP nằm trong main
+    L_rec="$L_rec main_$s recrand_$s"              # RECERASER UBP nằm trong main
     L_single="$L_single logs/single_$s.out"
   done
   csv_group main    $L_main
@@ -293,7 +295,7 @@ block_csv () {
   csv_group recpart $L_rec
   csv_group all     $L_main $L_modes k4_ml1m k16_ml1m k4_yelp k16_yelp \
                     dim32_ml1m dim128_ml1m dim32_yelp dim128_yelp \
-                    recinp_ml1m recrand_ml1m recinp_yelp recrand_yelp
+                    recrand_ml1m recrand_yelp
 
   local have=()
   for f in $L_single; do [ -f "$f" ] && is_new "$f" && have+=("$f"); done

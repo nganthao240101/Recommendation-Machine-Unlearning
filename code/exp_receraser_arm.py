@@ -47,26 +47,40 @@ def set_all_seeds(seed):
 # partition: UBP over pretrained WMF user embeddings
 # ----------------------------------------------------------------------------
 def receraser_ubp_partition(train_data, n_users, n_items, n_shards, seed,
-                            data_root=None, kind='ubp'):
-    """UBP partition exactly as in RecEraser: k-means over user embeddings,
-    balanced by interaction count.
+                            data_root=None, kind='ubp', n_iter=50):
+    """The partition of the RECERASER arm.
 
-    kind='ubp'  : k-means over the user embedding only (user-based partition)
-    kind='inp'  : k-means over the user embedding concatenated with the
-                  item-embedding centroid of the user's items
+    kind='ubp'   : RecEraser's User-based Balanced Partition, as in the
+                   authors' utility/data_partition.py (data_partition_2):
+                   balanced k-means over the pretrained user embeddings.
+                   K random users are the first centroids. Each round scores
+                   every (user, centroid) pair by squared Euclidean distance,
+                   walks the pairs from the closest and puts a user in that
+                   shard unless it already holds 1.2 * n / K users, then moves
+                   each centroid to the mean of its users. n_iter rounds
+                   (the authors' part_T = 50), stopping early once no user
+                   changes shard. Two departures from that file, both
+                   deliberate: the centroids come from a seeded generator, so
+                   a seed gives the same partition, and the centroid is the
+                   mean VECTOR of its users - the file takes np.mean without an
+                   axis, which collapses each centroid to one number.
     kind='random': a random permutation of the users split into K equal
-                  parts, the control that isolates what the partition
-                  contributes to RecEraser
+                   parts, the control that isolates what the partition
+                   contributes to RecEraser.
+    kind='inp'   : NOT RecEraser's InP. That partition assigns INTERACTIONS,
+                   so one user's interactions spread over several shards, and
+                   this pipeline keys every shard on users. What runs here is
+                   a user-level stand-in (k-means over the user vector joined
+                   with the mean of its items' vectors). Kept for reference;
+                   do not report it as InP.
 
     Returns user_to_shard (int32 array of length n_users).
     """
+    rng = np.random.RandomState(seed)
     if kind == 'random':
-        rng = np.random.RandomState(seed)
         umap = np.empty(n_users, dtype=np.int32)
         umap[rng.permutation(n_users)] = np.arange(n_users) % n_shards
         return umap
-
-    from sklearn.cluster import KMeans
 
     if data_root is None:
         data_root = os.path.join(os.path.dirname(PROJ), 'data')
@@ -75,65 +89,96 @@ def receraser_ubp_partition(train_data, n_users, n_items, n_shards, seed,
         raise FileNotFoundError(
             f'WMF embeddings not found at {emb_path}. Train them first with '
             f'code/train_wmf_pretrain.py --dataset <ds>')
-
     data = np.load(emb_path)
-    user_emb = data['user_embeddings'][:n_users]
-    item_emb = data['item_embeddings']
-    user_emb = user_emb / np.maximum(np.linalg.norm(user_emb, axis=1, keepdims=True), 1e-10)
+    user_emb = np.asarray(data['user_embeddings'][:n_users], dtype=np.float64)
 
     if kind == 'inp':
-        prof = np.zeros((n_users, item_emb.shape[1]), dtype=np.float32)
-        for uid, its in train_data.items():
-            if uid >= n_users:
-                continue
+        return _user_level_inp_standin(train_data, n_users, n_shards, seed,
+                                       user_emb, data['item_embeddings'])
+    if kind != 'ubp':
+        raise ValueError(f'unknown RecEraser partition {kind}')
+
+    # the users the authors partition: those with training data
+    users = np.array(sorted(u for u in train_data if u < n_users), dtype=np.int64)
+    X = user_emb[users]
+    n, k = len(users), n_shards
+    cap = 1.2 * n / k
+    cent = X[rng.choice(n, k, replace=False)].copy()
+
+    def assign_round(cent):
+        dist = ((X[:, None, :] - cent[None, :, :]) ** 2).sum(-1)      # (n, k)
+        order = np.argsort(dist, axis=None, kind='stable')
+        new = np.full(n, -1, dtype=np.int64)
+        counts = np.zeros(k, dtype=np.int64)
+        left = n
+        for idx in order:
+            u, j = divmod(int(idx), k)
+            if new[u] < 0 and counts[j] < cap:
+                new[u] = j
+                counts[j] += 1
+                left -= 1
+                if left == 0:
+                    break
+        return new, dist
+
+    assign = np.full(n, -1, dtype=np.int64)
+    reseeded = 0
+    for it in range(n_iter):
+        new, dist = assign_round(cent)
+        changed = int((new != assign).sum())
+        assign = new
+        empty = []
+        for j in range(k):
+            members = X[assign == j]
+            if len(members):
+                cent[j] = members.mean(axis=0)
+            else:
+                empty.append(j)
+        # A shard that ends a round with no user would train on nothing. As in
+        # standard k-means, its centroid restarts at the user farthest from
+        # its own centroid, so the next round fills it. (The authors' file
+        # takes the mean of an empty list there, which is NaN.)
+        if empty:
+            own = dist[np.arange(n), assign]
+            for j, u in zip(empty, np.argsort(-own)[:len(empty)]):
+                cent[j] = X[u]
+            reseeded += len(empty)
+            changed = max(changed, 1)
+        if changed == 0:
+            break
+    if (np.bincount(assign, minlength=k) == 0).any():
+        assign, _ = assign_round(cent)
+
+    umap = np.empty(n_users, dtype=np.int32)
+    # users with no training data never enter a shard's training; route them
+    # to the nearest centroid so every id has a shard
+    umap[:] = ((user_emb[:, None, :] - cent[None, :, :]) ** 2).sum(-1).argmin(1)
+    umap[users] = assign
+    counts = np.bincount(assign, minlength=k)
+    loads = np.zeros(k)
+    for u, j in zip(users, assign):
+        loads[j] += len(train_data[int(u)])
+    print(f"    [RecEraser] UBP partition: {it + 1} round(s), cap={cap:.0f} users, "
+          f"{reseeded} empty-shard restart(s), "
+          f"users min={counts.min()} max={counts.max()} "
+          f"inter_cv={loads.std() / (loads.mean() + 1e-10):.3f}")
+    return umap
+
+
+def _user_level_inp_standin(train_data, n_users, n_shards, seed, user_emb, item_emb):
+    """See kind='inp' above: a user-level stand-in, not RecEraser's InP."""
+    from sklearn.cluster import KMeans
+    u = user_emb / np.maximum(np.linalg.norm(user_emb, axis=1, keepdims=True), 1e-10)
+    prof = np.zeros((n_users, item_emb.shape[1]), dtype=np.float64)
+    for uid, its in train_data.items():
+        if uid < n_users:
             idx = [i for i in its if i < item_emb.shape[0]]
             if idx:
                 prof[uid] = item_emb[idx].mean(axis=0)
-        prof = prof / np.maximum(np.linalg.norm(prof, axis=1, keepdims=True), 1e-10)
-        feats = np.hstack([user_emb, prof])
-    else:
-        feats = user_emb
-
-    # RecEraser balances the shards by INTERACTION count, not by user count.
-    km = KMeans(n_clusters=n_shards, n_init=10, random_state=seed).fit(feats)
-    centers = km.cluster_centers_
-    labels = km.labels_
-
-    loads = np.zeros(n_shards, dtype=np.int64)
-    for u, its in train_data.items():
-        if u < n_users:
-            loads[labels[u]] += len(its)
-
-    # Greedy rebalancing: move the users of the heaviest shard to the
-    # lightest shard until the loads are close enough. This is the balancing
-    # step of RecEraser's UBP.
-    umap = labels.astype(np.int32).copy()
-    order = np.argsort(-loads)
-    for src in order:
-        while loads[src] > 0:
-            dst = int(np.argmin(loads))
-            if dst == src or loads[dst] == 0:
-                break
-            # move the users of the heaviest shard with the smallest load
-            users_in_src = np.where(umap == src)[0]
-            if len(users_in_src) == 0:
-                break
-            # pick the user whose removal balances best
-            best_u, best_delta = None, None
-            for u in users_in_src:
-                w = len(train_data.get(int(u), []))
-                delta = abs(loads[src] - w) - abs(loads[dst] + w)
-                if best_delta is None or delta < best_delta:
-                    best_u, best_delta = int(u), delta
-            umap[best_u] = dst
-            loads[src] -= len(train_data.get(best_u, []))
-            loads[dst] += len(train_data.get(best_u, []))
-
-    counts = np.bincount(umap, minlength=n_shards)
-    print(f"    [RecEraser] {kind.upper()} partition: users min={counts.min()} "
-          f"max={counts.max()} mean={counts.mean():.1f} "
-          f"inter_cv={loads.std()/(loads.mean()+1e-10):.3f}")
-    return umap
+    prof = prof / np.maximum(np.linalg.norm(prof, axis=1, keepdims=True), 1e-10)
+    km = KMeans(n_clusters=n_shards, n_init=10, random_state=seed).fit(np.hstack([u, prof]))
+    print("    [RecEraser] user-level InP STAND-IN (not RecEraser's interaction InP)")
+    return km.labels_.astype(np.int32)
 
 
 # ----------------------------------------------------------------------------
