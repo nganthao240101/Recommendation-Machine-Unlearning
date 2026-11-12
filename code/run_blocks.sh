@@ -179,27 +179,12 @@ dim32_ml1m dim128_ml1m dim256_ml1m"
 
 block_status () {
   banner "STATUS"
-  local done=0 run=0 miss=0
-  for n in $ALL_LOGS; do
-    f="logs/${n}.out"
-    if [ ! -f "$f" ]; then
-      printf '  %-24s MISSING\n' "$n"; miss=$((miss+1))
-    elif grep -q "CONSOLE SUMMARY" "$f" && ! is_new "$f"; then
-      printf '  %-24s OLD      (log code cu - khoi se chay lai)\n' "$n"; miss=$((miss+1))
-    elif grep -q "CONSOLE SUMMARY" "$f"; then
-      printf '  %-24s DONE\n' "$n"; done=$((done+1))
-    elif grep -q "Traceback" "$f"; then
-      printf '  %-24s CRASHED  (xem: tail -30 %s)\n' "$n" "$f"; run=$((run+1))
-    else
-      printf '  %-24s RUNNING  | %s\n' "$n" "$(grep -E '^--- ARM' "$f" | tail -1)"
-      run=$((run+1))
-    fi
-  done
+  # DONE / RUNNING (co job dang ghi) / FAILED (dung giua chung) / OLD / MISSING
+  python code/clean_old_results.py --status
   echo ""
-  echo "  done=$done  running/crashed=$run  missing/old=$miss  (tong 12)"
-  echo ""
-  ps -eo pid,etime,cmd | grep -E "run_blocks|exp_partition_quality|exp_single_request" \
-    | grep -v grep || echo "  (khong co job nao dang chay)"
+  echo "  Job dang chay:"
+  ps -eo pid,etime,args | grep -E "exp_partition_quality|exp_single_request|run_blocks\.sh (main|single|receraser|modes|dims|all)" \
+    | grep -v grep | sed 's/^/    /' || echo "    (khong co job nao)"
 }
 
 # ------------------------------------------------------------------ csv
