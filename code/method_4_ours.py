@@ -400,7 +400,15 @@ class ShardModels:
 
 def train_shard_model(model, shard_data, n_items, device,
                      batch_size=512, lr=0.05, n_epochs=100):
-    """Train model cho một shard"""
+    """Train model cho một shard.
+
+    Returns (final_loss, elapsed_seconds, n_samples) so a caller can
+    report per-shard cost and check that the sum of the per-shard times
+    equals the reported unlearn_time (spec S5: a shard with the same
+    wall time as the global retrain would mean the loop is iterating
+    over the whole dataset).
+    """
+    t0 = time.time()
     optimizer = torch.optim.Adagrad(model.parameters(), lr=lr, initial_accumulator_value=1e-8)
 
     samples = []
@@ -412,7 +420,7 @@ def train_shard_model(model, shard_data, n_items, device,
             samples.append((user, pos_item, neg_item))
 
     if not samples:
-        return 0.0
+        return 0.0, time.time() - t0, 0
 
     for epoch in range(n_epochs):
         random.shuffle(samples)
@@ -442,7 +450,7 @@ def train_shard_model(model, shard_data, n_items, device,
             avg_loss = total_loss / n_batches
             print(f"        Epoch {epoch+1}: loss={avg_loss:.4f}")
 
-    return total_loss
+    return total_loss, time.time() - t0, len(samples)
 
 
 # ============================================================================
