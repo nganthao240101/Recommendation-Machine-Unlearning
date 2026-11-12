@@ -45,6 +45,13 @@ RE_COST = {
     'train_time':      re.compile(r'train=([\d.]+)s'),
     'unlearn_time':    re.compile(r'unlearn=([\d.]+)s'),
     'affected_shards': re.compile(r'shards=(\d+)'),
+    # written by the newer runs; absent from the older logs, which then
+    # simply have no value for it
+    'parallel_time':   re.compile(r'parallel=([\d.]+)s'),
+}
+RE_INSTABILITY = {
+    'instability_label':   re.compile(r'label-matched=([\d.]+)%'),
+    'instability_pairwise': re.compile(r'pairwise=([\d.]+)%'),
 }
 RE_QUAL = {
     'intra_similarity': re.compile(r'IntraSim=([\d.]+)'),
@@ -91,6 +98,13 @@ def parse_log(path):
             pending = rec
             continue
 
+        if pending is not None and 'cost:' in ln:
+            # the newer runs print the cost on its own line
+            for k, rx in RE_COST.items():
+                mm = rx.search(ln)
+                if mm:
+                    pending[k] = float(mm.group(1))
+            continue
         if pending is not None and 'partition quality' in ln:
             for k, rx in RE_QUAL.items():
                 mm = rx.search(ln)
@@ -102,6 +116,17 @@ def parse_log(path):
                 mm = rx.search(ln)
                 if mm:
                     pending[k] = float(mm.group(1))
+            continue
+        if pending is not None and 'instability:' in ln:
+            for k, rx in RE_INSTABILITY.items():
+                mm = rx.search(ln)
+                if mm:
+                    pending[k] = float(mm.group(1))
+            continue
+        if pending is not None and 'per-shard retrain' in ln:
+            # the per-shard breakdown: keep it so the sum of the shard times
+            # can be checked against the reported unlearn time
+            pending['per_shard_detail'] = ln.strip()
             pending = None
             continue
         pending = None
@@ -203,9 +228,9 @@ def latex_table(recs, log_label, title, proposed, baseline, prec=4):
     out.append(f'  \\caption{{Unlearning cost for {title}}}  '
                r'  % affected shards is how many shard models are retrained')
     out.append(r'  \small')
-    out.append(r'  \begin{tabular}{l c c c}')
+    out.append(r'  \begin{tabular}{l c c c c}')
     out.append(r'    \toprule')
-    out.append(r'    arm & train(s) & unlearn(s) & affected shards \\')
+    out.append(r'    arm & train(s) & unlearn(s) & parallel(s) & affected shards \\')
     out.append(r'    \midrule')
     for a in arms:
         rs = [r for r in recs if r['arm'] == a]
@@ -213,7 +238,31 @@ def latex_table(recs, log_label, title, proposed, baseline, prec=4):
             f'    {a} & '
             f'{_mean_std([r.get("train_time") for r in rs], prec=0)} & '
             f'{_mean_std([r.get("unlearn_time") for r in rs], prec=0)} & '
+            f'{_mean_std([r.get("parallel_time") for r in rs], prec=0)} & '
             f'{_mean_std([r.get("affected_shards") for r in rs], prec=0)} \\'
+        )
+    out.append(r'    \bottomrule')
+    out.append(r'  \end{tabular}')
+    out.append(r'\end{table}')
+
+    # instability table: the share of retained users whose shard changed after
+    # the partition was re-run on the remaining data
+    out.append('')
+    out.append(r'\begin{table}[t]')
+    out.append(r'  \centering')
+    out.append(f'  \\caption{{Instability rate for {title}}}  '
+               r'  % label-matched: shard labels aligned by Hungarian matching')
+    out.append(r'  \small')
+    out.append(r'  \begin{tabular}{l c c}')
+    out.append(r'    \toprule')
+    out.append(r'    arm & label-matched (\%) & pairwise (\%) \\')
+    out.append(r'    \midrule')
+    for a in arms:
+        rs = [r for r in recs if r['arm'] == a]
+        out.append(
+            f'    {a} & '
+            f'{_mean_std([r.get("instability_label") for r in rs], prec=2)} & '
+            f'{_mean_std([r.get("instability_pairwise") for r in rs], prec=2)} \\'
         )
     out.append(r'    \bottomrule')
     out.append(r'  \end{tabular}')
@@ -235,9 +284,10 @@ def latex_table(recs, log_label, title, proposed, baseline, prec=4):
 RAW_COLS = [
     'seed', 'arm',
     'recall_10', 'ndcg_10', 'recall_20', 'ndcg_20', 'recall_50', 'ndcg_50',
-    'train_time', 'unlearn_time', 'affected_shards',
+    'train_time', 'unlearn_time', 'parallel_time', 'affected_shards',
     'intra_similarity', 'nr_10', 'nr_20', 'nr_50',
     'user_load_cv', 'interaction_load_cv', 'max_mean_ratio',
+    'instability_label', 'instability_pairwise',
 ]
 
 
@@ -269,7 +319,11 @@ def write_csvs(all_out, base, proposed='PROPOSED', baseline='RANDOM_PERM'):
             rs = [r for r in recs if r['arm'] == a]
             nr = len(rs)
             row = {'log': short, 'arm': a, 'n_seeds': nr, 'n_runs': nr}
-            for c in RAW_COLS[2:10]:          # util + cost, mean +- std
+            # util + cost: mean +- std. The slice stops before the
+            # co-location block; a new cost column (parallel_time) or a new
+            # util column belongs here.
+            cost_end = RAW_COLS.index('intra_similarity')
+            for c in RAW_COLS[2:cost_end]:
                 vals = [r[c] for r in rs if r.get(c) is not None]
                 if vals:
                     m = st.mean(vals)
@@ -279,7 +333,8 @@ def write_csvs(all_out, base, proposed='PROPOSED', baseline='RANDOM_PERM'):
                 else:
                     row[c + '_mean'] = ''
                     row[c + '_std'] = ''
-            for c in RAW_COLS[10:]:           # co-location + load, mean only
+            # co-location + load + instability: mean only
+            for c in RAW_COLS[cost_end:]:
                 vals = [r[c] for r in rs if r.get(c) is not None]
                 row[c] = f'{st.mean(vals):.4f}' if vals else ''
             # paired delta vs the baseline
@@ -380,20 +435,36 @@ def main():
                   f'{raw([r.get("interaction_load_cv") for r in rs], 12):>12}'
                   f'{raw([r.get("max_mean_ratio") for r in rs], 12):>12}')
 
+        # ---- instability ----
+        # label-matched: the share of retained users whose shard changed after
+        # the partition was re-run on the remaining data. pairwise: the share
+        # of retained user pairs whose co-location flipped (label-invariant).
+        print(f'\n{"arm":<16}{"instab label%":>16}{"instab pairwise%":>18}')
+        print('-' * 116)
+        for a in arms:
+            rs = [r for r in recs if r['arm'] == a]
+            print(f'{a:<16}'
+                  f'{ms([r.get("instability_label") for r in rs], 16, 2):>16}'
+                  f'{ms([r.get("instability_pairwise") for r in rs], 18, 2):>18}')
+
         # ---- cost ----
-        print(f'\n{"arm":<16}{"train(s)":>17}{"unlearn(s)":>17}{"affected shards":>18}')
+        print(f'\n{"arm":<16}{"train(s)":>17}{"unlearn(s)":>17}{"parallel(s)":>17}'
+              f'{"affected shards":>18}')
         print('-' * 116)
         for a in arms:
             rs = [r for r in recs if r['arm'] == a]
             print(f'{a:<16}'
                   f'{ms([r.get("train_time") for r in rs], 17, 1):>17}'
                   f'{ms([r.get("unlearn_time") for r in rs], 17, 1):>17}'
+                  f'{ms([r.get("parallel_time") for r in rs], 17, 1):>17}'
                   f'{ms([r.get("affected_shards") for r in rs], 18, 2):>18}')
 
         # ---- paired comparison ----
         print(f'\nPAIRED: {args.proposed} vs {args.baseline}')
         for key in ('recall_10', 'ndcg_10', 'recall_20', 'ndcg_20',
-                    'recall_50', 'ndcg_50', 'unlearn_time', 'affected_shards'):
+                    'recall_50', 'ndcg_50', 'unlearn_time', 'parallel_time',
+                    'affected_shards', 'instability_label',
+                    'instability_pairwise'):
             pr = paired_test(recs, args.proposed, args.baseline, key)
             if not pr:
                 continue
