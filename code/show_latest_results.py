@@ -1,81 +1,222 @@
 """
-Print the latest results in one compact view, from the CSVs that
-`bash code/run_blocks.sh csv` writes to results/csv/.
+Print the results of the run_blocks.sh experiments straight from the logs.
 
-  python code/show_latest_results.py
+The finished experiments come first, in the order they finished, each with
+its full tables. The ones that are not finished follow, with a notice:
+how far a running one has got, which ones have not started, and the last
+line of the ones that stopped.
+
+  python code/show_latest_results.py            # everything
+  python code/show_latest_results.py --brief    # R@10 / NDCG@10 / time only
 """
 
-import csv
+import argparse
 import os
+import re
+import statistics as st
+import sys
+import time
 
-ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-CSV_DIR = os.path.join(ROOT, 'results', 'csv')
-GROUPS = ('main', 'modes', 'shards', 'dims', 'recpart')
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+import clean_old_results as cor                       # noqa: E402
+from summarize_partition_logs import parse_log, paired_test   # noqa: E402
+from export_single_request_csv import parse as parse_single   # noqa: E402
+
+ROOT = cor.ROOT
+LOGS = cor.LOGS
+BASELINE = 'RANDOM_PERM'
+ARM_ORDER = ['PROPOSED', 'PROPOSED_BAL', 'SISA', 'RANDOM_PERM', 'RANDOM_EMB',
+             'RECERASER', 'GLOBAL']
+N_SEEDS = 5
+SINGLE_DONE = re.compile(r'^\s*\[([A-Z_]+)\]\s+single-request unlearn time', re.M)
 
 
-def pm(row, key, prec=4):
-    m, s = row.get(key + '_mean', ''), row.get(key + '_std', '')
-    if m == '':
+def describe(name):
+    """log name -> (dataset, setting, number of arms)"""
+    stem, ds = name.rsplit('_', 1)
+    ds = {'ml1m': 'ml-1m', 'yelp': 'yelp2018'}.get(ds, ds)
+    base = {'k': 8, 'dim': 64, 'mode': 'random'}
+    n_arms = 7
+    if stem == 'main':
+        pass
+    elif stem.startswith('mode_'):
+        base['mode'] = stem[5:]
+    elif stem == 'single':
+        base['mode'] = 'single request (20 users)'
+    elif stem.startswith('k'):
+        base['k'] = int(stem[1:])
+    elif stem.startswith('dim'):
+        base['dim'] = int(stem[3:])
+    elif stem.startswith('rec'):
+        base['partition'] = {'recinp': 'InP', 'recrand': 'random'}[stem]
+        n_arms = 1
+    setting = '  '.join(f'{k}={v}' for k, v in base.items())
+    return ds, setting, n_arms
+
+
+def ms(vals, prec=4):
+    vals = [v for v in vals if v is not None]
+    if not vals:
         return '-'
-    return f'{float(m):.{prec}f}+-{float(s):.{prec}f}' if s != '' else f'{float(m):.{prec}f}'
+    sd = st.stdev(vals) if len(vals) > 1 else 0.0
+    return f'{st.mean(vals):.{prec}f}+-{sd:.{prec}f}'
 
 
-def val(row, key, prec=2):
-    v = row.get(key, '')
-    return f'{float(v):.{prec}f}' if v not in ('', None) else '-'
+def mean(vals, prec=2):
+    vals = [v for v in vals if v is not None]
+    return f'{st.mean(vals):.{prec}f}' if vals else '-'
+
+
+def ago(t):
+    s = int(time.time() - t)
+    if s < 90:
+        return f'{s}s'
+    if s < 5400:
+        return f'{s // 60}m'
+    return f'{s // 3600}h{(s % 3600) // 60:02d}m'
+
+
+def arms_of(recs):
+    present = {r['arm'] for r in recs}
+    return [a for a in ARM_ORDER if a in present] + sorted(present - set(ARM_ORDER))
+
+
+def print_pq(recs, brief):
+    arms = arms_of(recs)
+    if brief:
+        print(f'  {"arm":<14}{"n":>3}{"R@10":>17}{"NDCG@10":>17}{"unlearn(s)":>15}'
+              f'{"dR@10 vs RP":>13}{"p":>8}')
+        for a in arms:
+            rs = [r for r in recs if r['arm'] == a]
+            pr = paired_test(recs, a, BASELINE, 'recall_10') if a != BASELINE else None
+            d = f'{pr["mean_delta"]:+.4f}' if pr else '-'
+            p = f'{pr["p"]:.4f}' if pr and pr['p'] == pr['p'] else '-'
+            print(f'  {a:<14}{len(rs):>3}{ms([r.get("recall_10") for r in rs]):>17}'
+                  f'{ms([r.get("ndcg_10") for r in rs]):>17}'
+                  f'{ms([r.get("unlearn_time") for r in rs], 1):>15}{d:>13}{p:>8}')
+        return
+
+    print(f'  -- utility (mean+-std over seeds)')
+    print(f'  {"arm":<14}{"n":>3}{"R@10":>16}{"NDCG@10":>16}{"R@20":>16}'
+          f'{"NDCG@20":>16}{"R@50":>16}{"NDCG@50":>16}')
+    for a in arms:
+        rs = [r for r in recs if r['arm'] == a]
+        print(f'  {a:<14}{len(rs):>3}' + ''.join(
+            f'{ms([r.get(k) for r in rs]):>16}'
+            for k in ('recall_10', 'ndcg_10', 'recall_20', 'ndcg_20',
+                      'recall_50', 'ndcg_50')))
+
+    print(f'  -- partition quality / load / instability (mean)')
+    print(f'  {"arm":<14}{"IntraSim":>10}{"NR@10":>8}{"NR@20":>8}{"NR@50":>8}'
+          f'{"user_cv":>9}{"inter_cv":>9}{"max/mean":>9}{"instab%":>9}{"pair%":>8}')
+    for a in arms:
+        rs = [r for r in recs if r['arm'] == a]
+        g = lambda k, p=4: mean([r.get(k) for r in rs], p)
+        print(f'  {a:<14}{g("intra_similarity"):>10}{g("nr_10", 3):>8}'
+              f'{g("nr_20", 3):>8}{g("nr_50", 3):>8}{g("user_load_cv", 3):>9}'
+              f'{g("interaction_load_cv", 3):>9}{g("max_mean_ratio", 2):>9}'
+              f'{g("instability_label"):>9}{g("instability_pairwise"):>8}')
+
+    print(f'  -- cost (s, mean+-std) and affected shards')
+    print(f'  {"arm":<14}{"train":>16}{"unlearn":>16}{"parallel":>16}{"shards":>12}')
+    for a in arms:
+        rs = [r for r in recs if r['arm'] == a]
+        print(f'  {a:<14}{ms([r.get("train_time") for r in rs], 1):>16}'
+              f'{ms([r.get("unlearn_time") for r in rs], 1):>16}'
+              f'{ms([r.get("parallel_time") for r in rs], 1):>16}'
+              f'{ms([r.get("affected_shards") for r in rs], 1):>12}')
+
+    if BASELINE in arms and len(arms) > 1:
+        print(f'  -- paired vs {BASELINE} (same seeds; * = p < 0.05)')
+        for a in arms:
+            if a == BASELINE:
+                continue
+            parts = []
+            for k, lab in (('recall_10', 'R@10'), ('ndcg_10', 'NDCG@10'),
+                           ('unlearn_time', 'unlearn')):
+                pr = paired_test(recs, a, BASELINE, k)
+                if not pr:
+                    continue
+                star = ' *' if pr['p'] == pr['p'] and pr['p'] < 0.05 else ''
+                p = f'p={pr["p"]:.4f}' if pr['p'] == pr['p'] else 'p=n/a'
+                parts.append(f'{lab} {pr["mean_delta"]:+.4f} ({p}{star})')
+            print(f'  {a:<14}' + '   '.join(parts))
+
+
+def print_single(rows):
+    print(f'  {"arm":<14}{"mean(s)":>10}{"std":>9}{"min":>9}{"max":>9}{"n":>5}{"x Retrain":>11}')
+    order = {a: i for i, a in enumerate(ARM_ORDER)}
+    for r in sorted(rows, key=lambda r: order.get(r['arm'], 99)):
+        print(f'  {r["arm"]:<14}{r["time_mean_s"]:>10}{r["time_std_s"]:>9}'
+              f'{r["time_min_s"]:>9}{r["time_max_s"]:>9}{r["n_requests"]:>5}'
+              f'{r["ratio_to_global"] or "-":>11}')
+
+
+def progress(name, text, n_arms):
+    """-> (done runs, total runs, current arm/seed)"""
+    total = n_arms * N_SEEDS
+    if name.startswith('single_'):
+        done = len(SINGLE_DONE.findall(text))
+    else:
+        done = len(cor.RUN_LINE.findall(text))
+    hdr = cor.ARM_HDR.findall(text)
+    seeds = re.findall(r'---\s*ARM\s+[A-Z_]+\s*\(seed\s+(\d+)\)', text)
+    cur = f'{hdr[-1]} seed {seeds[-1]}' if hdr else 'starting'
+    return done, total, cur
 
 
 def main():
-    if not os.path.isdir(CSV_DIR):
-        print(f'no {CSV_DIR} - run: bash code/run_blocks.sh csv')
-        return
+    ap = argparse.ArgumentParser()
+    ap.add_argument('--brief', action='store_true')
+    args = ap.parse_args()
 
-    for g in GROUPS:
-        path = os.path.join(CSV_DIR, f'{g}_mean.csv')
-        if not os.path.exists(path):
+    done, waiting = [], []
+    for name in cor.EXPERIMENT_LOGS:
+        p = os.path.join(LOGS, name + '.out')
+        if not os.path.exists(p):
+            waiting.append((name, 'PENDING', 'not started yet'))
             continue
-        rows = list(csv.DictReader(open(path, encoding='utf-8')))
-        if not rows:
-            continue
+        text = open(p, encoding='utf-8', errors='replace').read()
+        v, why = cor.classify_log(p)
+        finished = 'CONSOLE SUMMARY' in text
+        ds, setting, n_arms = describe(name)
+        if v == 'NEW' and finished:
+            done.append((os.path.getmtime(p), name, p))
+        elif v == 'OLD':
+            waiting.append((name, 'OLD', why + ' - the block will run it again'))
+        elif cor.is_live(p):
+            d, t, cur = progress(name, text, n_arms)
+            waiting.append((name, 'RUNNING',
+                            f'{d}/{t} runs done, now {cur}, last write {ago(os.path.getmtime(p))} ago'))
+        else:
+            d, t, cur = progress(name, text, n_arms)
+            last = cor.first_line('\n'.join(reversed(text.strip().splitlines())))
+            waiting.append((name, 'FAILED',
+                            f'stopped at {d}/{t} runs ({cur}); last line: {last}'))
+
+    done.sort()
+    print(f'{len(done)}/{len(cor.EXPERIMENT_LOGS)} experiments finished'
+          + (f', printed in the order they finished' if done else ''))
+    for i, (t, name, p) in enumerate(done, 1):
+        ds, setting, _ = describe(name)
         print()
-        print('=' * 118)
-        print(f'{g.upper()}   ({os.path.relpath(path, ROOT)})')
-        print('=' * 118)
-        print(f'{"log":<22}{"arm":<15}{"n":>3}{"R@10":>17}{"NDCG@10":>17}'
-              f'{"unlearn(s)":>15}{"parallel(s)":>14}{"instab%":>9}'
-              f'{"dR@10 vs RP":>13}{"p":>8}')
-        print('-' * 118)
-        last = None
-        for r in rows:
-            if last is not None and r['log'] != last:
-                print()
-            last = r['log']
-            print(f'{r["log"]:<22}{r["arm"]:<15}{r.get("n_seeds", ""):>3}'
-                  f'{pm(r, "recall_10"):>17}{pm(r, "ndcg_10"):>17}'
-                  f'{pm(r, "unlearn_time", 1):>15}{pm(r, "parallel_time", 1):>14}'
-                  f'{val(r, "instability_label"):>9}'
-                  f'{r.get("delta_R10_vs_RANDOM_PERM", "") or "-":>13}'
-                  f'{r.get("delta_R10_p", "") or "-":>8}')
+        print('=' * 112)
+        print(f'[{i}] {name}   {ds}   {setting}   finished '
+              f'{time.strftime("%Y-%m-%d %H:%M", time.localtime(t))}')
+        print('=' * 112)
+        if name.startswith('single_'):
+            rows = parse_single(p) or []
+            print_single(rows)
+        else:
+            print_pq(parse_log(p), args.brief)
 
-    sp = os.path.join(CSV_DIR, 'single.csv')
-    if os.path.exists(sp):
-        rows = list(csv.DictReader(open(sp, encoding='utf-8')))
-        if rows:
-            print()
-            print('=' * 118)
-            print(f'SINGLE REQUEST   ({os.path.relpath(sp, ROOT)})')
-            print('=' * 118)
-            print(f'{"log":<14}{"arm":<18}{"mean(s)":>12}{"std":>10}{"min":>10}{"max":>10}'
-                  f'{"n":>5}{"x Retrain":>11}')
-            print('-' * 118)
-            for r in rows:
-                print(f'{r["log"]:<14}{r["arm"]:<18}{r["time_mean_s"]:>12}{r["time_std_s"]:>10}'
-                      f'{r["time_min_s"]:>10}{r["time_max_s"]:>10}'
-                      f'{r["n_requests"]:>5}{r["ratio_to_global"] or "-":>11}')
-
-    print()
-    print('n < 5: the run has not finished all 5 seeds. '
-          'Full tables: results/csv/<block>_tables.txt')
+    if waiting:
+        print()
+        print('=' * 112)
+        print(f'NOT FINISHED ({len(waiting)})')
+        print('=' * 112)
+        for name, v, why in waiting:
+            print(f'  {name:<18}{v:<9}{why}')
 
 
 if __name__ == '__main__':

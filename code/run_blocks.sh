@@ -30,24 +30,31 @@
 #   ảnh hưởng. Riêng single đo thời gian 1 request xóa.
 #
 #   Cách dùng (trên máy SSH, tại thư mục repo):
-#     bash code/run_blocks.sh torch        # kiểm tra CUDA + WMF embedding
-#     bash code/run_blocks.sh main         # (tương tự: modes single shards dims recpart)
-#     bash code/run_blocks.sh all          # main modes single shards dims, rồi csv
+#     bash code/run_blocks.sh reset        # XÓA HẾT log + kết quả cũ (nén backup trước)
+#     bash code/run_blocks.sh start        # chạy NGẦM toàn bộ (all) trên GPU, 1 job/lần
+#     bash code/run_blocks.sh results      # in kết quả: xong trước in trước, chưa xong thì báo
 #     bash code/run_blocks.sh status       # tiến độ từng log
+#     bash code/run_blocks.sh stop         # dừng chuỗi đang chạy ngầm
+#     bash code/run_blocks.sh torch        # chỉ kiểm tra CUDA + WMF embedding
+#     bash code/run_blocks.sh main         # 1 khối (tương tự: modes single shards dims recpart)
+#     bash code/run_blocks.sh all          # mọi khối, chạy trực tiếp (start = all chạy ngầm)
 #     bash code/run_blocks.sh csv          # xuất bảng kết quả ra results/csv/
-#     bash code/run_blocks.sh check        # tiến độ + log cũ/mới + bảng mới nhất
-#     bash code/run_blocks.sh clean        # xóa log/kết quả cũ (nén backup trước)
-#   Chỉ 1 dataset:  DATASETS="ml-1m" bash code/run_blocks.sh main
+#     bash code/run_blocks.sh check        # tiến độ + log cũ/mới + kết quả
+#     bash code/run_blocks.sh clean        # xóa log CŨ, giữ log mới (nén backup trước)
+#   Chỉ 1 dataset:  DATASETS="ml-1m" bash code/run_blocks.sh start
 #
-#   Chạy NGẦM (thoát kết nối job vẫn chạy):
-#     nohup bash code/run_blocks.sh all > logs/block_all.out 2>&1 &
-#     tail -f logs/block_all.out
+#   Tránh sai thời gian: mọi khối giữ khóa logs/.run.lock, nên KHÔNG bao giờ
+#   có 2 thí nghiệm cùng chạy trên GPU; lệnh thứ 2 bị từ chối. Đầu mỗi log
+#   ghi trạng thái GPU lúc bắt đầu (bộ nhớ đã dùng, % tải) để đối chiếu.
 # ============================================================================
 set -u
 cd "$(dirname "$0")/.."
 mkdir -p logs
 
 DATASETS="${DATASETS:-ml-1m yelp2018}"
+export CUDA_VISIBLE_DEVICES="${GPU:-0}"
+LOCK=logs/.run.lock
+PIDFILE=logs/.run.pid
 SEEDS="0,1,2,3,4"
 ARMS="PROPOSED,PROPOSED_BAL,SISA,RANDOM_PERM,RANDOM_EMB,RECERASER,GLOBAL"
 # cấu hình gốc; mỗi khối đè lên đúng 1 yếu tố
@@ -80,7 +87,7 @@ run () {
   fi
   banner "START $name"
   local t0=$SECONDS
-  "$@" 2>&1 | tee "logs/${name}.out"
+  { echo "[gpu] $(gpu_state)"; "$@"; } 2>&1 | tee "logs/${name}.out"
   local rc=${PIPESTATUS[0]}
   echo "--------------------------------------------------------------"
   echo "DONE $name  (rc=$rc, $((SECONDS-t0))s)  -> logs/${name}.out"
@@ -103,6 +110,30 @@ pq () {   # pq <log> <ds> [k=..] [dim=..] [mode=..] [arms=..] [-- extra args]
     --epochs 50 --retrain_epochs 50 --lr 0.05 --batch_size 512 \
     --unlearn_ratio 0.01 --seeds $SEEDS --arms "$a" "$@"
 }
+
+# trạng thái GPU: tên, bộ nhớ đã dùng, % tải, số process đang dùng GPU
+gpu_state () {
+  command -v nvidia-smi >/dev/null || { echo "nvidia-smi not found"; return; }
+  local q n
+  q=$(nvidia-smi -i "${CUDA_VISIBLE_DEVICES%%,*}" \
+      --query-gpu=name,memory.used,memory.total,utilization.gpu \
+      --format=csv,noheader 2>/dev/null)
+  n=$(nvidia-smi -i "${CUDA_VISIBLE_DEVICES%%,*}" --query-compute-apps=pid \
+      --format=csv,noheader 2>/dev/null | grep -c .)
+  echo "$q | compute processes: $n"
+}
+
+# Chỉ 1 chuỗi thí nghiệm chạy tại một thời điểm (giữ khóa tới khi xong).
+take_lock () {
+  exec 9>"$LOCK"
+  if ! flock -n 9; then
+    echo "!! Đang có thí nghiệm khác chạy (khóa $LOCK). Không chạy song song"
+    echo "   để thời gian unlearn đo trên GPU không bị nhiễu."
+    echo "   Xem: bash code/run_blocks.sh status   |   dừng: bash code/run_blocks.sh stop"
+    exit 1
+  fi
+}
+lock_busy () { ( exec 9>"$LOCK"; ! flock -n 9 ); }
 
 # ------------------------------------------------------------------ preflight
 # CUDA là bắt buộc: số đo thời gian chỉ so sánh được trong cùng một máy.
@@ -135,6 +166,15 @@ PY
     sed 's/^/  /' "$PREFLIGHT_LOG"
   fi
 
+  echo "  GPU ${CUDA_VISIBLE_DEVICES}: $(gpu_state)"
+  local busy
+  busy=$(nvidia-smi -i "${CUDA_VISIBLE_DEVICES%%,*}" --query-gpu=memory.used \
+         --format=csv,noheader,nounits 2>/dev/null | tr -d ' ')
+  if [ -n "$busy" ] && [ "$busy" -gt 2000 ] 2>/dev/null; then
+    echo "  !! GPU đã dùng ${busy} MiB trước khi chạy: có tiến trình khác (có thể ở"
+    echo "     container khác, nên nvidia-smi không liệt kê). Thời gian đo sẽ bị nhiễu"
+    echo "     nếu nó đang tính toán. Mỗi log ghi dòng [gpu] lúc bắt đầu để đối chiếu."
+  fi
   for DS in $DATASETS; do
     NPZ="data/${DS}/wmf_embeddings.npz"
     if [ -f "$NPZ" ]; then
@@ -205,7 +245,7 @@ block_status () {
   python code/clean_old_results.py --status
   echo ""
   echo "  Job dang chay:"
-  ps -eo pid,etime,args | grep -E "exp_partition_quality|exp_single_request|run_blocks\.sh (main|modes|single|shards|dims|recpart|all)" \
+  ps -ww -eo pid,etime,args | grep -E "exp_partition_quality|exp_single_request|run_blocks\.sh (main|modes|single|shards|dims|recpart|all)" \
     | grep -v grep | sed 's/^/    /' || echo "    (khong co job nao)"
 }
 
@@ -293,6 +333,79 @@ block_clean () {
   echo "Da xuat lai results/csv/ tu cac log con lai."
 }
 
+# ------------------------------------------------------------------ start / stop
+# start: kiểm tra trước (CUDA, embedding), rồi chạy NGẦM toàn bộ 'all' trong
+# 1 process group riêng; thoát SSH vẫn chạy. Từng thí nghiệm chạy tuần tự.
+block_start () {
+  if lock_busy; then
+    echo "!! Đã có chuỗi đang chạy. Xem: bash code/run_blocks.sh status"; exit 1
+  fi
+  banner "START (ngầm) - DATASETS=$DATASETS"
+  preflight
+  nohup setsid bash code/run_blocks.sh all > logs/block_all.out 2>&1 < /dev/null &
+  echo $! > "$PIDFILE"
+  sleep 3
+  if kill -0 "$(cat "$PIDFILE")" 2>/dev/null; then
+    echo "Đã chạy ngầm, PID $(cat "$PIDFILE"). Log tổng: logs/block_all.out"
+  else
+    echo "!! Chuỗi dừng ngay khi vừa chạy. Xem: tail -30 logs/block_all.out"; exit 1
+  fi
+  echo "  tiến độ : bash code/run_blocks.sh status"
+  echo "  kết quả : bash code/run_blocks.sh results"
+  echo "  dừng    : bash code/run_blocks.sh stop"
+}
+
+block_stop () {
+  if [ ! -f "$PIDFILE" ] || ! kill -0 "$(cat "$PIDFILE")" 2>/dev/null; then
+    echo "Không có chuỗi nào đang chạy (từ start)."; rm -f "$PIDFILE"; return
+  fi
+  local pid; pid=$(cat "$PIDFILE")
+  kill -TERM -- "-$pid" 2>/dev/null || kill -TERM "$pid"
+  sleep 3
+  kill -0 "$pid" 2>/dev/null && kill -KILL -- "-$pid" 2>/dev/null
+  rm -f "$PIDFILE"
+  echo "Đã dừng chuỗi PID $pid. Log đang chạy dở sẽ hiện FAILED và được chạy lại lần sau."
+}
+
+# ------------------------------------------------------------------ reset
+# XÓA HẾT log + kết quả (kể cả log mới). Mặc định nén backup trước vào
+# ../old_results_<giờ>.tar.gz ; NO_BACKUP=1 để xóa hẳn.
+# Từ chối nếu đang có thí nghiệm chạy. Bỏ qua .nfs* (NFS tự tạo lại).
+block_reset () {
+  if lock_busy; then
+    echo "!! Đang có thí nghiệm chạy - dừng trước: bash code/run_blocks.sh stop"; exit 1
+  fi
+  banner "RESET: xóa toàn bộ logs/ và results/"
+  mkdir -p results
+  local n
+  n=$(find logs results -mindepth 1 ! -name '.nfs*' ! -name '.run.lock' 2>/dev/null | wc -l)
+  echo "  $n file/thư mục sẽ bị xóa"
+  if [ "${NO_BACKUP:-0}" != "1" ] && [ "$n" -gt 0 ]; then
+    local tar="../old_results_$(date +%Y%m%d_%H%M%S).tar.gz"
+    tar czf "$tar" --exclude='.nfs*' --exclude='.run.lock' logs results 2>/dev/null
+    echo "  [backup] $tar ($(du -h "$tar" | cut -f1))"
+  fi
+  find logs results -mindepth 1 -type f ! -name '.nfs*' ! -name '.run.lock' -delete 2>/dev/null
+  find logs results -mindepth 1 -depth -type d -empty -delete 2>/dev/null
+  mkdir -p logs results
+  echo "  [removed] xong. Còn lại: $(find logs results -mindepth 1 ! -name '.run.lock' | wc -l) mục (chỉ .nfs* nếu có)"
+}
+
+# ------------------------------------------------------------------ results
+# Kết quả đọc thẳng từ log: xong trước in trước; chưa xong thì thông báo
+# (đang chạy tới đâu / chưa chạy / dừng giữa chừng). BRIEF=1 để in gọn.
+block_results () {
+  if [ "${BRIEF:-0}" = "1" ]; then
+    python code/show_latest_results.py --brief
+  else
+    python code/show_latest_results.py
+  fi
+}
+
+case "${1:-}" in
+  main|modes|single|shards|dims|recpart|all) take_lock ;;
+esac
+
 case "${1:-}" in
   torch)   block_torch ;;
   main)    block_main ;;
@@ -301,10 +414,14 @@ case "${1:-}" in
   shards)  block_shards ;;
   dims)    block_dims ;;
   recpart) block_recpart ;;
-  all)     block_main; block_modes; block_single; block_shards; block_dims; block_csv ;;
+  all)     block_main; block_modes; block_single; block_shards; block_dims; block_recpart; block_csv ;;
+  start)   block_start ;;
+  stop)    block_stop ;;
+  reset)   block_reset ;;
+  results) block_results ;;
   status)  block_status ;;
   csv)     block_csv ;;
   check)   block_check ;;
   clean)   block_clean ;;
-  *) echo "dùng: bash code/run_blocks.sh <torch|main|modes|single|shards|dims|recpart|all|status|csv|check|clean>"; exit 1 ;;
+  *) echo "dùng: bash code/run_blocks.sh <reset|start|results|status|stop|torch|main|modes|single|shards|dims|recpart|all|csv|check|clean>"; exit 1 ;;
 esac

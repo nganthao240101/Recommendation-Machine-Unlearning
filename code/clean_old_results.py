@@ -48,11 +48,16 @@ RECENT_S = 15 * 60
 LIVE_FALLBACK_S = 60 * 60
 
 # the logs run_blocks.sh writes, in run order
-EXPERIMENT_LOGS = [
-    f'{b}_{ds}' for ds in ('ml1m', 'yelp')
-    for b in ('main', 'mode_most', 'mode_fewest', 'single', 'k4', 'k16',
-              'dim32', 'dim128', 'recinp', 'recrand')
-]
+# in the order run_blocks.sh all runs them
+_DS = ('ml1m', 'yelp')
+EXPERIMENT_LOGS = (
+    [f'main_{d}' for d in _DS]
+    + [f'mode_{m}_{d}' for d in _DS for m in ('most', 'fewest')]
+    + [f'single_{d}' for d in _DS]
+    + [f'k{k}_{d}' for d in _DS for k in (4, 16)]
+    + [f'dim{x}_{d}' for d in _DS for x in (32, 128)]
+    + [f'rec{p}_{d}' for d in _DS for p in ('inp', 'rand')]
+)
 # the RECERASER arm prints this since it starts from a random model, as the
 # original does; before that it was seeded with a scrambled WMF vector
 REC_MARK = '[RecEraser] init='
@@ -132,7 +137,8 @@ def classify_log(path):
         if is_live(path):
             return 'RUNNING', f'a job is writing it ({len(runs)} runs so far)'
         if name[:-4] in EXPERIMENT_LOGS and not runs:
-            return 'FAILED', f'stopped, block will rerun it: {first_line(text)}'
+            last = first_line(chr(10).join(reversed(text.splitlines())))
+            return 'FAILED', f'stopped, block will rerun it: {last}'
         if not runs:
             return 'OLD', 'unfinished log of an earlier run, no job writing it'
     if runs and 'parallel=' not in text:
