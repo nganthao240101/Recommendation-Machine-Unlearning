@@ -352,8 +352,10 @@ def write_csvs(all_out, base, proposed='PROPOSED', baseline='RANDOM_PERM'):
     raw_path = f'{base}_raw.csv'
     agg_path = f'{base}_mean.csv'
     with open(raw_path, 'w', newline='', encoding='utf-8') as f:
-        w = csv.writer(f)
-        w.writerow(['log'] + RAW_COLS)
+        # raw_rows are dicts: a plain csv.writer would write their keys, not
+        # their values, so every row would repeat the header
+        w = csv.DictWriter(f, fieldnames=['log'] + RAW_COLS, extrasaction='ignore')
+        w.writeheader()
         w.writerows(raw_rows)
     with open(agg_path, 'w', newline='', encoding='utf-8') as f:
         w = csv.DictWriter(f, fieldnames=list(agg_rows[0].keys()) if agg_rows else [])
