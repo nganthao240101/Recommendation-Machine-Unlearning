@@ -782,10 +782,16 @@ def main():
                          'the retained data and report the %% of retained users '
                          'whose shard changed (spec S2).')
     ap.add_argument('--receraser_partition', default='ubp',
-                    choices=['ubp', 'inp'],
+                    choices=['ubp', 'inp', 'random'],
                     help='Partition used by the RECERASER arm: ubp = '
                          'user-based partition over WMF user embeddings, inp = '
-                         'user + item-profile centroid.')
+                         'user + item-profile centroid, random = a random '
+                         'equal split (the control).')
+    ap.add_argument('--receraser_init', default='random',
+                    choices=['random', 'wmf'],
+                    help='How the RECERASER shards start: random (the original '
+                         'RecEraser and every other arm) or wmf (a warm start '
+                         'from the WMF vectors, needs emb_dim == 64).')
     ap.add_argument('--agg_epochs', type=int, default=50,
                     help='Epochs for the RecEraser attention aggregator.')
     ap.add_argument('--keep_weights_on_retrain', action='store_true',
@@ -941,7 +947,8 @@ def main():
                         train_items, test_data, n_users, n_items, args.n_shards,
                         args.emb_dim, umap, del_users, args.epochs, args.lr,
                         args.batch_size, device, seed, args.retrain_epochs,
-                        data_root=data_root, agg_epochs=args.agg_epochs)
+                        data_root=data_root, agg_epochs=args.agg_epochs,
+                        init=args.receraser_init)
                 else:
                     # SISA is evaluated with its own mean aggregation, which
                     # is what makes it SISA. Every other arm keeps the hard

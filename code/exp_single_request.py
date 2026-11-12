@@ -93,7 +93,12 @@ def main():
     ap.add_argument('--legacy_seed', type=int, default=42)
     ap.add_argument('--router', default='hyperplane')
     ap.add_argument('--sig_weighting', default='binary')
-    ap.add_argument('--receraser_partition', default='ubp')
+    ap.add_argument('--receraser_partition', default='ubp',
+                    choices=['ubp', 'inp', 'random'])
+    ap.add_argument('--receraser_init', default='random',
+                    choices=['random', 'wmf'],
+                    help='random (the original RecEraser, as the other arms) '
+                         'or wmf (warm start, needs emb_dim == 64)')
     ap.add_argument('--agg_epochs', type=int, default=50)
     ap.add_argument('--data_root', default=None)
     args = ap.parse_args()
@@ -202,7 +207,11 @@ def _time_receraser(args, train_items, n_users, n_items, victims, seed,
 
     arm = RecEraserArm(n_users, n_items, args.emb_dim, args.n_shards,
                         device, seed)
-    arm.load_pretrained(user_emb, item_emb)
+    if args.receraser_init == 'wmf':
+        arm.load_pretrained(user_emb, item_emb)
+    print(f'    [RecEraser] init={args.receraser_init} '
+          f'partition={args.receraser_partition} (emb_dim={args.emb_dim}, '
+          f'K={args.n_shards})')
     for sid in range(args.n_shards):
         arm.train_shard(sid, shard_data[sid], n_items,
                          batch_size=args.batch_size, lr=args.lr,

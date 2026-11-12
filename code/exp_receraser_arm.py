@@ -54,9 +54,18 @@ def receraser_ubp_partition(train_data, n_users, n_items, n_shards, seed,
     kind='ubp'  : k-means over the user embedding only (user-based partition)
     kind='inp'  : k-means over the user embedding concatenated with the
                   item-embedding centroid of the user's items
+    kind='random': a random permutation of the users split into K equal
+                  parts, the control that isolates what the partition
+                  contributes to RecEraser
 
     Returns user_to_shard (int32 array of length n_users).
     """
+    if kind == 'random':
+        rng = np.random.RandomState(seed)
+        umap = np.empty(n_users, dtype=np.int32)
+        umap[rng.permutation(n_users)] = np.arange(n_users) % n_shards
+        return umap
+
     from sklearn.cluster import KMeans
 
     if data_root is None:
@@ -143,7 +152,25 @@ class RecEraserArm:
         self.device = device
 
     def load_pretrained(self, user_emb, item_emb):
-        self.model.load_pretrained_embeddings(user_emb, item_emb, device=self.device)
+        """Seed every shard's slice with the pretrained vector.
+
+        The table holds the K slices side by side, (n, K*d), so the vector is
+        tiled K times. np.repeat would repeat each column instead
+        ([a,a,b,b,...]), which hands every shard a scrambled vector.
+        """
+        d = self.model.emb_dim
+        if user_emb.shape[1] != d:
+            raise ValueError(
+                f'--receraser_init wmf needs emb_dim == the WMF dim '
+                f'({user_emb.shape[1]}), got emb_dim={d}. Use the default '
+                f'--receraser_init random for the other dims.')
+        u = np.concatenate([user_emb] * self.n_shards, axis=1)
+        i = np.concatenate([item_emb] * self.n_shards, axis=1)
+        m = self.model
+        m.user_embedding.weight.data = torch.as_tensor(u, dtype=torch.float32,
+                                                       device=self.device)
+        m.item_embedding.weight.data = torch.as_tensor(i, dtype=torch.float32,
+                                                       device=self.device)
 
     def shard_parameters(self, shard_id):
         """The slice of the embedding tables that belongs to one shard."""
@@ -251,16 +278,22 @@ class RecEraserArm:
 def run_receraser_arm(train_items, test_data, n_users, n_items, n_shards,
                       emb_dim, user_to_shard, del_users, epochs, lr, batch_size,
                       device, seed, retrain_epochs, data_root=None,
-                      agg_epochs=50):
+                      agg_epochs=50, init='random'):
     """Full RecEraser arm: train K shard slices + aggregator, delete users,
     retrain the affected shards + the aggregator, evaluate.
+
+    init='random' (default) starts every shard from a random model, as the
+    original RecEraser does and as every other arm here does; the WMF
+    embeddings only feed the partition. init='wmf' seeds the shards with the
+    WMF vectors, a warm start the original configuration does not use.
 
     Returns the same tuple shape as run_sharded_arm.
     """
     from method_4_ours import BPRMF
     set_all_seeds(seed)
 
-    # pretrained embeddings give the partition its input and seed the model
+    # the WMF embeddings give the partition its input; with init='wmf' they
+    # also seed the model
     emb_path = os.path.join(data_root or os.path.join(os.path.dirname(PROJ), 'data'),
                             'wmf_embeddings.npz')
     if not os.path.exists(emb_path):
@@ -272,7 +305,9 @@ def run_receraser_arm(train_items, test_data, n_users, n_items, n_shards,
     item_emb = emb['item_embeddings']
 
     arm = RecEraserArm(n_users, n_items, emb_dim, n_shards, device, seed)
-    arm.load_pretrained(user_emb, item_emb)
+    if init == 'wmf':
+        arm.load_pretrained(user_emb, item_emb)
+    print(f'    [RecEraser] init={init} (emb_dim={emb_dim}, K={n_shards})')
 
     shard_data = [{} for _ in range(n_shards)]
     for u, items in train_items.items():
