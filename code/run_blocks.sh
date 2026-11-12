@@ -35,6 +35,7 @@
 #     bash code/run_blocks.sh start        # chạy NGẦM toàn bộ (all) trên GPU, 1 job/lần
 #     bash code/run_blocks.sh results      # in kết quả: xong trước in trước, chưa xong thì báo
 #     bash code/run_blocks.sh status       # tiến độ từng log
+#     bash code/run_blocks.sh gpu          # có đang chạy thí nghiệm trên GPU không
 #     bash code/run_blocks.sh stop         # dừng chuỗi đang chạy ngầm
 #     bash code/run_blocks.sh torch        # chỉ kiểm tra CUDA + WMF embedding
 #     bash code/run_blocks.sh main         # 1 khối (tương tự: modes single shards dims recpart)
@@ -393,6 +394,60 @@ block_reset () {
   echo "  [removed] xong. Còn lại: $(find logs results -mindepth 1 ! -name '.run.lock' | wc -l) mục (chỉ .nfs* nếu có)"
 }
 
+# ------------------------------------------------------------------ gpu
+# Có đang chạy thí nghiệm trên GPU không? Trong container, nvidia-smi thường
+# KHÔNG liệt kê process (khác PID namespace), nên kiểm tra 3 cách độc lập:
+#   [1] process thí nghiệm nào đang sống, chạy log nào
+#   [2] process đó có mở /dev/nvidia* không  -> bằng chứng đang dùng GPU
+#   [3] log của nó ghi device=cuda hay cpu, và GPU có đang tải không
+block_gpu () {
+  banner "GPU CHECK"
+  echo "[0] Chuỗi run_blocks:"
+  if lock_busy; then
+    echo "    ĐANG CHẠY (giữ khóa $LOCK)$( [ -f "$PIDFILE" ] && echo ", PID $(cat "$PIDFILE")")"
+  else
+    echo "    KHÔNG chạy"
+  fi
+  echo ""
+  echo "[1-3] Process thí nghiệm:"
+  local found=0 pid args log dev gpu_fds
+  for pid in $(pgrep -f "code/exp_(partition_quality|single_request)\.py" 2>/dev/null); do
+    args=$(tr '\0' ' ' < /proc/$pid/cmdline 2>/dev/null) || continue
+    case "$args" in *python*) ;; *) continue ;; esac
+    found=1
+    gpu_fds=$(ls -l /proc/$pid/fd 2>/dev/null | grep -c '/dev/nvidia')
+    # log = file mà tee cùng nhóm đang ghi
+    log=$(for t in $(pgrep -x tee); do
+            [ "$(ps -o pgid= -p $t | tr -d ' ')" = "$(ps -o pgid= -p $pid | tr -d ' ')" ] && \
+              tr '\0' ' ' < /proc/$t/cmdline | awk '{print $2}'
+          done | head -1)
+    dev=$( [ -n "$log" ] && grep -m1 -o 'device=[a-z]*' "$log" 2>/dev/null)
+    echo "    PID $pid  chạy $(ps -o etime= -p $pid | tr -d ' ')  log=${log:-?}"
+    echo "        dataset/arm : $(echo "$args" | grep -o -- '--dataset [^ ]*') $(echo "$args" | grep -o -- '--n_shards [^ ]*') $(echo "$args" | grep -o -- '--emb_dim [^ ]*') $(echo "$args" | grep -o -- '--unlearn_mode [^ ]*')"
+    if [ "$gpu_fds" -gt 0 ]; then
+      echo "        /dev/nvidia*: mở $gpu_fds file  -> ĐANG DÙNG GPU"
+    else
+      echo "        /dev/nvidia*: KHÔNG mở  -> KHÔNG dùng GPU (hoặc chưa khởi tạo CUDA)"
+    fi
+    echo "        log ghi     : ${dev:-chưa in device}  | đang ở: $( [ -n "$log" ] && grep -o -- '--- ARM [A-Z_]* (seed [0-9]*)' "$log" | tail -1)"
+  done
+  [ "$found" = 0 ] && echo "    Không có process thí nghiệm nào đang chạy."
+  echo ""
+  echo "[GPU] nvidia-smi (tổng của cả GPU, gồm cả tiến trình ngoài container):"
+  if command -v nvidia-smi >/dev/null; then
+    nvidia-smi -i "${CUDA_VISIBLE_DEVICES%%,*}" \
+      --query-gpu=name,memory.used,memory.total,utilization.gpu \
+      --format=csv,noheader | sed 's/^/    lúc 1: /'
+    sleep 2
+    nvidia-smi -i "${CUDA_VISIBLE_DEVICES%%,*}" \
+      --query-gpu=memory.used,utilization.gpu --format=csv,noheader | sed 's/^/    lúc 2: /'
+    nvidia-smi --query-compute-apps=pid,used_memory --format=csv,noheader 2>/dev/null \
+      | sed 's/^/    process: /' | grep . || echo "    process: (nvidia-smi không thấy - bình thường trong container)"
+  else
+    echo "    nvidia-smi không có"
+  fi
+}
+
 # ------------------------------------------------------------------ results
 # Kết quả đọc thẳng từ log: xong trước in trước; chưa xong thì thông báo
 # (đang chạy tới đâu / chưa chạy / dừng giữa chừng). BRIEF=1 để in gọn.
@@ -421,9 +476,10 @@ case "${1:-}" in
   stop)    block_stop ;;
   reset)   block_reset ;;
   results) block_results ;;
+  gpu)     block_gpu ;;
   status)  block_status ;;
   csv)     block_csv ;;
   check)   block_check ;;
   clean)   block_clean ;;
-  *) echo "dùng: bash code/run_blocks.sh <reset|start|results|status|stop|torch|main|modes|single|shards|dims|recpart|all|csv|check|clean>"; exit 1 ;;
+  *) echo "dùng: bash code/run_blocks.sh <reset|start|results|status|gpu|stop|torch|main|modes|single|shards|dims|recpart|all|csv|check|clean>"; exit 1 ;;
 esac
