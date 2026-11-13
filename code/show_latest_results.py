@@ -165,12 +165,67 @@ def progress(name, text, n_arms):
     return done, total, cur
 
 
+SINGLE_LINE = re.compile(
+    r'^\s*\[([A-Z_]+)\]\s+single-request unlearn time:\s+([\d.]+)\+-([\d.]+)s over (\d+)',
+    re.M)
+
+
+def started_at(name):
+    """Epoch at which run_blocks.sh started this log, from the START banner in
+    logs/block_*.out ("START <name>   (HH:MM:SS)"); None if not found."""
+    best = None
+    for f in sorted(os.listdir(LOGS)):
+        if not (f.startswith('block_') and f.endswith('.out')):
+            continue
+        try:
+            txt = open(os.path.join(LOGS, f), encoding='utf-8', errors='replace').read()
+        except OSError:
+            continue
+        for hms in re.findall(r'START ' + re.escape(name) + r'\s+\((\d\d:\d\d:\d\d)\)', txt):
+            mt = os.path.getmtime(os.path.join(LOGS, name + '.out'))
+            day = time.strftime('%Y-%m-%d', time.localtime(mt))
+            t = time.mktime(time.strptime(f'{day} {hms}', '%Y-%m-%d %H:%M:%S'))
+            while t > mt + 60:          # the banner came on an earlier day
+                t -= 86400
+            best = t
+    return best
+
+
+def print_partial(name, path, text, n_arms):
+    """Tables of the runs that have finished in a log still running."""
+    done, total, cur = progress(name, text, n_arms)
+    t0 = started_at(name)
+    head = f'{done}/{total} runs done, now {cur}'
+    if t0 and done:
+        el = time.time() - t0
+        per = el / done
+        head += (f' | running {ago(t0)}, ~{per / 60:.0f} min/run, '
+                 f'~{(total - done) * per / 3600:.1f} h left for this log')
+    print()
+    print('-' * 112)
+    print(f'PARTIAL  {name}   {head}')
+    print('-' * 112)
+    if not done:
+        print('  (no run finished yet)')
+        return
+    if name.startswith('single_'):
+        rows = {}
+        for arm, m, sd, n in SINGLE_LINE.findall(text):
+            rows.setdefault(arm, []).append(float(m))
+        print(f'  {"arm":<14}{"seeds":>6}{"mean(s)":>10}')
+        for a in arms_of([{'arm': k} for k in rows]):
+            print(f'  {a:<14}{len(rows[a]):>6}{st.mean(rows[a]):>10.2f}')
+        return
+    print_pq(parse_log(path), brief=True)
+    print('  (n = seeds finished so far; the paired p-value needs 3 seeds)')
+
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument('--brief', action='store_true')
     args = ap.parse_args()
 
-    done, waiting = [], []
+    done, waiting, partial = [], [], []
     for name in cor.EXPERIMENT_LOGS:
         p = os.path.join(LOGS, name + '.out')
         if not os.path.exists(p):
@@ -186,11 +241,14 @@ def main():
             waiting.append((name, 'OLD', why + ' - the block will run it again'))
         elif cor.is_live(p):
             d, t, cur = progress(name, text, n_arms)
+            partial.append((name, p, text, n_arms))
             waiting.append((name, 'RUNNING',
                             f'{d}/{t} runs done, now {cur}, last write {ago(os.path.getmtime(p))} ago'))
         else:
             d, t, cur = progress(name, text, n_arms)
             last = cor.first_line('\n'.join(reversed(text.strip().splitlines())))
+            if d:
+                partial.append((name, p, text, n_arms))
             waiting.append((name, 'FAILED',
                             f'stopped at {d}/{t} runs ({cur}); last line: {last}'))
 
@@ -217,6 +275,9 @@ def main():
         print('=' * 112)
         for name, v, why in waiting:
             print(f'  {name:<18}{v:<9}{why}')
+
+    for name, p, text, n_arms in partial:
+        print_partial(name, p, text, n_arms)
 
 
 if __name__ == '__main__':
