@@ -32,7 +32,7 @@
 #
 #   Cách dùng (trên máy SSH, tại thư mục repo):
 #     bash code/run_blocks.sh reset        # XÓA HẾT log + kết quả cũ (nén backup trước)
-#     bash code/run_blocks.sh start full   # MỘT LỆNH CHẠY HẾT: ml-1m rồi yelp, Rec trước, engine GPU
+#     bash code/run_blocks.sh start full   # MỘT LỆNH CHẠY HẾT: ml-1m rồi yelp, Rec-UBP trước, engine GPU
 #     bash code/run_blocks.sh start        # chạy NGẦM toàn bộ (all) trên GPU, 1 job/lần
 #     bash code/run_blocks.sh results      # in kết quả: xong trước in trước, chưa xong thì báo
 #     bash code/run_blocks.sh status       # tiến độ từng log
@@ -292,24 +292,30 @@ block_recpart () {
 
 # ------------------------------------------------------------------ full
 # MỘT LỆNH CHẠY HẾT, theo thứ tự:
-#   ml-1m : recpart -> main -> modes -> single -> shards -> dims
-#   yelp  : recpart -> main -> modes -> single  (ablation K/dim chỉ trên ml-1m)
-#   rồi xuất CSV.
-# Rec trước: mỗi dataset mở đầu bằng recpart, và trong mọi thí nghiệm arm
-# RECERASER chạy đầu tiên ở mỗi seed. Mỗi arm tự đặt lại seed của nó và tập
-# user bị xóa chỉ phụ thuộc vào seed, nên thứ tự không đổi kết quả.
+#   1. ml-1m : main -> modes -> single -> shards (K=4,16) -> dims (32,128)
+#   2. yelp  : main -> modes -> single -> shards (K=4,16) -> dims (32,128)
+#   3. Rec với partition khác (recpart): ml-1m rồi yelp  [ưu tiên thấp nhất]
+#   4. xuất CSV
+# Rec-UBP trước: trong mọi thí nghiệm, arm RECERASER (partition UBP) chạy đầu
+# tiên ở mỗi seed. Rec với partition khác để cuối cùng. Mỗi arm tự đặt lại
+# seed và tập user bị xóa chỉ phụ thuộc vào seed, nên thứ tự không đổi kết quả.
 # Engine GPU mặc định (RECUNLEARN_ENGINE=python để dùng vòng lặp cũ).
 # Log đã xong thì bỏ qua, log dở thì chạy tiếp phần còn thiếu.
 block_full () {
   export RECUNLEARN_ENGINE="${RECUNLEARN_ENGINE:-gpu}"
   ARMS="RECERASER,PROPOSED,PROPOSED_BAL,SISA,RANDOM_PERM,RANDOM_EMB,GLOBAL"
-  ABLATE_DATASETS="${FULL_ABLATE:-ml-1m}"
   local all_ds="${FULL_DATASETS:-ml-1m yelp2018}" ds
-  banner "FULL: $all_ds | Rec trước | engine=$RECUNLEARN_ENGINE | ablation trên: $ABLATE_DATASETS"
+  ABLATE_DATASETS="${FULL_ABLATE:-$all_ds}"
+  banner "FULL: $all_ds | Rec-UBP trước | engine=$RECUNLEARN_ENGINE | ablation trên: $ABLATE_DATASETS"
   for ds in $all_ds; do
     DATASETS="$ds"
     banner "=== DATASET $ds ==="
-    block_recpart; block_main; block_modes; block_single; block_shards; block_dims
+    block_main; block_modes; block_single; block_shards; block_dims
+  done
+  banner "=== Rec với partition khác (ưu tiên thấp nhất) ==="
+  for ds in $all_ds; do
+    DATASETS="$ds"
+    block_recpart
   done
   DATASETS="$all_ds"
   block_csv
