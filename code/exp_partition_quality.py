@@ -758,6 +758,10 @@ def main():
     ap.add_argument('--seeds', default='0,1,2,3,4')
     ap.add_argument('--arms', default='PROPOSED,PROPOSED_BAL,RANDOM_EMB,RANDOM_PERM,RANDOM_BAL,RANDOM_MODULO,SISA,GLOBAL')
     ap.add_argument('--data_root', default=None)
+    ap.add_argument('--skip_runs', default='',
+                    help='ARM:seed,ARM:seed,... already finished in an earlier, '
+                         'interrupted run of this log; they are not run again. '
+                         'run_blocks.sh passes them when it resumes a log.')
     ap.add_argument('--out_dir', default=None)
     ap.add_argument('--tag', default='')
     ap.add_argument('--legacy_seed', type=int, default=42,
@@ -817,6 +821,9 @@ def main():
     print(f"  WMF embeddings: {emb} ({'found' if os.path.exists(emb) else 'MISSING'})")
 
     seeds = [int(s) for s in args.seeds.split(',') if s.strip()]
+    skip = {(a, int(s)) for a, s in (x.split(':') for x in args.skip_runs.split(',') if x)}
+    if skip:
+        print(f"  resuming: {len(skip)} run(s) already done earlier, not run again")
     arms = [a.strip() for a in args.arms.split(',') if a.strip()]
 
     # Results are printed to the console as they are produced; no CSV is written.
@@ -843,6 +850,8 @@ def main():
             seed=args.legacy_seed, weighting=args.sig_weighting, verbose=False)
 
         for arm in arms:
+            if (arm, seed) in skip:
+                continue
             print(f"\n--- ARM {arm} (seed {seed}) ---")
             row = {
                 'dataset': args.dataset, 'seed': seed, 'arm': arm, 'K': args.n_shards,

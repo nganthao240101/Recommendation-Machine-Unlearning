@@ -155,6 +155,51 @@ def classify_log(path):
     return 'OLD', 'not an experiment log of the current runner'
 
 
+ARM_SEED = re.compile(r'---\s*ARM\s+([A-Z_]+)\s*\(seed\s+(\d+)\)')
+SINGLE_DONE = re.compile(r'^\s*\[([A-Z_]+)\]\s+single-request unlearn time', re.M)
+
+
+def prepare_resume(path):
+    """Make an interrupted log ready to be continued.
+
+    Returns the finished runs as 'ARM:seed,...' (what --skip_runs takes) and
+    cuts the log back to the end of the last finished run, so the traceback
+    and the half-run arm are gone and the new runs can be appended. Returns ''
+    and leaves the file alone when the log cannot be continued: it is
+    finished, it has no finished run, or it was written by older code (then
+    the whole experiment runs again).
+    """
+    text = open(path, encoding='utf-8', errors='replace').read()
+    if 'CONSOLE SUMMARY' in text:
+        return ''
+    single = os.path.basename(path).startswith('single_')
+    if not single and 'S5 rate check' not in text:
+        return ''           # older code: its runs cannot be mixed with new ones
+    lines = text.splitlines(keepends=True)
+    done, cur, last_hdr = [], None, None
+    for i, ln in enumerate(lines):
+        m = ARM_SEED.search(ln)
+        if m:
+            cur, last_hdr = (m.group(1), int(m.group(2))), i
+            continue
+        r = (SINGLE_DONE if single else RUN_LINE).match(ln)
+        if r and cur and r.group(1) == cur[0]:
+            done.append(cur)
+    if not done:
+        return ''
+    # a RecEraser run from before the fixes cannot be kept
+    if any(a == 'RECERASER' for a, _ in done) and (
+            REC_MARK not in text or UBP_MARK not in text):
+        return ''
+    if last_hdr is not None and cur not in done:
+        lines = lines[:last_hdr]
+    with open(path, 'w', encoding='utf-8') as f:
+        f.write(''.join(lines))
+        f.write(f'\n[resume] {len(done)} finished run(s) kept; continuing '
+                f'{time.strftime("%Y-%m-%d %H:%M:%S")}\n')
+    return ','.join(f'{a}:{s}' for a, s in done)
+
+
 def last_error(text):
     """The exception line of the last traceback, else the last line."""
     lines = [ln.strip() for ln in text.splitlines() if ln.strip()]
@@ -217,7 +262,16 @@ def main():
                          'finished log can be skipped)')
     ap.add_argument('--status', action='store_true',
                     help='print the progress of the 12 experiment logs and exit')
+    ap.add_argument('--prepare-resume', dest='prepare_resume', metavar='LOG',
+                    default=None,
+                    help='cut an interrupted LOG back to its last finished run '
+                         'and print those runs as ARM:seed,... (empty when it '
+                         'cannot be continued)')
     args = ap.parse_args()
+
+    if args.prepare_resume:
+        print(prepare_resume(args.prepare_resume))
+        return
 
     if args.status:
         print_status()

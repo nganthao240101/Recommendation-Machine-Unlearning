@@ -58,6 +58,7 @@ DATASETS="${DATASETS:-ml-1m yelp2018}"
 export CUDA_VISIBLE_DEVICES="${GPU:-0}"
 LOCK=logs/.run.lock
 PIDFILE=logs/.run.pid
+QUEUEFILE=logs/.queue.pid
 SEEDS="0,1,2,3,4"
 ARMS="PROPOSED,PROPOSED_BAL,SISA,RANDOM_PERM,RANDOM_EMB,RECERASER,GLOBAL"
 # cấu hình gốc; mỗi khối đè lên đúng 1 yếu tố
@@ -88,9 +89,23 @@ run () {
     mv "$f" "$old"
     echo "[rerun] $name  (log cũ -> $old)"
   fi
+  # Log dở (crash / bị dừng): giữ các cặp arm/seed đã xong, chỉ chạy phần còn
+  # thiếu và ghi NỐI vào log. Log của code cũ thì chạy lại từ đầu.
+  local tee_opt="" skip=""
+  if [ -f "$f" ] && ! grep -q "CONSOLE SUMMARY" "$f" 2>/dev/null; then
+    skip=$(python code/clean_old_results.py --prepare-resume "$f")
+    if [ -n "$skip" ]; then
+      tee_opt="-a"
+      set -- "$@" --skip_runs "$skip"
+      echo "[resume] $name: giữ $(echo "$skip" | tr ',' '\n' | grep -c .) run đã xong, chạy tiếp phần còn lại"
+    else
+      mv "$f" "logs/${name}.out.old_$(date +%Y%m%d_%H%M%S)"
+      echo "[rerun] $name: log dở không dùng tiếp được (code cũ / chưa xong run nào) -> chạy lại từ đầu"
+    fi
+  fi
   banner "START $name"
   local t0=$SECONDS
-  { echo "[gpu] $(gpu_state)"; "$@"; } 2>&1 | tee "logs/${name}.out"
+  { echo "[gpu] $(gpu_state)"; "$@"; } 2>&1 | tee $tee_opt "logs/${name}.out"
   local rc=${PIPESTATUS[0]}
   echo "--------------------------------------------------------------"
   echo "DONE $name  (rc=$rc, $((SECONDS-t0))s)  -> logs/${name}.out"
@@ -142,6 +157,15 @@ gpu_state () {
 # Chỉ 1 chuỗi thí nghiệm chạy tại một thời điểm (giữ khóa tới khi xong).
 take_lock () {
   exec 9>"$LOCK"
+  if [ "${WAIT_LOCK:-0}" = "1" ]; then
+    if ! flock -n 9; then
+      echo "[queue] $(date '+%F %T') đang có chuỗi khác chạy - chờ nó xong rồi chạy tiếp"
+      flock 9
+      echo "[queue] $(date '+%F %T') chuỗi trước đã xong - bắt đầu"
+    fi
+    echo $$ > "$PIDFILE"; rm -f "$QUEUEFILE"
+    return
+  fi
   if ! flock -n 9; then
     echo "!! Đang có thí nghiệm khác chạy (khóa $LOCK). Không chạy song song"
     echo "   để thời gian unlearn đo trên GPU không bị nhiễu."
@@ -354,31 +378,49 @@ block_clean () {
 # start: kiểm tra trước (CUDA, embedding), rồi chạy NGẦM toàn bộ 'all' trong
 # 1 process group riêng; thoát SSH vẫn chạy. Từng thí nghiệm chạy tuần tự.
 block_smoke () {
-  banner "SMOKE TEST - 7 arm, dataset tí hon, cả 2 script (1-2 phút)"
-  python code/smoke_test.py
+  banner "SMOKE TEST - 7 arm, dataset tí hon, cả 2 script, trên CPU (1-2 phút)"
+  # CPU: không chen vào GPU của thí nghiệm đang đo thời gian
+  CUDA_VISIBLE_DEVICES="" python code/smoke_test.py
 }
 
+# Đang có chuỗi chạy thì KHÔNG dừng nó: xếp hàng, chờ nó xong rồi tự chạy
+# tiếp. Lúc đó all bỏ qua log đã xong, chạy tiếp log dở từ run còn thiếu.
 block_start () {
-  if lock_busy; then
-    echo "!! Đã có chuỗi đang chạy. Xem: bash code/run_blocks.sh status"; exit 1
+  if [ -f "$QUEUEFILE" ] && kill -0 "$(cat "$QUEUEFILE")" 2>/dev/null; then
+    echo "!! Đã có một chuỗi đang xếp hàng (PID $(cat "$QUEUEFILE")). Không cần start thêm."; exit 1
   fi
+  local busy=0 out
+  lock_busy && busy=1
   banner "START (ngầm) - DATASETS=$DATASETS"
   preflight
   block_smoke || { echo "!! Smoke test hỏng - KHÔNG chạy ngầm. Sửa lỗi trên rồi start lại."; exit 1; }
-  nohup setsid bash code/run_blocks.sh all > logs/block_all.out 2>&1 < /dev/null &
-  echo $! > "$PIDFILE"
+  out="logs/block_all_$(date +%Y%m%d_%H%M%S).out"
+  WAIT_LOCK=1 nohup setsid bash code/run_blocks.sh all > "$out" 2>&1 < /dev/null &
+  local pid=$!
   sleep 3
-  if kill -0 "$(cat "$PIDFILE")" 2>/dev/null; then
-    echo "Đã chạy ngầm, PID $(cat "$PIDFILE"). Log tổng: logs/block_all.out"
-  else
-    echo "!! Chuỗi dừng ngay khi vừa chạy. Xem: tail -30 logs/block_all.out"; exit 1
+  if ! kill -0 "$pid" 2>/dev/null; then
+    echo "!! Chuỗi dừng ngay khi vừa chạy. Xem: tail -30 $out"; exit 1
   fi
+  if [ "$busy" = 1 ]; then
+    echo "$pid" > "$QUEUEFILE"
+    echo "Đang có chuỗi chạy - KHÔNG dừng nó. Chuỗi mới (PID $pid) đã XẾP HÀNG:"
+    echo "  chờ chuỗi hiện tại xong, rồi tự chạy các thí nghiệm còn thiếu/dở."
+  else
+    echo "$pid" > "$PIDFILE"
+    echo "Đã chạy ngầm, PID $pid."
+  fi
+  echo "  Log tổng: $out"
   echo "  tiến độ : bash code/run_blocks.sh status"
   echo "  kết quả : bash code/run_blocks.sh results"
   echo "  dừng    : bash code/run_blocks.sh stop"
 }
 
 block_stop () {
+  if [ -f "$QUEUEFILE" ] && kill -0 "$(cat "$QUEUEFILE")" 2>/dev/null; then
+    kill -TERM -- "-$(cat "$QUEUEFILE")" 2>/dev/null || kill -TERM "$(cat "$QUEUEFILE")"
+    echo "Đã hủy chuỗi đang xếp hàng (PID $(cat "$QUEUEFILE"))."
+  fi
+  rm -f "$QUEUEFILE"
   if [ ! -f "$PIDFILE" ] || ! kill -0 "$(cat "$PIDFILE")" 2>/dev/null; then
     echo "Không có chuỗi nào đang chạy (từ start)."; rm -f "$PIDFILE"; return
   fi

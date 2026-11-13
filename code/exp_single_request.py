@@ -106,6 +106,10 @@ def main():
                          'or wmf (warm start, needs emb_dim == 64)')
     ap.add_argument('--agg_epochs', type=int, default=50)
     ap.add_argument('--data_root', default=None)
+    ap.add_argument('--skip_runs', default='',
+                    help='ARM:seed,ARM:seed,... already finished in an earlier, '
+                         'interrupted run of this log; they are not run again. '
+                         'run_blocks.sh passes them when it resumes a log.')
     args = ap.parse_args()
 
     data_root = args.data_root or os.path.join(os.path.dirname(PROJ), 'data')
@@ -120,6 +124,9 @@ def main():
     print(f"  WMF embeddings: {emb} ({'found' if os.path.exists(emb) else 'MISSING'})")
 
     seeds = [int(s) for s in args.seeds.split(',') if s.strip()]
+    skip = {(a, int(s)) for a, s in (x.split(':') for x in args.skip_runs.split(',') if x)}
+    if skip:
+        print(f"  resuming: {len(skip)} run(s) already done earlier, not run again")
     arms = [a.strip() for a in args.arms.split(',') if a.strip()]
 
     # The same set of users is deleted for every arm and every seed, so the
@@ -136,6 +143,8 @@ def main():
     for seed in seeds:
         print(f"\n{'='*70}\nSEED {seed}\n{'='*70}")
         for arm in arms:
+            if (arm, seed) in skip:
+                continue
             print(f"\n--- ARM {arm} (seed {seed}) ---")
             set_all_seeds(seed)
 
