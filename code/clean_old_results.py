@@ -59,6 +59,8 @@ EXPERIMENT_LOGS = (
     + [f'dim{x}_{d}' for d in _DS for x in (32, 128)]
     + [f'recrand_{d}' for d in _DS]
 )
+# the same experiments with the WMF backbone (run_blocks.sh fullwmf)
+EXPERIMENT_LOGS = EXPERIMENT_LOGS + [n + '_wmf' for n in EXPERIMENT_LOGS]
 # the RECERASER arm prints this since it starts from a random model, as the
 # original does; before that it was seeded with a scrambled WMF vector
 REC_MARK = '[RecEraser] init='

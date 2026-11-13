@@ -29,6 +29,7 @@ import random
 import numpy as np
 import torch
 import fast_train
+import wmf_backbone
 
 PROJ = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, PROJ)
@@ -196,6 +197,10 @@ class RecEraserArm:
                                     num_local=n_shards, use_attention=True).to(device)
         self.n_shards = n_shards
         self.device = device
+        if wmf_backbone.use_wmf():
+            nn = torch.nn
+            nn.init.normal_(self.model.user_embedding.weight, 0.0, 0.01)
+            nn.init.normal_(self.model.item_embedding.weight, 0.0, 0.01)
 
     def load_pretrained(self, user_emb, item_emb):
         """Seed every shard's slice with the pretrained vector.
@@ -238,6 +243,15 @@ class RecEraserArm:
                     lr=0.05, n_epochs=50):
         """Train one shard's slice of the embedding table."""
         m = self.model
+        if wmf_backbone.use_wmf():
+            K, D = m.num_local, m.emb_dim
+            t0 = time.time()
+            loss, n = wmf_backbone.train_wmf(
+                lambda u: m.user_embedding(u).view(-1, K, D)[:, shard_id, :],
+                lambda: m.item_embedding.weight.view(-1, K, D)[:, shard_id, :],
+                [m.user_embedding.weight, m.item_embedding.weight],
+                shard_data, self.device, lr, n_epochs)
+            return loss, time.time() - t0, n
         optimizer = torch.optim.Adagrad(m.parameters(), lr=lr,
                                         initial_accumulator_value=1e-8)
         if fast_train.use_gpu_receraser_training():
@@ -296,6 +310,27 @@ class RecEraserArm:
         """
         from method_3_receraser_v2 import train_aggregator
         t0 = time.time()
+        if wmf_backbone.use_wmf():
+            # RecEraser_WMF.train_agg_model: the shard tables are frozen
+            # (stop_gradient), users aggregate on WA, items on WB, and the WMF
+            # loss is taken on the aggregated vectors. The optimiser, its rate,
+            # the clip and the NaN skip are those of the BPR arm.
+            m = self.model
+            K, D = m.num_local, m.emb_dim
+            agg_params = [m.WA, m.BA, m.HA, m.WB, m.BB, m.HB, m.trans_W, m.trans_B]
+
+            def agg(emb, item):
+                es = emb.detach().view(-1, K, D)
+                es = torch.einsum('bkd,kde->bke', es, m.trans_W) + m.trans_B
+                return m._attention_aggregate(es, item=item)[0]
+            opt = torch.optim.Adagrad(agg_params, lr=lr, initial_accumulator_value=1.0)
+            wmf_backbone.train_wmf(
+                lambda u: agg(m.user_embedding(u), False),
+                lambda: agg(m.item_embedding.weight, True),
+                agg_params, train_data, self.device, lr, n_epochs, log_every=10,
+                log_fmt='    Agg Epoch {ep}: loss={loss:.4f}', optimizer=opt,
+                clip=agg_params, skip_nonfinite=True)
+            return time.time() - t0
         if fast_train.use_gpu_receraser_training():
             # method_3_receraser_v2.train_aggregator on the GPU: only the
             # attention and transform parameters move (the embeddings are
@@ -447,9 +482,12 @@ def run_receraser_arm(train_items, test_data, n_users, n_items, n_shards,
         d = emb_dim
         fresh_u = torch.nn.Embedding(n_users, d).weight.data.to(device)
         fresh_i = torch.nn.Embedding(n_items, d).weight.data.to(device)
-        nn_init = torch.nn.init.xavier_uniform_
-        nn_init(fresh_u)
-        nn_init(fresh_i)
+        if wmf_backbone.use_wmf():
+            torch.nn.init.normal_(fresh_u, 0.0, 0.01)
+            torch.nn.init.normal_(fresh_i, 0.0, 0.01)
+        else:
+            torch.nn.init.xavier_uniform_(fresh_u)
+            torch.nn.init.xavier_uniform_(fresh_i)
         arm.set_shard_parameters(sid, fresh_u, fresh_i)
         _, elapsed, n_samples = arm.train_shard(
             sid, retained_shard_data[sid], n_items, batch_size=batch_size,

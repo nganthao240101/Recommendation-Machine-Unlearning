@@ -31,6 +31,7 @@ import numpy as np
 import torch
 import torch.nn as nn
 import fast_train
+import wmf_backbone
 import torch.nn.functional as F
 
 from scipy.sparse import csr_matrix
@@ -382,7 +383,8 @@ class ShardModels:
 
     def create_model(self, shard_id, device):
         """Tạo model mới cho một shard"""
-        self.models[shard_id] = BPRMF(self.n_users, self.n_items, self.emb_dim).to(device)
+        cls = wmf_backbone.WMF if wmf_backbone.use_wmf() else BPRMF
+        self.models[shard_id] = cls(self.n_users, self.n_items, self.emb_dim).to(device)
         return self.models[shard_id]
 
     def get_model(self, shard_id):
@@ -409,6 +411,9 @@ def train_shard_model(model, shard_data, n_items, device,
     wall time as the global retrain would mean the loop is iterating
     over the whole dataset).
     """
+    if isinstance(model, wmf_backbone.WMF):
+        return wmf_backbone.train_wmf_model(model, shard_data, device, lr, n_epochs)
+
     t0 = time.time()
     optimizer = torch.optim.Adagrad(model.parameters(), lr=lr, initial_accumulator_value=1e-8)
 

@@ -42,6 +42,9 @@ SINGLE_DONE = re.compile(r'^\s*\[([A-Z_]+)\]\s+single-request unlearn time', re.
 
 def describe(name):
     """log name -> (dataset, setting, number of arms)"""
+    wmf = name.endswith('_wmf')
+    if wmf:
+        name = name[:-4]
     stem, ds = name.rsplit('_', 1)
     ds = {'ml1m': 'ml-1m', 'yelp': 'yelp2018'}.get(ds, ds)
     base = {'k': 8, 'dim': 64, 'mode': 'random'}
@@ -59,6 +62,7 @@ def describe(name):
     elif stem.startswith('rec'):
         base['partition'] = {'recinp': 'InP', 'recrand': 'random'}[stem]
         n_arms = 1
+    base['model'] = 'WMF' if wmf else 'BPRMF'
     setting = '  '.join(f'{k}={v}' for k, v in base.items())
     return ds, setting, n_arms
 

@@ -54,6 +54,7 @@ from partition_variants import (              # noqa: E402
 from method_4_ours import ShardModels, train_shard_model, BPRMF  # noqa: E402
 import gpu_probe  # noqa: E402
 import fast_train  # noqa: E402
+import wmf_backbone  # noqa: E402
 
 
 def build_partition(arm, train_items, n_users, n_items, n_shards, args, seed,
@@ -117,6 +118,13 @@ def main():
                          'or wmf (warm start, needs emb_dim == 64)')
     ap.add_argument('--agg_epochs', type=int, default=50)
     ap.add_argument('--data_root', default=None)
+    ap.add_argument('--backbone', default='bprmf', choices=['bprmf', 'wmf'],
+                    help='the model every arm trains: bprmf, or wmf (the authors\' '
+                         'WMF.py loss, see wmf_backbone.py); nothing else changes')
+    ap.add_argument('--wmf_c0', type=float, default=None,
+                    help='WMF negative weight c0 (default 0.2 ml-1m, 0.05 yelp2018)')
+    ap.add_argument('--wmf_keep', type=float, default=0.7, help='WMF dropout keep probability')
+    ap.add_argument('--wmf_batch_users', type=int, default=256, help='WMF users per batch')
     ap.add_argument('--skip_runs', default='',
                     help='ARM:seed,ARM:seed,... already finished in an earlier, '
                          'interrupted run of this log; they are not run again. '
@@ -124,6 +132,8 @@ def main():
     args = ap.parse_args()
 
     data_root = args.data_root or os.path.join(os.path.dirname(PROJ), 'data')
+    wmf_backbone.configure(args.backbone, args.wmf_c0, args.wmf_keep,
+                           args.wmf_batch_users, dataset=args.dataset)
     device = 'cuda' if torch.cuda.is_available() else 'cpu'
     train_items, test_data, n_users, n_items = load_data(args.dataset, data_root)
     print(f"  {args.dataset}: {n_users} users, {n_items} items, device={device}")
@@ -134,6 +144,7 @@ def main():
     emb = os.path.join(data_root, 'wmf_embeddings.npz')
     print(f"  WMF embeddings: {emb} ({'found' if os.path.exists(emb) else 'MISSING'})")
     print(f"  engine: {fast_train.engine_name()}")
+    print(f"  backbone: {wmf_backbone.describe()}")
 
     seeds = [int(s) for s in args.seeds.split(',') if s.strip()]
     skip = {(a, int(s)) for a, s in (x.split(':') for x in args.skip_runs.split(',') if x)}
@@ -295,8 +306,12 @@ def _time_receraser(args, train_items, n_users, n_items, victims, seed,
         d = args.emb_dim
         fresh_u = torch.nn.Embedding(n_users, d).weight.data.to(device)
         fresh_i = torch.nn.Embedding(n_items, d).weight.data.to(device)
-        torch.nn.init.xavier_uniform_(fresh_u)
-        torch.nn.init.xavier_uniform_(fresh_i)
+        if wmf_backbone.use_wmf():
+            torch.nn.init.normal_(fresh_u, 0.0, 0.01)
+            torch.nn.init.normal_(fresh_i, 0.0, 0.01)
+        else:
+            torch.nn.init.xavier_uniform_(fresh_u)
+            torch.nn.init.xavier_uniform_(fresh_i)
         arm.set_shard_parameters(sid, fresh_u, fresh_i)
         arm.train_shard(sid, kept_shard, n_items, batch_size=args.batch_size,
                         lr=args.lr, n_epochs=args.retrain_epochs)

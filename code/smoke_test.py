@@ -61,13 +61,21 @@ def main():
               '--emb_dim', '16', '--sig_dim', '16', '--epochs', '1',
               '--retrain_epochs', '1', '--batch_size', '64', '--seeds', '0',
               '--arms', ARMS, '--agg_epochs', '1']
-    print(f'smoke test on a {120}-user synthetic set, all 7 arms ({root})')
+    print(f'smoke test on a {120}-user synthetic set, all 7 arms, BPRMF and WMF ({root})')
     ok = run('partition_quality',
              [py, os.path.join(HERE, 'exp_partition_quality.py'), *common,
               '--unlearn_mode', 'random', '--unlearn_ratio', '0.05'], root)
     ok &= run('single_request',
               [py, os.path.join(HERE, 'exp_single_request.py'), *common,
                '--n_users', '2'], root)
+    # the same two with the WMF backbone (run_blocks.sh fullwmf)
+    ok &= run('partition_quality_wmf',
+              [py, os.path.join(HERE, 'exp_partition_quality.py'), *common,
+               '--unlearn_mode', 'random', '--unlearn_ratio', '0.05',
+               '--backbone', 'wmf'], root)
+    ok &= run('single_request_wmf',
+              [py, os.path.join(HERE, 'exp_single_request.py'), *common,
+               '--n_users', '2', '--backbone', 'wmf'], root)
     print('smoke test PASSED' if ok else 'smoke test FAILED - not starting')
     sys.exit(0 if ok else 1)
 

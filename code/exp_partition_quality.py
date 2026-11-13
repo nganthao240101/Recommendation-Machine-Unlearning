@@ -64,6 +64,7 @@ sys.path.insert(0, PROJ)
 
 import gpu_probe
 import fast_train
+import wmf_backbone
 from partition_variants import (
     build_signature as pv_build_signature,
     random_embedding as pv_random_embedding,
@@ -672,6 +673,24 @@ def _train_bprmf(train_items, n_users, n_items, emb_dim, epochs, lr,
     """
     from method_4_ours import BPRMF
     set_all_seeds(seed)
+    if wmf_backbone.use_wmf():
+        model = wmf_backbone.WMF(n_users, n_items, emb_dim).to(device)
+        if not any(train_items.values()):
+            return model, 0.0, 0, []
+        per_epoch, t0 = [], time.time()
+        last = [t0]
+
+        def epoch_end(ep):
+            if str(device).startswith('cuda'):
+                torch.cuda.synchronize()
+            now = time.time()
+            per_epoch.append(now - last[0])
+            last[0] = now
+        _, n = wmf_backbone.train_wmf(lambda u: model.user_embedding(u),
+                                      lambda: model.item_embedding.weight,
+                                      model.parameters(), train_items, device, lr,
+                                      epochs, epoch_end=epoch_end)
+        return model, time.time() - t0, n, per_epoch
     model = BPRMF(n_users, n_items, emb_dim).to(device)
     opt = torch.optim.Adagrad(model.parameters(), lr=lr, initial_accumulator_value=1e-8)
 
@@ -813,6 +832,13 @@ def main():
     ap.add_argument('--seeds', default='0,1,2,3,4')
     ap.add_argument('--arms', default='PROPOSED,PROPOSED_BAL,RANDOM_EMB,RANDOM_PERM,RANDOM_BAL,RANDOM_MODULO,SISA,GLOBAL')
     ap.add_argument('--data_root', default=None)
+    ap.add_argument('--backbone', default='bprmf', choices=['bprmf', 'wmf'],
+                    help='the model every arm trains: bprmf, or wmf (the authors\' '
+                         'WMF.py loss, see wmf_backbone.py); nothing else changes')
+    ap.add_argument('--wmf_c0', type=float, default=None,
+                    help='WMF negative weight c0 (default 0.2 ml-1m, 0.05 yelp2018)')
+    ap.add_argument('--wmf_keep', type=float, default=0.7, help='WMF dropout keep probability')
+    ap.add_argument('--wmf_batch_users', type=int, default=256, help='WMF users per batch')
     ap.add_argument('--skip_runs', default='',
                     help='ARM:seed,ARM:seed,... already finished in an earlier, '
                          'interrupted run of this log; they are not run again. '
@@ -863,6 +889,8 @@ def main():
     args = ap.parse_args()
 
     data_root = args.data_root or os.path.join(os.path.dirname(PROJ), 'data')
+    wmf_backbone.configure(args.backbone, args.wmf_c0, args.wmf_keep,
+                           args.wmf_batch_users, dataset=args.dataset)
     tag = args.tag or f'{args.dataset}_K{args.n_shards}'
 
     device = 'cuda' if torch.cuda.is_available() else 'cpu'
@@ -875,6 +903,7 @@ def main():
     emb = os.path.join(data_root, 'wmf_embeddings.npz')
     print(f"  WMF embeddings: {emb} ({'found' if os.path.exists(emb) else 'MISSING'})")
     print(f"  engine: {fast_train.engine_name()}")
+    print(f"  backbone: {wmf_backbone.describe()}")
 
     seeds = [int(s) for s in args.seeds.split(',') if s.strip()]
     skip = {(a, int(s)) for a, s in (x.split(':') for x in args.skip_runs.split(',') if x)}

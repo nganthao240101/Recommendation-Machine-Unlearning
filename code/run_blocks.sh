@@ -33,6 +33,7 @@
 #   Cách dùng (trên máy SSH, tại thư mục repo):
 #     bash code/run_blocks.sh reset        # XÓA HẾT log + kết quả cũ (nén backup trước)
 #     bash code/run_blocks.sh start full   # MỘT LỆNH CHẠY HẾT: ml-1m rồi yelp, Rec-UBP trước, engine GPU
+#     bash code/run_blocks.sh start fullwmf  # như full, nhưng mọi arm dùng model WMF (log *_wmf)
 #     bash code/run_blocks.sh start        # chạy NGẦM toàn bộ (all) trên GPU, 1 job/lần
 #     bash code/run_blocks.sh results      # in kết quả: xong trước in trước, chưa xong thì báo
 #     bash code/run_blocks.sh status       # tiến độ từng log
@@ -70,6 +71,11 @@ SEEDS="0,1,2,3,4"
 ARMS="PROPOSED,PROPOSED_BAL,SISA,RANDOM_PERM,RANDOM_EMB,RECERASER,GLOBAL"
 # cấu hình gốc; mỗi khối đè lên đúng 1 yếu tố
 K=8; DIM=64; SIG=64; MODE=random
+
+# Backbone mà mọi arm train: bprmf (mặc định) hoặc wmf (WMF của tác giả,
+# xem code/wmf_backbone.py). Log WMF có đuôi _wmf, không đè log BPRMF.
+BACKBONE="${BACKBONE:-bprmf}"
+bsuffix () { [ "$BACKBONE" = wmf ] && echo _wmf; }
 
 short () { case "$1" in ml-1m) echo ml1m ;; yelp2018) echo yelp ;; *) echo "$1" ;; esac; }
 
@@ -140,10 +146,10 @@ pq () {   # pq <log> <ds> [k=..] [dim=..] [mode=..] [arms=..] [-- extra args]
     shift
   done
   [ "${1:-}" = "--" ] && shift
-  run "$name" python code/exp_partition_quality.py --dataset "$ds" \
+  run "${name}$(bsuffix)" python code/exp_partition_quality.py --dataset "$ds" \
     --unlearn_mode "$m" --n_shards "$k" --emb_dim "$d" --sig_dim $SIG \
     --epochs 50 --retrain_epochs 50 --lr 0.05 --batch_size 512 \
-    --unlearn_ratio 0.01 --seeds $SEEDS --arms "$a" "$@"
+    --unlearn_ratio 0.01 --seeds $SEEDS --arms "$a" --backbone "$BACKBONE" "$@"
 }
 
 # trạng thái GPU: tên, bộ nhớ đã dùng, % tải, số process đang dùng GPU
@@ -252,9 +258,10 @@ block_modes () {
 block_single () {
   preflight
   for ds in $DATASETS; do
-    run "single_$(short $ds)" python code/exp_single_request.py --dataset "$ds" \
+    run "single_$(short $ds)$(bsuffix)" python code/exp_single_request.py --dataset "$ds" \
       --n_shards $K --emb_dim $DIM --sig_dim $SIG --epochs 50 --retrain_epochs 50 \
-      --lr 0.05 --batch_size 512 --n_users 20 --seeds $SEEDS --arms "$ARMS"
+      --lr 0.05 --batch_size 512 --n_users 20 --seeds $SEEDS --arms "$ARMS" \
+      --backbone "$BACKBONE"
   done
 }
 
@@ -319,6 +326,14 @@ block_full () {
   banner "FULL XONG - xem: bash code/run_blocks.sh results"
 }
 
+# ------------------------------------------------------------------ fullwmf
+# Đúng các thí nghiệm của full, chỉ đổi model BPRMF -> WMF ở MỌI arm.
+# Log: <tên>_wmf (main_ml1m_wmf, ...). Mọi thứ khác như full.
+block_fullwmf () {
+  BACKBONE=wmf
+  block_full
+}
+
 # ------------------------------------------------------------------ status
 block_status () {
   banner "STATUS"
@@ -326,7 +341,7 @@ block_status () {
   python code/clean_old_results.py --status
   echo ""
   echo "  Job dang chay:"
-  ps -ww -eo pid,etime,args | grep -E "exp_partition_quality|exp_single_request|run_blocks\.sh (main|modes|single|shards|dims|recpart|all|full)" \
+  ps -ww -eo pid,etime,args | grep -E "exp_partition_quality|exp_single_request|run_blocks\.sh (main|modes|single|shards|dims|recpart|all|full|fullwmf)" \
     | grep -v grep | sed 's/^/    /' || echo "    (khong co job nao)"
 }
 
@@ -357,29 +372,29 @@ csv_group () {   # csv_group <ten> <log1> [log2 ...]
 block_csv () {
   banner "EXPORT CSV -> results/csv/"
   mkdir -p results/csv
-  local all_ds="ml1m yelp"
-  local L_main="" L_modes="" L_shards="" L_dims="" L_rec="" L_single=""
+  local all_ds="ml1m yelp" x
+  x="$(bsuffix)"
+  local L_main="" L_modes="" L_shards="" L_dims="" L_rec="" L_single="" L_all=""
   for s in $all_ds; do
-    L_main="$L_main main_$s"
-    L_modes="$L_modes mode_most_$s mode_fewest_$s"
-    L_shards="$L_shards k4_$s main_$s k16_$s"      # K=8 là main
-    L_dims="$L_dims dim32_$s main_$s dim128_$s"    # dim=64 là main
-    L_rec="$L_rec main_$s recrand_$s"              # RECERASER UBP nằm trong main
-    L_single="$L_single logs/single_$s.out"
+    L_main="$L_main main_$s$x"
+    L_modes="$L_modes mode_most_$s$x mode_fewest_$s$x"
+    L_shards="$L_shards k4_$s$x main_$s$x k16_$s$x"      # K=8 là main
+    L_dims="$L_dims dim32_$s$x main_$s$x dim128_$s$x"    # dim=64 là main
+    L_rec="$L_rec main_$s$x recrand_$s$x"                # RECERASER UBP nằm trong main
+    L_single="$L_single logs/single_$s$x.out"
+    L_all="$L_all main_$s$x mode_most_$s$x mode_fewest_$s$x k4_$s$x k16_$s$x dim32_$s$x dim128_$s$x recrand_$s$x"
   done
-  csv_group main    $L_main
-  csv_group modes   $L_main $L_modes
-  csv_group shards  $L_shards
-  csv_group dims    $L_dims
-  csv_group recpart $L_rec
-  csv_group all     $L_main $L_modes k4_ml1m k16_ml1m k4_yelp k16_yelp \
-                    dim32_ml1m dim128_ml1m dim32_yelp dim128_yelp \
-                    recrand_ml1m recrand_yelp
+  csv_group "main$x"    $L_main
+  csv_group "modes$x"   $L_main $L_modes
+  csv_group "shards$x"  $L_shards
+  csv_group "dims$x"    $L_dims
+  csv_group "recpart$x" $L_rec
+  csv_group "all$x"     $L_all
 
   local have=()
   for f in $L_single; do [ -f "$f" ] && is_new "$f" && have+=("$f"); done
   if [ ${#have[@]} -gt 0 ]; then
-    python code/export_single_request_csv.py "${have[@]}" --out results/csv/single.csv | sed 's/^/  /'
+    python code/export_single_request_csv.py "${have[@]}" --out "results/csv/single$x.csv" | sed 's/^/  /'
   else
     echo "  [skip] single - chua co log"
   fi
@@ -427,15 +442,15 @@ block_smoke () {
 # tiếp. Lúc đó all bỏ qua log đã xong, chạy tiếp log dở từ run còn thiếu.
 block_start () {
   local blk="${1:-all}"
-  case "$blk" in all|full|main|modes|single|shards|dims|recpart) ;;
-    *) echo "!! start chỉ nhận: all | full | main | modes | single | shards | dims | recpart"; exit 1 ;;
+  case "$blk" in all|full|fullwmf|main|modes|single|shards|dims|recpart) ;;
+    *) echo "!! start chỉ nhận: all | full | fullwmf | main | modes | single | shards | dims | recpart"; exit 1 ;;
   esac
   if [ -f "$QUEUEFILE" ] && kill -0 "$(cat "$QUEUEFILE")" 2>/dev/null; then
     echo "!! Đã có một chuỗi đang xếp hàng (PID $(cat "$QUEUEFILE")). Không cần start thêm."; exit 1
   fi
   local busy=0 out
   lock_busy && busy=1
-  [ "$blk" = full ] && DATASETS="${FULL_DATASETS:-ml-1m yelp2018}"
+  case "$blk" in full|fullwmf) DATASETS="${FULL_DATASETS:-ml-1m yelp2018}" ;; esac
   banner "START (ngầm) - khối $blk - DATASETS=${FULL_DATASETS:-$DATASETS}"
   preflight
   block_smoke || { echo "!! Smoke test hỏng - KHÔNG chạy ngầm. Sửa lỗi trên rồi start lại."; exit 1; }
@@ -567,7 +582,7 @@ block_results () {
 }
 
 case "${1:-}" in
-  main|modes|single|shards|dims|recpart|all|full) take_lock ;;
+  main|modes|single|shards|dims|recpart|all|full|fullwmf) take_lock ;;
 esac
 
 case "${1:-}" in
@@ -581,6 +596,7 @@ case "${1:-}" in
   all)     block_main; block_modes; block_single; block_shards; block_dims; block_recpart; block_csv ;;
   start)   block_start "${2:-all}" ;;
   full)    block_full ;;
+  fullwmf) block_fullwmf ;;
   stop)    block_stop ;;
   reset)   block_reset ;;
   results) block_results ;;
