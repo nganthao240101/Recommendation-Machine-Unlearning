@@ -23,6 +23,15 @@ Run:
 
 import os
 import sys
+
+# Write every line to the log as it is printed. Piped through tee, Python
+# otherwise buffers about 8 KB, so a log could sit hours behind the run and
+# a progress check would read a live run as stuck.
+try:
+    sys.stdout.reconfigure(line_buffering=True)
+    sys.stderr.reconfigure(line_buffering=True)
+except AttributeError:
+    pass
 import time
 import random
 import argparse

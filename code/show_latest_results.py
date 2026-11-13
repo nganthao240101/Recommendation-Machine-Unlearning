@@ -212,10 +212,15 @@ def print_partial(name, path, text, n_arms):
     t0 = started_at(name)
     head = f'{done}/{total} runs done, now {cur}'
     if t0 and done:
-        el = time.time() - t0
-        per = el / done
-        head += (f' | running {ago(t0)}, ~{per / 60:.0f} min/run, '
-                 f'~{(total - done) * per / 3600:.1f} h left for this log')
+        live = cor.is_live(path)
+        # a stopped log ended at its last write, not now
+        end = time.time() if live else os.path.getmtime(path)
+        per = (end - t0) / done
+        if live:
+            head += (f' | running {ago(t0)}, ~{per / 60:.0f} min/run, '
+                     f'~{(total - done) * per / 3600:.1f} h left for this log')
+        else:
+            head += f' | ran {(end - t0) / 3600:.1f} h, ~{per / 60:.0f} min/run before it stopped'
     print()
     print('-' * 112)
     print(f'PARTIAL  {name}   {head}')
