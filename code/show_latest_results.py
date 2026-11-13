@@ -211,11 +211,21 @@ def print_partial(name, path, text, n_arms):
     done, total, cur = progress(name, text, n_arms)
     t0 = started_at(name)
     head = f'{done}/{total} runs done, now {cur}'
-    if t0 and done:
+    # runs finished since this START: a resumed log also holds the runs kept
+    # from before, which took none of this time
+    new = done
+    if '[resume]' in text:
+        after = text[text.rindex('[resume]'):]
+        new = (len(SINGLE_DONE.findall(after)) if name.startswith('single_')
+               else len(cor.RUN_LINE.findall(after)))
+        head += f' ({done - new} kept from before the resume)'
+    if t0 and done and not new:
+        head += f' | resumed {ago(t0)} ago, no new run finished yet'
+    elif t0 and new:
         live = cor.is_live(path)
         # a stopped log ended at its last write, not now
         end = time.time() if live else os.path.getmtime(path)
-        per = (end - t0) / done
+        per = (end - t0) / new
         if live:
             head += (f' | running {ago(t0)}, ~{per / 60:.0f} min/run, '
                      f'~{(total - done) * per / 3600:.1f} h left for this log')
