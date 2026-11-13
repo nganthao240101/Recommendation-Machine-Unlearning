@@ -204,6 +204,13 @@ def main():
     return results
 
 
+def _log_request(times, victims, victim):
+    """One line per finished request, so a run stopped half way still
+    leaves the requests it timed in the log (results reads them)."""
+    print(f"    request {len(times)}/{len(victims)} (user {victim}): {times[-1]:.2f}s",
+          flush=True)
+
+
 def _time_global(args, train_items, n_users, n_items, victims, seed, device):
     """Time one deletion at a time for the full retrain.
 
@@ -219,6 +226,7 @@ def _time_global(args, train_items, n_users, n_items, victims, seed, device):
                                         args.retrain_epochs, args.lr,
                                         args.batch_size, device, seed)
         times.append(elapsed)
+        _log_request(times, victims, v)
     return times
 
 
@@ -253,6 +261,7 @@ def _time_sharded(args, umap, train_items, n_users, n_items, victims, seed,
                           batch_size=args.batch_size, lr=args.lr,
                           n_epochs=args.retrain_epochs)
         times.append(time.time() - t0)
+        _log_request(times, victims, victim)
         models.models[sid] = models.get_model(sid)   # restore the original
     return times
 
@@ -320,6 +329,7 @@ def _time_receraser(args, train_items, n_users, n_items, victims, seed,
                              batch_size=args.batch_size,
                              n_epochs=args.agg_epochs)
         times.append(time.time() - t0)
+        _log_request(times, victims, victim)
     arm.model.load_state_dict(orig_state)
     return times
 

@@ -196,6 +196,7 @@ def progress(name, text, n_arms):
     return done, total, cur
 
 
+REQ_LINE = re.compile(r'^\s*request (\d+)/(\d+) \(user \d+\): ([\d.]+)s')
 SINGLE_LINE = re.compile(
     r'^\s*\[([A-Z_]+)\]\s+single-request unlearn time:\s+([\d.]+)\+-([\d.]+)s over (\d+)',
     re.M)
@@ -255,12 +256,27 @@ def print_partial(name, path, text, n_arms, brief=False):
         print('  (no run finished yet)')
         return
     if name.startswith('single_'):
-        rows = {}
-        for arm, m, sd, n in SINGLE_LINE.findall(text):
-            rows.setdefault(arm, []).append(float(m))
-        print(f'  {"arm":<14}{"seeds":>6}{"mean(s)":>10}')
-        for a in arms_of([{'arm': k} for k in rows]):
-            print(f'  {label(a):<14}{len(rows[a]):>6}{st.mean(rows[a]):>10.2f}')
+        # every timed request, also those of an arm still running
+        req = {}
+        cur = None
+        for ln in text.splitlines():
+            m = cor.ARM_SEED.search(ln)
+            if m:
+                cur = m.group(1)
+                continue
+            m = REQ_LINE.match(ln)
+            if m and cur:
+                req.setdefault(cur, []).append(float(m.group(3)))
+        if not req:                       # logs from before the per-request line
+            for arm, m, sd, n in SINGLE_LINE.findall(text):
+                req.setdefault(arm, []).append(float(m))
+        print(f'  {"arm":<14}{"requests":>9}{"mean(s)":>10}{"std":>9}{"min":>9}{"max":>9}')
+        for a in arms_of([{'arm': k} for k in req]):
+            v = req[a]
+            sd = st.stdev(v) if len(v) > 1 else 0.0
+            print(f'  {label(a):<14}{len(v):>9}{st.mean(v):>10.2f}{sd:>9.2f}'
+                  f'{min(v):>9.2f}{max(v):>9.2f}')
+        print('  (requests = deletion requests timed so far, across the seeds)')
         return
     print_pq(parse_log(path), brief=brief)
     print('  (n = seeds finished so far)')
