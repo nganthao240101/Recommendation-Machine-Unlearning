@@ -489,9 +489,9 @@ block_gpu () {
     # log = file mà tee cùng nhóm đang ghi
     log=$(for t in $(pgrep -x tee); do
             [ "$(ps -o pgid= -p $t | tr -d ' ')" = "$(ps -o pgid= -p $pid | tr -d ' ')" ] && \
-              tr '\0' ' ' < /proc/$t/cmdline | awk '{print $2}'
+              tr '\0' ' ' < /proc/$t/cmdline | awk '{for (i = 2; i <= NF; i++) if ($i !~ /^-/) { print $i; exit }}'
           done | head -1)
-    dev=$( [ -n "$log" ] && grep -m1 -o 'device=[a-z]*' "$log" 2>/dev/null)
+    dev=$( [ -n "$log" ] && grep -m1 -o -e 'device=[a-z]*' -- "$log" < /dev/null 2>/dev/null)
     echo "    PID $pid  chạy $(ps -o etime= -p $pid | tr -d ' ')  log=${log:-?}"
     echo "        dataset/arm : $(echo "$args" | grep -o -- '--dataset [^ ]*') $(echo "$args" | grep -o -- '--n_shards [^ ]*') $(echo "$args" | grep -o -- '--emb_dim [^ ]*') $(echo "$args" | grep -o -- '--unlearn_mode [^ ]*')"
     if [ "$gpu_fds" -gt 0 ]; then
@@ -499,7 +499,7 @@ block_gpu () {
     else
       echo "        /dev/nvidia*: KHÔNG mở  -> KHÔNG dùng GPU (hoặc chưa khởi tạo CUDA)"
     fi
-    echo "        log ghi     : ${dev:-chưa in device}  | đang ở: $( [ -n "$log" ] && grep -o -- '--- ARM [A-Z_]* (seed [0-9]*)' "$log" | tail -1)"
+    echo "        log ghi     : ${dev:-chưa in device}  | đang ở: $( [ -n "$log" ] && grep -o -e '--- ARM [A-Z_]* (seed [0-9]*)' -- "$log" < /dev/null | tail -1)"
   done
   [ "$found" = 0 ] && echo "    Không có process thí nghiệm nào đang chạy."
   echo ""

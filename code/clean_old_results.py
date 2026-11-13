@@ -33,6 +33,7 @@ Usage
 """
 
 import argparse
+import sys
 import os
 import re
 import tarfile
@@ -363,4 +364,10 @@ def main():
 
 
 if __name__ == '__main__':
-    main()
+    try:
+        main()
+    except BrokenPipeError:      # output piped into head and cut short
+        try:
+            sys.stdout.close()
+        except Exception:
+            pass
