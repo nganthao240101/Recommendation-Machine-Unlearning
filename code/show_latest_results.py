@@ -25,6 +25,7 @@ from export_single_request_csv import parse as parse_single   # noqa: E402
 ROOT = cor.ROOT
 LOGS = cor.LOGS
 BASELINE = 'RANDOM_PERM'
+SHARED = 10          # % background GPU load above which a run counts as shared
 ARM_ORDER = ['PROPOSED', 'PROPOSED_BAL', 'SISA', 'RANDOM_PERM', 'RANDOM_EMB',
              'RECERASER', 'GLOBAL']
 N_SEEDS = 5
@@ -85,15 +86,17 @@ def print_pq(recs, brief):
     arms = arms_of(recs)
     if brief:
         print(f'  {"arm":<14}{"n":>3}{"R@10":>17}{"NDCG@10":>17}{"unlearn(s)":>15}'
-              f'{"dR@10 vs RP":>13}{"p":>8}')
+              f'{"work(M)":>10}{"dR@10 vs RP":>13}{"p":>8}')
         for a in arms:
             rs = [r for r in recs if r['arm'] == a]
             pr = paired_test(recs, a, BASELINE, 'recall_10') if a != BASELINE else None
             d = f'{pr["mean_delta"]:+.4f}' if pr else '-'
             p = f'{pr["p"]:.4f}' if pr and pr['p'] == pr['p'] else '-'
+            wk = [r['unlearn_samples'] / 1e6 for r in rs if r.get('unlearn_samples') is not None]
             print(f'  {a:<14}{len(rs):>3}{ms([r.get("recall_10") for r in rs]):>17}'
                   f'{ms([r.get("ndcg_10") for r in rs]):>17}'
-                  f'{ms([r.get("unlearn_time") for r in rs], 1):>15}{d:>13}{p:>8}')
+                  f'{ms([r.get("unlearn_time") for r in rs], 1):>15}'
+                  f'{(f"{st.mean(wk):.2f}" if wk else "-"):>10}{d:>13}{p:>8}')
         return
 
     print(f'  -- utility (mean+-std over seeds)')
@@ -117,14 +120,26 @@ def print_pq(recs, brief):
               f'{g("interaction_load_cv", 3):>9}{g("max_mean_ratio", 2):>9}'
               f'{g("instability_label"):>9}{g("instability_pairwise"):>8}')
 
-    print(f'  -- cost (s, mean+-std) and affected shards')
-    print(f'  {"arm":<14}{"train":>16}{"unlearn":>16}{"parallel":>16}{"shards":>12}')
+    print(f'  -- cost: seconds (mean+-std), affected shards, unlearn work, GPU background load')
+    print(f'  {"arm":<14}{"train":>14}{"unlearn":>14}{"parallel":>14}{"shards":>11}'
+          f'{"work (M samples)":>18}{"bg% max":>9}')
+    shared_runs = 0
     for a in arms:
         rs = [r for r in recs if r['arm'] == a]
-        print(f'  {a:<14}{ms([r.get("train_time") for r in rs], 1):>16}'
-              f'{ms([r.get("unlearn_time") for r in rs], 1):>16}'
-              f'{ms([r.get("parallel_time") for r in rs], 1):>16}'
-              f'{ms([r.get("affected_shards") for r in rs], 1):>12}')
+        work = [r['unlearn_samples'] / 1e6 for r in rs if r.get('unlearn_samples') is not None]
+        bg = [max(r.get('bg_load_before') or 0, r.get('bg_load_after') or 0) for r in rs
+              if r.get('bg_load_before') is not None or r.get('bg_load_after') is not None]
+        n_sh = sum(v >= SHARED for v in bg)
+        shared_runs += n_sh
+        flag = f'{max(bg):.0f}' + ('!' if n_sh else '') if bg else '-'
+        print(f'  {a:<14}{ms([r.get("train_time") for r in rs], 1):>14}'
+              f'{ms([r.get("unlearn_time") for r in rs], 1):>14}'
+              f'{ms([r.get("parallel_time") for r in rs], 1):>14}'
+              f'{ms([r.get("affected_shards") for r in rs], 1):>11}'
+              f'{ms(work, 2):>18}{flag:>9}')
+    if shared_runs:
+        print(f'  ! {shared_runs} run(s) measured while other work used the GPU '
+              f'(>= {SHARED}%): their seconds may be inflated; the work column is not')
 
     if BASELINE in arms and len(arms) > 1:
         print(f'  -- paired vs {BASELINE} (same seeds; * = p < 0.05)')

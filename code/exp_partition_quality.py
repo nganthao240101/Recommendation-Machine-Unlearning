@@ -53,6 +53,7 @@ from scipy.optimize import linear_sum_assignment
 PROJ = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, PROJ)
 
+import gpu_probe
 from partition_variants import (
     build_signature as pv_build_signature,
     random_embedding as pv_random_embedding,
@@ -853,6 +854,7 @@ def main():
             if (arm, seed) in skip:
                 continue
             print(f"\n--- ARM {arm} (seed {seed}) ---")
+            bg0 = gpu_probe.background_load()
             row = {
                 'dataset': args.dataset, 'seed': seed, 'arm': arm, 'K': args.n_shards,
                 'deletion_ratio': args.unlearn_ratio, 'deletion_mode': args.unlearn_mode,
@@ -1035,6 +1037,27 @@ def main():
                   f"unlearn={row['unlearn_time']:.1f}s "
                   f"parallel={row.get('parallel_time', 0.0):.1f}s "
                   f"shards={row['affected_shards']}")
+            # Unlearning cost in training samples processed: the interactions
+            # of every retrained shard times its epochs (plus the aggregator
+            # pass for RecEraser, the whole retained set for the retrain).
+            # Unlike the seconds above it does not depend on the hardware or
+            # on what else runs on the GPU.
+            if arm == 'GLOBAL':
+                work = int(row.get('shard_interactions_unlearn') or 0) * args.epochs
+            else:
+                work = sum(per_shard_inter.values()) * args.retrain_epochs
+                if arm == 'RECERASER':
+                    n_kept = sum(len(it) for u, it in train_items.items()
+                                 if u not in del_users)
+                    work += n_kept * args.agg_epochs
+            bg1 = gpu_probe.background_load()
+            row['unlearn_samples'] = work
+            row['bg_load_before'], row['bg_load_after'] = bg0, bg1
+            print(f"       work: unlearn_samples={work}")
+            shared = any(v is not None and v >= gpu_probe.THRESHOLD for v in (bg0, bg1))
+            print(f"       bg-load: before={gpu_probe.fmt(bg0)} after={gpu_probe.fmt(bg1)}"
+                  + ("  [SHARED GPU - other work was running, times may be inflated]"
+                     if shared else ""))
             print(f"       partition quality: IntraSim={row['intra_similarity']} "
                   f"NR@10={row['nr_10']} NR@20={row['nr_20']} NR@50={row['nr_50']}")
             print(f"       load: user_cv={row['user_load_cv']} "

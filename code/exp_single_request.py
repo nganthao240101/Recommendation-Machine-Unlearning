@@ -43,6 +43,7 @@ from partition_variants import (              # noqa: E402
     random_perm as pv_random_perm, random_modulo as pv_random_modulo,
 )
 from method_4_ours import ShardModels, train_shard_model, BPRMF  # noqa: E402
+import gpu_probe  # noqa: E402
 
 
 def build_partition(arm, train_items, n_users, n_items, n_shards, args, seed,
@@ -146,6 +147,7 @@ def main():
             if (arm, seed) in skip:
                 continue
             print(f"\n--- ARM {arm} (seed {seed}) ---")
+            bg0 = gpu_probe.background_load()
             set_all_seeds(seed)
 
             if arm == 'RECERASER':
@@ -165,6 +167,11 @@ def main():
             sd = st.stdev(times) if len(times) > 1 else 0.0
             print(f"  [{arm}] single-request unlearn time: "
                   f"{mean:.2f}+-{sd:.2f}s over {len(times)} requests")
+            bg1 = gpu_probe.background_load()
+            shared = any(v is not None and v >= gpu_probe.THRESHOLD for v in (bg0, bg1))
+            print(f"       bg-load: before={gpu_probe.fmt(bg0)} after={gpu_probe.fmt(bg1)}"
+                  + ("  [SHARED GPU - other work was running, times may be inflated]"
+                     if shared else ""))
             results.append({'arm': arm, 'seed': seed, 'n_requests': len(times),
                             'single_time_mean': mean, 'single_time_std': sd,
                             'single_time_min': min(times),

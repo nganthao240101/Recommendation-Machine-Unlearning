@@ -49,6 +49,13 @@ RE_COST = {
     # simply have no value for it
     'parallel_time':   re.compile(r'parallel=([\d.]+)s'),
 }
+RE_WORK = {
+    'unlearn_samples': re.compile(r'unlearn_samples=(\d+)'),
+}
+RE_BG = {
+    'bg_load_before': re.compile(r'before=(\d+)%'),
+    'bg_load_after':  re.compile(r'after=(\d+)%'),
+}
 RE_INSTABILITY = {
     'instability_label':   re.compile(r'label-matched=([\d.]+)%'),
     'instability_pairwise': re.compile(r'pairwise=([\d.]+)%'),
@@ -101,6 +108,18 @@ def parse_log(path):
         if pending is not None and 'cost:' in ln:
             # the newer runs print the cost on its own line
             for k, rx in RE_COST.items():
+                mm = rx.search(ln)
+                if mm:
+                    pending[k] = float(mm.group(1))
+            continue
+        if pending is not None and 'work:' in ln:
+            for k, rx in RE_WORK.items():
+                mm = rx.search(ln)
+                if mm:
+                    pending[k] = float(mm.group(1))
+            continue
+        if pending is not None and 'bg-load:' in ln:
+            for k, rx in RE_BG.items():
                 mm = rx.search(ln)
                 if mm:
                     pending[k] = float(mm.group(1))
@@ -285,6 +304,7 @@ RAW_COLS = [
     'seed', 'arm',
     'recall_10', 'ndcg_10', 'recall_20', 'ndcg_20', 'recall_50', 'ndcg_50',
     'train_time', 'unlearn_time', 'parallel_time', 'affected_shards',
+    'unlearn_samples', 'bg_load_before', 'bg_load_after',
     'intra_similarity', 'nr_10', 'nr_20', 'nr_50',
     'user_load_cv', 'interaction_load_cv', 'max_mean_ratio',
     'instability_label', 'instability_pairwise',
