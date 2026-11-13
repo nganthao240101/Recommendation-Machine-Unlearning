@@ -65,10 +65,10 @@ def run(engine, train, test, n_users, n_items, epochs, device):
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument('--dataset', default='ml-1m')
-    ap.add_argument('--users', type=int, default=1500,
+    ap.add_argument('--users', type=int, default=600,
                     help='users in the slice (about one shard of ml-1m at K=4-8)')
-    ap.add_argument('--epochs', type=int, default=5)
-    ap.add_argument('--eval_users', type=int, default=300,
+    ap.add_argument('--epochs', type=int, default=1)
+    ap.add_argument('--eval_users', type=int, default=100,
                     help='test users scored (the original loop takes seconds per user '
                          'on a busy GPU)')
     args = ap.parse_args()
@@ -81,7 +81,9 @@ def main():
     print(f'{args.dataset}: {len(users)} users, {sum(map(len, train.values()))} '
           f'interactions, {args.epochs} epochs, device={device}')
     out = {}
-    for eng in ('python', 'gpu'):
+    # the GPU engine first: its numbers come in seconds, while the original
+    # loop waits on a busy GPU after every batch and can take minutes
+    for eng in ('gpu', 'python'):
         out[eng] = run(eng, train, test, n_users, n_items, args.epochs, device)
     sp_tr = out['python'][0] / max(out['gpu'][0], 1e-9)
     sp_ev = out['python'][1] / max(out['gpu'][1], 1e-9)
