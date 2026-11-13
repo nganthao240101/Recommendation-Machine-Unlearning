@@ -314,7 +314,7 @@ class RecEraserArm:
                     skipped[0] += 1
                     return None
                 loss.backward()
-                torch.nn.utils.clip_grad_norm_(m.parameters(), 1.0)
+                torch.nn.utils.clip_grad_norm_(agg_params, 1.0)
                 opt.step()
                 return loss
             fast_train.train_epochs(
@@ -338,12 +338,12 @@ class RecEraserArm:
             m.eval()
             K, D = m.num_local, m.emb_dim
 
-            def agg(emb):        # what predict(..., use_aggregation=True) does
+            def agg(emb, item=False):   # what predict(..., use_aggregation=True) does
                 es = emb.view(-1, K, D)
                 es = torch.einsum('bkd,kde->bke', es, m.trans_W) + m.trans_B
-                return m._attention_aggregate(es)[0]
+                return m._attention_aggregate(es, item=item)[0]
             with torch.no_grad():
-                items = torch.cat([agg(m.item_embedding.weight[i:i + 8192])
+                items = torch.cat([agg(m.item_embedding.weight[i:i + 8192], item=True)
                                    for i in range(0, n_items, 8192)])
             res = fast_train.evaluate_topk(
                 lambda ut: agg(m.user_embedding.weight[ut]) @ items.T,
@@ -412,7 +412,8 @@ def run_receraser_arm(train_items, test_data, n_users, n_items, n_shards,
     arm = RecEraserArm(n_users, n_items, emb_dim, n_shards, device, seed)
     if init == 'wmf':
         arm.load_pretrained(user_emb, item_emb)
-    print(f'    [RecEraser] init={init} (emb_dim={emb_dim}, K={n_shards})')
+    print(f'    [RecEraser] init={init} (emb_dim={emb_dim}, K={n_shards}) '
+          f'attention=authors (WA/WB truncated normal, items on WB)')
 
     shard_data = [{} for _ in range(n_shards)]
     for u, items in train_items.items():

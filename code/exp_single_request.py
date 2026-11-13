@@ -271,7 +271,7 @@ def _time_receraser(args, train_items, n_users, n_items, victims, seed,
         arm.load_pretrained(user_emb, item_emb)
     print(f'    [RecEraser] init={args.receraser_init} '
           f'partition={args.receraser_partition} (emb_dim={args.emb_dim}, '
-          f'K={args.n_shards})')
+          f'K={args.n_shards}) attention=authors (WA/WB truncated normal, items on WB)')
     for sid in range(args.n_shards):
         arm.train_shard(sid, shard_data[sid], n_items,
                          batch_size=args.batch_size, lr=args.lr,

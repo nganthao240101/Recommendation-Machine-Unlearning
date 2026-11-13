@@ -518,6 +518,15 @@ class RecEraserModel(nn.Module):
         for k in range(num_local):
             self.trans_W.data[k] = torch.eye(emb_dim)
 
+        # WA and WB were created with torch.empty and never filled, so they
+        # held whatever was in memory (zeros, huge values or NaN): the
+        # attention scores were garbage, the aggregator skipped its NaN
+        # batches and barely trained. The authors' RecEraser_BPR.py draws them
+        # from a truncated normal with std sqrt(2 / (attention_size + emb_dim)).
+        std = (2.0 / (self.attention_size + emb_dim)) ** 0.5
+        nn.init.trunc_normal_(self.WA, mean=0.0, std=std, a=-2 * std, b=2 * std)
+        nn.init.trunc_normal_(self.WB, mean=0.0, std=std, a=-2 * std, b=2 * std)
+
         nn.init.xavier_uniform_(self.user_embedding.weight)
         nn.init.xavier_uniform_(self.item_embedding.weight)
 
@@ -538,13 +547,19 @@ class RecEraserModel(nn.Module):
     def _get_shard_emb(self, emb, shard):
         return emb.view(-1, self.num_local, self.emb_dim)[:, shard, :]
 
-    def _attention_aggregate(self, embs):
-        """Attention aggregation - combine all shard embeddings"""
+    def _attention_aggregate(self, embs, item=False):
+        """Attention aggregation - combine all shard embeddings.
+
+        As attention_based_agg in the authors' RecEraser_BPR.py: users are
+        aggregated with (WA, BA, HA), items with (WB, BB, HB). The port used
+        the user weights for both and never touched WB.
+        """
+        W, B, H = (self.WB, self.BB, self.HB) if item else (self.WA, self.BA, self.HA)
         # embs: [B, num_local, D]
         # Score: H^T . ReLU(emb @ W + B)
-        hidden = torch.einsum('bkd,dc->bkc', embs, self.WA) + self.BA  # [B, K, A]
+        hidden = torch.einsum('bkd,dc->bkc', embs, W) + B  # [B, K, A]
         hidden = torch.relu(hidden)
-        score = torch.einsum('bkc,ca->bka', hidden, self.HA)  # [B, K, 1]
+        score = torch.einsum('bkc,ca->bka', hidden, H)  # [B, K, 1]
         attn = torch.softmax(score, dim=1)
         agg = (attn * embs).sum(dim=1)  # [B, D]
         return agg, attn
@@ -568,8 +583,8 @@ class RecEraserModel(nn.Module):
 
             # Aggregate
             u_emb, _ = self._attention_aggregate(u_es)
-            pos_emb, _ = self._attention_aggregate(pos_es)
-            neg_emb, _ = self._attention_aggregate(neg_es)
+            pos_emb, _ = self._attention_aggregate(pos_es, item=True)
+            neg_emb, _ = self._attention_aggregate(neg_es, item=True)
         else:
             # Use hard-routing (single shard)
             u_emb = self._get_shard_emb(self.user_embedding(users), shard)
@@ -599,7 +614,7 @@ class RecEraserModel(nn.Module):
             i_es = torch.einsum('bkd,kde->bke', i_es, self.trans_W) + self.trans_B
 
             u_emb, _ = self._attention_aggregate(u_es)
-            i_emb, _ = self._attention_aggregate(i_es)
+            i_emb, _ = self._attention_aggregate(i_es, item=True)
         else:
             # Use hard-routing (single shard)
             u_emb = self._get_shard_emb(self.user_embedding(users), shard)
@@ -726,7 +741,10 @@ def train_aggregator(model, train_data, n_users, n_items, device, batch_size=512
                 continue
 
             loss.backward()
-            torch.nn.utils.clip_grad_norm_(model.parameters(), 1.0)   # chặn gradient "bay"
+            # clip the aggregator's own gradients: model.parameters() also held
+            # the embeddings' stale gradients from the shard training, which
+            # inflated the norm and shrank every aggregator step to almost nothing
+            torch.nn.utils.clip_grad_norm_(agg_params, 1.0)
             optimizer.step()
             total_loss += loss.item()
 
