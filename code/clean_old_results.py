@@ -65,6 +65,10 @@ REC_MARK = '[RecEraser] init='
 # printed by the UBP partition since it follows the authors' balanced k-means
 # (user-count cap); the earlier port balanced interaction counts instead
 UBP_MARK = 'empty-shard restart'
+# printed by the RecEraser arm since its attention follows the authors (WA/WB
+# initialised, items aggregated on WB); before that WA/WB were uninitialised
+# memory and its R@10 collapsed (0.0035 on ml-1m against ~0.07 for the others)
+ATTN_MARK = 'attention=authors'
 
 
 def live_logs():
@@ -141,6 +145,8 @@ def classify_log(path):
     rec = 'RECERASER' in arms or re.search(r'^RECERASER\s', text, re.M)
     if rec and REC_MARK not in text:
         return 'OLD', 'RECERASER seeded with the scrambled WMF vector (old code)'
+    if rec and ATTN_MARK not in text:
+        return 'OLD', 'RECERASER with the uninitialised attention (its runs run again)'
     if rec and not name.startswith('recrand') and UBP_MARK not in text:
         return 'OLD', 'RECERASER with the earlier UBP port (interaction-balanced)'
     if name.startswith('single_'):
@@ -161,44 +167,73 @@ SINGLE_DONE = re.compile(r'^\s*\[([A-Z_]+)\]\s+single-request unlearn time', re.
 
 
 def prepare_resume(path):
-    """Make an interrupted log ready to be continued.
+    """Make a log ready to be continued, keeping every valid finished run.
 
-    Returns the finished runs as 'ARM:seed,...' (what --skip_runs takes) and
-    cuts the log back to the end of the last finished run, so the traceback
-    and the half-run arm are gone and the new runs can be appended. Returns ''
-    and leaves the file alone when the log cannot be continued: it is
-    finished, it has no finished run, or it was written by older code (then
-    the whole experiment runs again).
+    Works on an interrupted log and on a finished one whose RecEraser runs
+    are stale. The log is cut into one block per (arm, seed) run. Kept: the
+    finished runs, except RecEraser runs written before the fixes (no
+    REC_MARK / ATTN_MARK in the block, or no UBP_MARK on a UBP log), which
+    are dropped so that only they run again. Dropped as well: a half-run
+    last block with its traceback, and the CONSOLE SUMMARY of a finished
+    log. The file is rewritten with what is kept and the runs are returned
+    as 'ARM:seed,...' (what --skip_runs takes).
+
+    Returns '' and leaves the file alone when nothing can be kept, or when
+    the log is from code older than a716452 (no "S5 rate check"): then the
+    whole experiment runs again.
     """
     text = open(path, encoding='utf-8', errors='replace').read()
-    if 'CONSOLE SUMMARY' in text:
-        return ''
-    single = os.path.basename(path).startswith('single_')
+    name = os.path.basename(path)
+    single = name.startswith('single_')
     if not single and 'S5 rate check' not in text:
         return ''           # older code: its runs cannot be mixed with new ones
     lines = text.splitlines(keepends=True)
-    done, cur, last_hdr = [], None, None
+    # the summary of a finished log goes: cut from its banner
+    cut = len(lines)
     for i, ln in enumerate(lines):
+        if 'CONSOLE SUMMARY' in ln:
+            cut = i
+            while cut > 0 and (not lines[cut - 1].strip() or lines[cut - 1].startswith('=')):
+                cut -= 1
+            break
+    lines = lines[:cut]
+    done_re = SINGLE_DONE if single else RUN_LINE
+    head, blocks, cur = [], [], None          # blocks: [arm, seed, lines]
+    for ln in lines:
         m = ARM_SEED.search(ln)
         if m:
-            cur, last_hdr = (m.group(1), int(m.group(2))), i
-            continue
-        r = (SINGLE_DONE if single else RUN_LINE).match(ln)
-        if r and cur and r.group(1) == cur[0]:
-            done.append(cur)
-    if not done:
+            cur = [m.group(1), int(m.group(2)), [ln]]
+            blocks.append(cur)
+        elif cur is None:
+            head.append(ln)
+        else:
+            cur[2].append(ln)
+
+    def valid(arm, seed, blk):
+        body = ''.join(blk)
+        r = done_re.search(body)
+        if not r or r.group(1) != arm:
+            return False                      # never finished
+        if arm == 'RECERASER':
+            if REC_MARK not in body or ATTN_MARK not in body:
+                return False                  # broken attention / old init
+            if not name.startswith('recrand') and UBP_MARK not in body:
+                return False                  # earlier UBP port
+        return True
+
+    kept = [b for b in blocks if valid(*b)]
+    dropped = [f'{a}:{s}' for a, s, blk in blocks if not valid(a, s, blk)]
+    if not kept:
         return ''
-    # a RecEraser run from before the fixes cannot be kept
-    if any(a == 'RECERASER' for a, _ in done) and (
-            REC_MARK not in text or UBP_MARK not in text):
-        return ''
-    if last_hdr is not None and cur not in done:
-        lines = lines[:last_hdr]
     with open(path, 'w', encoding='utf-8') as f:
-        f.write(''.join(lines))
-        f.write(f'\n[resume] {len(done)} finished run(s) kept; continuing '
-                f'{time.strftime("%Y-%m-%d %H:%M:%S")}\n')
-    return ','.join(f'{a}:{s}' for a, s in done)
+        f.write(''.join(head))
+        for _, _, blk in kept:
+            f.write(''.join(blk))
+        f.write(chr(10) + f'[resume] {len(kept)} finished run(s) kept'
+                + (f', {len(dropped)} dropped to run again ({",".join(dropped)})'
+                   if dropped else '')
+                + f'; continuing {time.strftime("%Y-%m-%d %H:%M:%S")}' + chr(10))
+    return ','.join(f'{a}:{s}' for a, s, _ in kept)
 
 
 def last_error(text):
@@ -302,6 +337,10 @@ def main():
                 rows.append(('OLD', p, 'directory of earlier runs'))
                 continue
             v, why = classify_log(p)
+            # an experiment log is never removed here: run_blocks.sh keeps its
+            # valid runs, cuts the stale or half-run ones and runs only those
+            if v in ('OLD', 'FAILED') and name[:-4] in EXPERIMENT_LOGS and name.endswith('.out'):
+                v, why = 'KEEP', f'{why} -> start keeps its valid runs, reruns the rest'
             rows.append((v, p, why))
 
     if os.path.isdir(RESULTS):

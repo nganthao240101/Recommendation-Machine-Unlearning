@@ -86,28 +86,25 @@ is_new () { python code/clean_old_results.py --is-new "$1"; }
 run () {
   local name="$1"; shift
   local f="logs/${name}.out"
-  if [ -f "$f" ] && grep -q "CONSOLE SUMMARY" "$f" 2>/dev/null; then
-    if is_new "$f"; then
+  local tee_opt="" skip=""
+  if [ -f "$f" ]; then
+    if grep -q "CONSOLE SUMMARY" "$f" 2>/dev/null && is_new "$f"; then
       echo "[skip] $name  (đã xong bằng code hiện tại)"
       return 0
     fi
-    # log CŨ trùng tên: đổi tên để chạy lại, không ghi đè mất
-    local old="logs/${name}.out.old_$(date +%Y%m%d_%H%M%S)"
-    mv "$f" "$old"
-    echo "[rerun] $name  (log cũ -> $old)"
-  fi
-  # Log dở (crash / bị dừng): giữ các cặp arm/seed đã xong, chỉ chạy phần còn
-  # thiếu và ghi NỐI vào log. Log của code cũ thì chạy lại từ đầu.
-  local tee_opt="" skip=""
-  if [ -f "$f" ] && ! grep -q "CONSOLE SUMMARY" "$f" 2>/dev/null; then
+    # Log dở, hoặc log đã xong nhưng có run RecEraser cũ/hỏng: giữ mọi cặp
+    # arm/seed còn hợp lệ, bỏ run hỏng, chỉ chạy phần còn thiếu và ghi NỐI
+    # vào log. Log của code cũ (trước a716452) thì chạy lại từ đầu.
     skip=$(python code/clean_old_results.py --prepare-resume "$f")
     if [ -n "$skip" ]; then
       tee_opt="-a"
       set -- "$@" --skip_runs "$skip"
-      echo "[resume] $name: giữ $(echo "$skip" | tr ',' '\n' | grep -c .) run đã xong, chạy tiếp phần còn lại"
+      echo "[resume] $name: giữ $(echo "$skip" | tr ',' ' ' | wc -w) run hợp lệ, chạy phần còn lại"
+      grep "^\[resume\]" "$f" | tail -1
     else
-      mv "$f" "logs/${name}.out.old_$(date +%Y%m%d_%H%M%S)"
-      echo "[rerun] $name: log dở không dùng tiếp được (code cũ / chưa xong run nào) -> chạy lại từ đầu"
+      local old="logs/${name}.out.old_$(date +%Y%m%d_%H%M%S)"
+      mv "$f" "$old"
+      echo "[rerun] $name: không giữ được run nào (code cũ / chưa xong run nào) -> chạy lại từ đầu, log cũ -> $old"
     fi
   fi
   banner "START $name"

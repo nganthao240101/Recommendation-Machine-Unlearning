@@ -25,6 +25,14 @@ from export_single_request_csv import parse as parse_single   # noqa: E402
 ROOT = cor.ROOT
 LOGS = cor.LOGS
 SHARED = 10          # % background GPU load above which a run counts as shared
+# the names of Table 2 in the paper; the logs keep the internal arm names
+LABEL = {'PROPOSED': 'SAFER A', 'PROPOSED_BAL': 'SAFER B', 'SISA': 'SISA',
+         'RANDOM_PERM': 'Random', 'RANDOM_EMB': 'RandomEmb',
+         'RECERASER': 'RecEraser', 'GLOBAL': 'Retrain'}
+
+
+def label(arm):
+    return LABEL.get(arm, arm)
 UTIL = (('recall_10', 'R@10'), ('ndcg_10', 'N@10'), ('recall_20', 'R@20'), ('ndcg_20', 'N@20'), ('recall_50', 'R@50'), ('ndcg_50', 'N@50'))
 ARM_ORDER = ['PROPOSED', 'PROPOSED_BAL', 'SISA', 'RANDOM_PERM', 'RANDOM_EMB',
              'RECERASER', 'GLOBAL']
@@ -101,7 +109,7 @@ def print_pq(recs, brief):
             rs = [r for r in recs if r['arm'] == a]
             wk = [r['unlearn_samples'] / 1e6 for r in rs if r.get('unlearn_samples') is not None]
             ul = [r.get('unlearn_time') for r in timed(rs, eng) if r.get('unlearn_time') is not None]
-            print(f'  {a:<14}{len(rs):>3}'
+            print(f'  {label(a):<14}{len(rs):>3}'
                   + ''.join(f'{mean([r.get(k) for r in rs], 4):>8}' for k, _ in UTIL)
                   + f'{(f"{st.mean(ul):.1f}" if ul else "-"):>12}'
                   + f'{(f"{st.mean(wk):.2f}" if wk else "-"):>9}')
@@ -114,7 +122,7 @@ def print_pq(recs, brief):
           f'{"NDCG@20":>16}{"R@50":>16}{"NDCG@50":>16}')
     for a in arms:
         rs = [r for r in recs if r['arm'] == a]
-        print(f'  {a:<14}{len(rs):>3}' + ''.join(
+        print(f'  {label(a):<14}{len(rs):>3}' + ''.join(
             f'{ms([r.get(k) for r in rs]):>16}'
             for k in ('recall_10', 'ndcg_10', 'recall_20', 'ndcg_20',
                       'recall_50', 'ndcg_50')))
@@ -125,7 +133,7 @@ def print_pq(recs, brief):
     for a in arms:
         rs = [r for r in recs if r['arm'] == a]
         g = lambda k, p=4: mean([r.get(k) for r in rs], p)
-        print(f'  {a:<14}{g("intra_similarity"):>10}{g("nr_10", 3):>8}'
+        print(f'  {label(a):<14}{g("intra_similarity"):>10}{g("nr_10", 3):>8}'
               f'{g("nr_20", 3):>8}{g("nr_50", 3):>8}{g("user_load_cv", 3):>9}'
               f'{g("interaction_load_cv", 3):>9}{g("max_mean_ratio", 2):>9}'
               f'{g("instability_label"):>9}{g("instability_pairwise"):>8}')
@@ -143,7 +151,7 @@ def print_pq(recs, brief):
         shared_runs += n_sh
         flag = f'{max(bg):.0f}' + ('!' if n_sh else '') if bg else '-'
         tr = timed(rs, eng)
-        print(f'  {a:<14}{ms([r.get("train_time") for r in tr], 1):>14}'
+        print(f'  {label(a):<14}{ms([r.get("train_time") for r in tr], 1):>14}'
               f'{ms([r.get("unlearn_time") for r in tr], 1):>14}'
               f'{ms([r.get("parallel_time") for r in tr], 1):>14}'
               f'{ms([r.get("affected_shards") for r in rs], 1):>11}'
@@ -166,7 +174,7 @@ def print_single(rows):
     print(f'  {"arm":<14}{"mean(s)":>10}{"std":>9}{"min":>9}{"max":>9}{"n":>5}{"x Retrain":>11}')
     order = {a: i for i, a in enumerate(ARM_ORDER)}
     for r in sorted(rows, key=lambda r: order.get(r['arm'], 99)):
-        print(f'  {r["arm"]:<14}{r["time_mean_s"]:>10}{r["time_std_s"]:>9}'
+        print(f'  {label(r["arm"]):<14}{r["time_mean_s"]:>10}{r["time_std_s"]:>9}'
               f'{r["time_min_s"]:>9}{r["time_max_s"]:>9}{r["n_requests"]:>5}'
               f'{r["ratio_to_global"] or "-":>11}')
 
@@ -248,7 +256,7 @@ def print_partial(name, path, text, n_arms, brief=False):
             rows.setdefault(arm, []).append(float(m))
         print(f'  {"arm":<14}{"seeds":>6}{"mean(s)":>10}')
         for a in arms_of([{'arm': k} for k in rows]):
-            print(f'  {a:<14}{len(rows[a]):>6}{st.mean(rows[a]):>10.2f}')
+            print(f'  {label(a):<14}{len(rows[a]):>6}{st.mean(rows[a]):>10.2f}')
         return
     print_pq(parse_log(path), brief=brief)
     print('  (n = seeds finished so far)')
