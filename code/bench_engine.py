@@ -48,12 +48,18 @@ def run(engine, train, test, n_users, n_items, epochs, device):
     with contextlib.redirect_stdout(io.StringIO()):
         _, t_train, n = train_shard_model(model, train, n_items, device, 512, 0.05, epochs)
         fast_train.sync(device)
+    print(f'  {engine:<7} train {t_train:7.1f}s ({t_train / epochs:.2f}s/epoch)', end='',
+          flush=True)
+    with contextlib.redirect_stdout(io.StringIO()):
         t0 = time.time()
         res = method_4_ours.evaluate_hard_routing(
             One(model), np.zeros(n_users, dtype=int), train, test, n_users, n_items,
             device, [10, 20, 50])
         fast_train.sync(device)
-    return t_train, time.time() - t0, n, res['recall'][0]
+    t_ev = time.time() - t0
+    print(f'   eval {t_ev:6.1f}s for {len(test)} users   R@10={res["recall"][0]:.4f}',
+          flush=True)
+    return t_train, t_ev, n, res['recall'][0]
 
 
 def main():
@@ -62,21 +68,21 @@ def main():
     ap.add_argument('--users', type=int, default=1500,
                     help='users in the slice (about one shard of ml-1m at K=4-8)')
     ap.add_argument('--epochs', type=int, default=5)
+    ap.add_argument('--eval_users', type=int, default=300,
+                    help='test users scored (the original loop takes seconds per user '
+                         'on a busy GPU)')
     args = ap.parse_args()
     device = 'cuda' if torch.cuda.is_available() else 'cpu'
     data_root = os.path.join(os.path.dirname(HERE), 'data')
     train_all, test_all, n_users, n_items = load_data(args.dataset, data_root)
     users = sorted(train_all)[:args.users]
     train = {u: train_all[u] for u in users}
-    test = {u: test_all[u] for u in users if test_all.get(u)}
+    test = {u: test_all[u] for u in users[:args.eval_users] if test_all.get(u)}
     print(f'{args.dataset}: {len(users)} users, {sum(map(len, train.values()))} '
           f'interactions, {args.epochs} epochs, device={device}')
     out = {}
     for eng in ('python', 'gpu'):
         out[eng] = run(eng, train, test, n_users, n_items, args.epochs, device)
-        t_tr, t_ev, n, r10 = out[eng]
-        print(f'  {eng:<7} train {t_tr:7.1f}s ({t_tr / args.epochs:.2f}s/epoch)   '
-              f'eval {t_ev:6.1f}s   R@10={r10:.4f}')
     sp_tr = out['python'][0] / max(out['gpu'][0], 1e-9)
     sp_ev = out['python'][1] / max(out['gpu'][1], 1e-9)
     print(f'  speed-up of the GPU engine: train x{sp_tr:.1f}, eval x{sp_ev:.1f}')
