@@ -246,11 +246,11 @@ def main():
                             f'{d}/{t} runs done, now {cur}, last write {ago(os.path.getmtime(p))} ago'))
         else:
             d, t, cur = progress(name, text, n_arms)
-            last = cor.first_line('\n'.join(reversed(text.strip().splitlines())))
+            last = cor.last_error(text)
             if d:
                 partial.append((name, p, text, n_arms))
             waiting.append((name, 'FAILED',
-                            f'stopped at {d}/{t} runs ({cur}); last line: {last}'))
+                            f'stopped at {d}/{t} runs ({cur}): {last}'))
 
     done.sort()
     print(f'{len(done)}/{len(cor.EXPERIMENT_LOGS)} experiments finished'

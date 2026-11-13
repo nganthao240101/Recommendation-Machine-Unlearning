@@ -126,31 +126,43 @@ def classify_log(path):
     arms = set(ARM_HDR.findall(text)) | set(runs)
     finished = 'CONSOLE SUMMARY' in text
 
-    if 'RECERASER' in arms | set(re.findall(r'^(RECERASER)\s', text, re.M))             and REC_MARK not in text and (runs or finished):
-        return 'OLD', 'RECERASER seeded with the scrambled WMF vector (old code)'
-    if 'RECERASER' in arms and not name.startswith('recrand')             and UBP_MARK not in text and (runs or finished):
-        return 'OLD', 'RECERASER with the earlier UBP port (interaction-balanced)'
-    if name.startswith('single_') and finished:
-        return 'NEW', 'single-request experiment, finished'
-    if 'S5 rate check' in text:
-        return ('NEW', f'{len(runs)} runs, current code'
-                + ('' if finished else ', not finished yet'))
-    if arms and arms <= {'RECERASER'} and 'parallel=' in text:
-        return 'NEW', f'{len(runs)} runs, RECERASER only'
-
+    # ---- not finished: running, stopped, or an abandoned old log. This comes
+    # first: a run that crashed half way must read as FAILED with its error,
+    # whatever code wrote it, never as OLD.
     if not finished:
         if is_live(path):
             return 'RUNNING', f'a job is writing it ({len(runs)} runs so far)'
-        if name[:-4] in EXPERIMENT_LOGS and not runs:
-            last = first_line(chr(10).join(reversed(text.splitlines())))
-            return 'FAILED', f'stopped, block will rerun it: {last}'
-        if not runs:
-            return 'OLD', 'unfinished log of an earlier run, no job writing it'
+        if name[:-4] in EXPERIMENT_LOGS:
+            return 'FAILED', f'stopped after {len(runs)} runs, block will rerun it: {last_error(text)}'
+        return 'OLD', 'unfinished log of an earlier run, no job writing it'
+
+    # ---- finished: which code wrote it
+    rec = 'RECERASER' in arms or re.search(r'^RECERASER\s', text, re.M)
+    if rec and REC_MARK not in text:
+        return 'OLD', 'RECERASER seeded with the scrambled WMF vector (old code)'
+    if rec and not name.startswith('recrand') and UBP_MARK not in text:
+        return 'OLD', 'RECERASER with the earlier UBP port (interaction-balanced)'
+    if name.startswith('single_'):
+        return 'NEW', 'single-request experiment, finished'
+    if 'S5 rate check' in text:
+        return 'NEW', f'{len(runs)} runs, current code'
+    if arms and arms <= {'RECERASER'} and 'parallel=' in text:
+        return 'NEW', f'{len(runs)} runs, RECERASER only'
     if runs and 'parallel=' not in text:
         return 'OLD', 'before the timing fix (no parallel= cost)'
     if runs:
         return 'OLD', 'before a716452 (SISA hard-routed, GLOBAL retrain not measured)'
     return 'OLD', 'not an experiment log of the current runner'
+
+
+def last_error(text):
+    """The exception line of the last traceback, else the last line."""
+    lines = [ln.strip() for ln in text.splitlines() if ln.strip()]
+    if 'Traceback' in text:
+        for ln in reversed(lines):
+            if re.match(r'^[A-Za-z_.]*(Error|Exception|Interrupt)', ln):
+                return ln[:110]
+    return (lines[-1] if lines else '(empty)')[:110]
 
 
 def print_status():

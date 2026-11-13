@@ -37,7 +37,7 @@ sys.path.insert(0, PROJ)
 from exp_partition_quality import (          # noqa: E402
     load_data, pick_deletion_users, build_shard_data, set_all_seeds,
     partition_proposed, partition_proposed_balanced, partition_random_embedding,
-    random_perm_balanced,
+    random_perm_balanced, _train_bprmf,
 )
 from partition_variants import (              # noqa: E402
     random_perm as pv_random_perm, random_modulo as pv_random_modulo,
@@ -90,6 +90,11 @@ def main():
     ap.add_argument('--seeds', default='0,1,2,3,4')
     ap.add_argument('--arms', default='PROPOSED,PROPOSED_BAL,SISA,RANDOM_PERM,'
                                       'RANDOM_EMB,RECERASER,GLOBAL')
+    ap.add_argument('--global_requests', type=int, default=3,
+                    help='How many of the requests to time for GLOBAL. Each one '
+                         'retrains the whole model on all the remaining data, '
+                         'so it costs a full training; the time hardly varies '
+                         'between users, so a few requests measure it.')
     ap.add_argument('--legacy_seed', type=int, default=42)
     ap.add_argument('--router', default='hyperplane')
     ap.add_argument('--sig_weighting', default='binary')
@@ -107,6 +112,12 @@ def main():
     device = 'cuda' if torch.cuda.is_available() else 'cpu'
     train_items, test_data, n_users, n_items = load_data(args.dataset, data_root)
     print(f"  {args.dataset}: {n_users} users, {n_items} items, device={device}")
+    # From here on data_root only locates the dataset's own files (the WMF
+    # embeddings of the RECERASER partition), which live in data/<dataset>/,
+    # not in the parent data/ that load_data takes.
+    data_root = os.path.join(data_root, args.dataset)
+    emb = os.path.join(data_root, 'wmf_embeddings.npz')
+    print(f"  WMF embeddings: {emb} ({'found' if os.path.exists(emb) else 'MISSING'})")
 
     seeds = [int(s) for s in args.seeds.split(',') if s.strip()]
     arms = [a.strip() for a in args.arms.split(',') if a.strip()]
@@ -131,6 +142,10 @@ def main():
             if arm == 'RECERASER':
                 times = _time_receraser(args, train_items, n_users, n_items,
                                         victims, seed, data_root, device)
+            elif arm == 'GLOBAL':
+                times = _time_global(args, train_items, n_users, n_items,
+                                     victims[:max(1, args.global_requests)],
+                                     seed, device)
             else:
                 umap = build_partition(arm, train_items, n_users, n_items,
                                        args.n_shards, args, seed, data_root)
@@ -149,6 +164,24 @@ def main():
 
     _print_summary(results, arms, seeds)
     return results
+
+
+def _time_global(args, train_items, n_users, n_items, victims, seed, device):
+    """Time one deletion at a time for the full retrain.
+
+    Without shards, removing a user means training a fresh model on all the
+    remaining data, so each request costs one full training. The same
+    trainer as the GLOBAL arm of the main experiment, and as many epochs as
+    the shard retrains get (--retrain_epochs).
+    """
+    times = []
+    for v in victims:
+        kept = {u: it for u, it in train_items.items() if u != v}
+        _, elapsed, _, _ = _train_bprmf(kept, n_users, n_items, args.emb_dim,
+                                        args.retrain_epochs, args.lr,
+                                        args.batch_size, device, seed)
+        times.append(elapsed)
+    return times
 
 
 def _time_sharded(args, umap, train_items, n_users, n_items, victims, seed,

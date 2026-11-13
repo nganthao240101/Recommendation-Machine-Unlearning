@@ -36,6 +36,7 @@
 #     bash code/run_blocks.sh results      # in kết quả: xong trước in trước, chưa xong thì báo
 #     bash code/run_blocks.sh status       # tiến độ từng log
 #     bash code/run_blocks.sh gpu          # có đang chạy thí nghiệm trên GPU không
+#     bash code/run_blocks.sh smoke        # chạy thử 7 arm trên dataset tí hon (start tự chạy)
 #     bash code/run_blocks.sh stop         # dừng chuỗi đang chạy ngầm
 #     bash code/run_blocks.sh torch        # chỉ kiểm tra CUDA + WMF embedding
 #     bash code/run_blocks.sh main         # 1 khối (tương tự: modes single shards dims recpart)
@@ -94,8 +95,21 @@ run () {
   echo "--------------------------------------------------------------"
   echo "DONE $name  (rc=$rc, $((SECONDS-t0))s)  -> logs/${name}.out"
   echo "--------------------------------------------------------------"
+  # Hai thí nghiệm lỗi liên tiếp = lỗi hệ thống (đường dẫn, code), không phải
+  # lỗi ngẫu nhiên: dừng cả chuỗi thay vì đốt GPU cho các thí nghiệm sau.
+  if [ "$rc" != 0 ]; then
+    FAILS=$((FAILS + 1))
+    echo "!! $name lỗi: $(grep -E '^[A-Za-z_.]*(Error|Exception)' "logs/${name}.out" | tail -1)"
+    if [ "$FAILS" -ge 2 ]; then
+      echo "!! $FAILS thí nghiệm lỗi liên tiếp - DỪNG cả chuỗi. Sửa lỗi rồi start lại."
+      exit 3
+    fi
+  else
+    FAILS=0
+  fi
   return $rc
 }
+FAILS=0
 
 # exp_partition_quality với cấu hình gốc, đè bằng: k=<K> dim=<D> mode=<M> arms=<..> extra=<..>
 pq () {   # pq <log> <ds> [k=..] [dim=..] [mode=..] [arms=..] [-- extra args]
@@ -339,12 +353,18 @@ block_clean () {
 # ------------------------------------------------------------------ start / stop
 # start: kiểm tra trước (CUDA, embedding), rồi chạy NGẦM toàn bộ 'all' trong
 # 1 process group riêng; thoát SSH vẫn chạy. Từng thí nghiệm chạy tuần tự.
+block_smoke () {
+  banner "SMOKE TEST - 7 arm, dataset tí hon, cả 2 script (1-2 phút)"
+  python code/smoke_test.py
+}
+
 block_start () {
   if lock_busy; then
     echo "!! Đã có chuỗi đang chạy. Xem: bash code/run_blocks.sh status"; exit 1
   fi
   banner "START (ngầm) - DATASETS=$DATASETS"
   preflight
+  block_smoke || { echo "!! Smoke test hỏng - KHÔNG chạy ngầm. Sửa lỗi trên rồi start lại."; exit 1; }
   nohup setsid bash code/run_blocks.sh all > logs/block_all.out 2>&1 < /dev/null &
   echo $! > "$PIDFILE"
   sleep 3
@@ -477,9 +497,10 @@ case "${1:-}" in
   reset)   block_reset ;;
   results) block_results ;;
   gpu)     block_gpu ;;
+  smoke)   block_smoke ;;
   status)  block_status ;;
   csv)     block_csv ;;
   check)   block_check ;;
   clean)   block_clean ;;
-  *) echo "dùng: bash code/run_blocks.sh <reset|start|results|status|gpu|stop|torch|main|modes|single|shards|dims|recpart|all|csv|check|clean>"; exit 1 ;;
+  *) echo "dùng: bash code/run_blocks.sh <reset|start|results|status|gpu|smoke|stop|torch|main|modes|single|shards|dims|recpart|all|csv|check|clean>"; exit 1 ;;
 esac

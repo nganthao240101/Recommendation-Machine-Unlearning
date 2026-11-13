@@ -809,6 +809,12 @@ def main():
     device = 'cuda' if torch.cuda.is_available() else 'cpu'
     train_items, test_data, n_users, n_items = load_data(args.dataset, data_root)
     print(f"  {args.dataset}: {n_users} users, {n_items} items, device={device}")
+    # From here on data_root only locates the dataset's own files (the WMF
+    # embeddings of the RECERASER partition), which live in data/<dataset>/,
+    # not in the parent data/ that load_data takes.
+    data_root = os.path.join(data_root, args.dataset)
+    emb = os.path.join(data_root, 'wmf_embeddings.npz')
+    print(f"  WMF embeddings: {emb} ({'found' if os.path.exists(emb) else 'MISSING'})")
 
     seeds = [int(s) for s in args.seeds.split(',') if s.strip()]
     arms = [a.strip() for a in args.arms.split(',') if a.strip()]
