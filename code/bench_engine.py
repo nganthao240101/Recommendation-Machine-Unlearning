@@ -7,9 +7,10 @@ test user.
   python code/bench_engine.py --dataset ml-1m        # about 1-2 minutes
   python code/bench_engine.py --dataset yelp2018 --users 4000
 
-The run that follows should use whichever engine wins:
-  RECUNLEARN_ENGINE=python bash code/run_blocks.sh start   # the original loops
-  bash code/run_blocks.sh start                            # the GPU engine (default)
+The original loops are the default; the GPU engine is opt-in until its
+RecEraser arm matches them (see fast_train.py):
+  bash code/run_blocks.sh start                            # the original loops (default)
+  RECUNLEARN_ENGINE=gpu bash code/run_blocks.sh start      # the GPU engine
 """
 
 import argparse
@@ -79,10 +80,7 @@ def main():
     sp_tr = out['python'][0] / max(out['gpu'][0], 1e-9)
     sp_ev = out['python'][1] / max(out['gpu'][1], 1e-9)
     print(f'  speed-up of the GPU engine: train x{sp_tr:.1f}, eval x{sp_ev:.1f}')
-    if sp_tr > 1.2:
-        print('  -> use the GPU engine:  bash code/run_blocks.sh start')
-    else:
-        print('  -> keep the original loops:  RECUNLEARN_ENGINE=python bash code/run_blocks.sh start')
+    print('  (the GPU engine stays opt-in until its RecEraser arm matches the original loops)')
 
 
 if __name__ == '__main__':
