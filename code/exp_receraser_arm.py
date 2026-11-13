@@ -28,6 +28,7 @@ import random
 
 import numpy as np
 import torch
+import fast_train
 
 PROJ = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, PROJ)
@@ -239,6 +240,22 @@ class RecEraserArm:
         m = self.model
         optimizer = torch.optim.Adagrad(m.parameters(), lr=lr,
                                         initial_accumulator_value=1e-8)
+        if fast_train.use_gpu_engine():
+            samples = fast_train.draw_samples(shard_data, n_items)
+            if not samples[0]:
+                return 0.0, 0.0, 0
+            t0 = time.time()
+
+            def step(u, p, n):
+                optimizer.zero_grad()
+                loss = m(u, p, n, shard_id)
+                loss.backward()
+                optimizer.step()
+                return loss
+            total, _ = fast_train.train_epochs(step, samples, self.device,
+                                               batch_size, n_epochs)
+            fast_train.sync(self.device)
+            return total, time.time() - t0, len(samples[0])
         samples = []
         for user, items in shard_data.items():
             for pos_item in items:
@@ -247,7 +264,7 @@ class RecEraserArm:
                     neg_item = random.randint(0, n_items - 1)
                 samples.append((user, pos_item, neg_item))
         if not samples:
-            return 0.0, time.time(), 0
+            return 0.0, 0.0, 0
 
         t0 = time.time()
         total_loss = 0.0
@@ -279,6 +296,34 @@ class RecEraserArm:
         """
         from method_3_receraser_v2 import train_aggregator
         t0 = time.time()
+        if fast_train.use_gpu_engine():
+            # method_3_receraser_v2.train_aggregator on the GPU: only the
+            # attention and transform parameters move (the embeddings are
+            # detached in the forward), a non-finite batch is skipped, the
+            # gradient is clipped at 1.0
+            m = self.model
+            agg_params = [m.WA, m.BA, m.HA, m.WB, m.BB, m.HB, m.trans_W, m.trans_B]
+            opt = torch.optim.Adagrad(agg_params, lr=lr, initial_accumulator_value=1.0)
+            samples = fast_train.draw_samples(train_data, n_items)
+            skipped = [0]
+
+            def step(u, p, n):
+                opt.zero_grad()
+                loss = m(u, p, n, shard=0, use_aggregation=True)
+                if not torch.isfinite(loss):
+                    skipped[0] += 1
+                    return None
+                loss.backward()
+                torch.nn.utils.clip_grad_norm_(m.parameters(), 1.0)
+                opt.step()
+                return loss
+            fast_train.train_epochs(
+                step, samples, self.device, batch_size, n_epochs, log_every=10,
+                log_fmt='    Agg Epoch {ep}: loss={loss:.4f}')
+            fast_train.sync(self.device)
+            if skipped[0]:
+                print(f"    [RecEraser] aggregator skipped {skipped[0]} non-finite batches")
+            return time.time() - t0
         train_aggregator(self.model, train_data, n_users, n_items, self.device,
                          batch_size=batch_size, lr=lr, max_epochs=n_epochs)
         return time.time() - t0
@@ -289,6 +334,21 @@ class RecEraserArm:
         """Evaluate with the attention aggregation (RecEraser's inference)."""
         import heapq
         m = self.model
+        if fast_train.use_gpu_engine():
+            m.eval()
+            K, D = m.num_local, m.emb_dim
+
+            def agg(emb):        # what predict(..., use_aggregation=True) does
+                es = emb.view(-1, K, D)
+                es = torch.einsum('bkd,kde->bke', es, m.trans_W) + m.trans_B
+                return m._attention_aggregate(es)[0]
+            with torch.no_grad():
+                items = torch.cat([agg(m.item_embedding.weight[i:i + 8192])
+                                   for i in range(0, n_items, 8192)])
+            res = fast_train.evaluate_topk(
+                lambda ut: agg(m.user_embedding.weight[ut]) @ items.T,
+                list(range(n_users)), train_data, test_data, n_items, self.device, Ks)
+            return {'recall': res['recall'], 'ndcg': res['ndcg']}
         rec = {k: [] for k in Ks}
         ndcg = {k: [] for k in Ks}
         m.eval()

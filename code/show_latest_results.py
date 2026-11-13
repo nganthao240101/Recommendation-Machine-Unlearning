@@ -82,8 +82,16 @@ def arms_of(recs):
     return [a for a in ARM_ORDER if a in present] + sorted(present - set(ARM_ORDER))
 
 
+def timed(rs, engine):
+    """The runs whose seconds count: one engine only, since the GPU engine
+    and the original loops run at different speeds."""
+    return [r for r in rs if r.get('engine', 'python') == engine]
+
+
 def print_pq(recs, brief):
     arms = arms_of(recs)
+    engines = {r.get('engine', 'python') for r in recs}
+    eng = 'gpu' if 'gpu' in engines else 'python'
     if brief:
         print(f'  {"arm":<14}{"n":>3}{"R@10":>17}{"NDCG@10":>17}{"unlearn(s)":>15}'
               f'{"work(M)":>10}{"dR@10 vs RP":>13}{"p":>8}')
@@ -95,8 +103,10 @@ def print_pq(recs, brief):
             wk = [r['unlearn_samples'] / 1e6 for r in rs if r.get('unlearn_samples') is not None]
             print(f'  {a:<14}{len(rs):>3}{ms([r.get("recall_10") for r in rs]):>17}'
                   f'{ms([r.get("ndcg_10") for r in rs]):>17}'
-                  f'{ms([r.get("unlearn_time") for r in rs], 1):>15}'
+                  f'{ms([r.get("unlearn_time") for r in timed(rs, eng)], 1):>15}'
                   f'{(f"{st.mean(wk):.2f}" if wk else "-"):>10}{d:>13}{p:>8}')
+        if len(engines) > 1:
+            print(f'  unlearn(s): {eng}-engine runs only; utility and work use every run')
         return
 
     print(f'  -- utility (mean+-std over seeds)')
@@ -132,14 +142,21 @@ def print_pq(recs, brief):
         n_sh = sum(v >= SHARED for v in bg)
         shared_runs += n_sh
         flag = f'{max(bg):.0f}' + ('!' if n_sh else '') if bg else '-'
-        print(f'  {a:<14}{ms([r.get("train_time") for r in rs], 1):>14}'
-              f'{ms([r.get("unlearn_time") for r in rs], 1):>14}'
-              f'{ms([r.get("parallel_time") for r in rs], 1):>14}'
+        tr = timed(rs, eng)
+        print(f'  {a:<14}{ms([r.get("train_time") for r in tr], 1):>14}'
+              f'{ms([r.get("unlearn_time") for r in tr], 1):>14}'
+              f'{ms([r.get("parallel_time") for r in tr], 1):>14}'
               f'{ms([r.get("affected_shards") for r in rs], 1):>11}'
               f'{ms(work, 2):>18}{flag:>9}')
     if shared_runs:
         print(f'  ! {shared_runs} run(s) measured while other work used the GPU '
               f'(>= {SHARED}%): their seconds may be inflated; the work column is not')
+    if len(engines) > 1:
+        n_old = sum(1 for r in recs if r.get('engine', 'python') != eng)
+        print(f'  seconds: {eng}-engine runs only; {n_old} run(s) of the original loops '
+              f'are left out of them (utility and work use every run)')
+    if any(r.get('work_derived') for r in recs):
+        print('  work of the older runs is derived from their per-shard interaction counts x 50 epochs')
 
     if BASELINE in arms and len(arms) > 1:
         print(f'  -- paired vs {BASELINE} (same seeds; * = p < 0.05)')

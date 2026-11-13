@@ -53,6 +53,7 @@ from partition_variants import (              # noqa: E402
 )
 from method_4_ours import ShardModels, train_shard_model, BPRMF  # noqa: E402
 import gpu_probe  # noqa: E402
+import fast_train  # noqa: E402
 
 
 def build_partition(arm, train_items, n_users, n_items, n_shards, args, seed,
@@ -132,6 +133,7 @@ def main():
     data_root = os.path.join(data_root, args.dataset)
     emb = os.path.join(data_root, 'wmf_embeddings.npz')
     print(f"  WMF embeddings: {emb} ({'found' if os.path.exists(emb) else 'MISSING'})")
+    print(f"  engine: {fast_train.engine_name()}")
 
     seeds = [int(s) for s in args.seeds.split(',') if s.strip()]
     skip = {(a, int(s)) for a, s in (x.split(':') for x in args.skip_runs.split(',') if x)}

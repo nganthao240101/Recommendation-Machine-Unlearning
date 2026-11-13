@@ -63,6 +63,7 @@ PROJ = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, PROJ)
 
 import gpu_probe
+import fast_train
 from partition_variants import (
     build_signature as pv_build_signature,
     random_embedding as pv_random_embedding,
@@ -518,6 +519,18 @@ def evaluate_sisa_mean_aggregation(shard_models, train_data, test_data,
     """
     import heapq
     n_shards = len(shard_models.models)
+    if fast_train.use_gpu_engine():
+        live = [shard_models.get_model(s) for s in range(n_shards)]
+        live = [m for m in live if m is not None]
+
+        def score_block(ut):
+            sc = torch.zeros((len(ut), n_items), device=device)
+            for m in live:
+                sc += m.user_embedding.weight[ut] @ m.item_embedding.weight.T
+            return sc / max(n_shards, 1)
+        res = fast_train.evaluate_topk(score_block, list(range(n_users)), train_data,
+                                       test_data, n_items, device, Ks)
+        return {'recall': res['recall'], 'ndcg': res['ndcg']}
     rec = {k: [] for k in Ks}
     ndcg = {k: [] for k in Ks}
 
@@ -662,6 +675,31 @@ def _train_bprmf(train_items, n_users, n_items, emb_dim, epochs, lr,
     model = BPRMF(n_users, n_items, emb_dim).to(device)
     opt = torch.optim.Adagrad(model.parameters(), lr=lr, initial_accumulator_value=1e-8)
 
+    if fast_train.use_gpu_engine():
+        samples = fast_train.draw_samples(train_items, n_items)
+        if not samples[0]:
+            return model, 0.0, 0, []
+        per_epoch = []
+        t0 = time.time()
+        last = [t0]
+
+        def step(u, p, n):
+            loss = model(u, p, n)
+            opt.zero_grad()
+            loss.backward()
+            opt.step()
+            return loss
+
+        def epoch_end(ep):
+            fast_train.sync(device)
+            now = time.time()
+            per_epoch.append(now - last[0])
+            last[0] = now
+        fast_train.train_epochs(step, samples, device, batch_size, epochs,
+                                epoch_end=epoch_end)
+        fast_train.sync(device)
+        return model, time.time() - t0, len(samples[0]), per_epoch
+
     samples = []
     for u, items in train_items.items():
         for pos in items:
@@ -724,6 +762,13 @@ def run_global_arm(train_items, test_data, n_users, n_items, del_users,
         retained, n_users, n_items, emb_dim, epochs, lr, batch_size, device, seed)
 
     test_retained = {u: it for u, it in test_data.items() if u not in del_users}
+    if fast_train.use_gpu_engine():
+        res = fast_train.evaluate_topk(
+            lambda ut: model.user_embedding.weight[ut] @ model.item_embedding.weight.T,
+            list(range(n_users)), retained, test_retained, n_items, device, KS)
+        out = {'recall': res['recall'], 'ndcg': res['ndcg']}
+        return (out, train_time, unlearn_time, unlearn_time, n_full, n_ret,
+                ep_full, ep_ret)
     rec, ndcg = {k: [] for k in KS}, {k: [] for k in KS}
     import heapq
     with torch.no_grad():
@@ -829,6 +874,7 @@ def main():
     data_root = os.path.join(data_root, args.dataset)
     emb = os.path.join(data_root, 'wmf_embeddings.npz')
     print(f"  WMF embeddings: {emb} ({'found' if os.path.exists(emb) else 'MISSING'})")
+    print(f"  engine: {fast_train.engine_name()}")
 
     seeds = [int(s) for s in args.seeds.split(',') if s.strip()]
     skip = {(a, int(s)) for a, s in (x.split(':') for x in args.skip_runs.split(',') if x)}

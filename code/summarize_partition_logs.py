@@ -33,6 +33,8 @@ KS = (10, 20, 50)
 ARM_HDR = re.compile(r'---\s*ARM\s+([A-Z_]+)\s*\(seed\s+(\d+)\)')
 ARM_LINE = re.compile(r'^\s*\[([A-Z_]+)\]\s+R@10=')
 
+RETRAIN_EPOCHS = 50
+
 RE_UTIL = {
     'recall_10':  re.compile(r'R@10=([\d.]+)'),
     'ndcg_10':    re.compile(r'NDCG@10=([\d.]+)'),
@@ -82,8 +84,15 @@ def parse_log(path):
     cur_seed = None
     cur_arm = None
     pending = None          # the record the next 2 continuation lines belong to
+    # Runs before an "engine:" line came from the original per-batch loops.
+    # A resumed log keeps those runs and appends runs of the current engine,
+    # so each run carries the engine that timed it.
+    engine = 'python'
 
     for ln in lines:
+        if ln.lstrip().startswith('engine:'):
+            engine = 'gpu' if 'gpu' in ln else 'python'
+            continue
         m = ARM_HDR.search(ln)
         if m:
             cur_arm, cur_seed = m.group(1), int(m.group(2))
@@ -92,7 +101,8 @@ def parse_log(path):
         m = ARM_LINE.match(ln)
         if m:
             arm = m.group(1)
-            rec = {'arm': arm, 'seed': cur_seed if cur_seed is not None else -1}
+            rec = {'arm': arm, 'seed': cur_seed if cur_seed is not None else -1,
+                   'engine': engine}
             for k, rx in RE_UTIL.items():
                 mm = rx.search(ln)
                 if mm:
@@ -146,6 +156,14 @@ def parse_log(path):
             # the per-shard breakdown: keep it so the sum of the shard times
             # can be checked against the reported unlearn time
             pending['per_shard_detail'] = ln.strip()
+            # runs logged before the work line existed: the per-shard line
+            # holds each retrained shard's interactions, so the work is their
+            # sum times the retrain epochs (50 in every run_blocks.sh run)
+            if pending.get('unlearn_samples') is None:
+                ints = [int(x) for x in re.findall(r'/(\d+)int', ln)]
+                if ints:
+                    pending['unlearn_samples'] = float(sum(ints) * RETRAIN_EPOCHS)
+                    pending['work_derived'] = True
             pending = None
             continue
         pending = None

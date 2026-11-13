@@ -30,6 +30,7 @@ import math
 import numpy as np
 import torch
 import torch.nn as nn
+import fast_train
 import torch.nn.functional as F
 
 from scipy.sparse import csr_matrix
@@ -411,6 +412,22 @@ def train_shard_model(model, shard_data, n_items, device,
     t0 = time.time()
     optimizer = torch.optim.Adagrad(model.parameters(), lr=lr, initial_accumulator_value=1e-8)
 
+    if fast_train.use_gpu_engine():
+        samples = fast_train.draw_samples(shard_data, n_items)
+        if not samples[0]:
+            return 0.0, time.time() - t0, 0
+
+        def step(u, p, n):
+            optimizer.zero_grad()
+            loss = model(u, p, n)
+            loss.backward()
+            optimizer.step()
+            return loss
+        total, _ = fast_train.train_epochs(step, samples, device, batch_size,
+                                           n_epochs, log_every=20)
+        fast_train.sync(device)
+        return total, time.time() - t0, len(samples[0])
+
     samples = []
     for user, items in shard_data.items():
         for pos_item in items:
@@ -545,6 +562,22 @@ def evaluate_hard_routing(shard_models, user_to_shard, train_data, test_data,
     KHÔNG có aggregation!
     """
     print("    [Evaluation] Using HARD-ROUTING (only shard's model)")
+
+    if fast_train.use_gpu_engine():
+        u2s = torch.as_tensor(np.asarray(user_to_shard), dtype=torch.long, device=device)
+
+        def score_block(ut):
+            sc = torch.empty((len(ut), n_items), device=device)
+            sh = u2s[ut]
+            for s in torch.unique(sh).tolist():
+                rows = (sh == s).nonzero(as_tuple=True)[0]
+                m = shard_models.get_model(s)
+                sc[rows] = m.user_embedding.weight[ut[rows]] @ m.item_embedding.weight.T
+            return sc
+        users = [u for u in range(n_users) if test_data.get(u)
+                 and shard_models.get_model(int(user_to_shard[u])) is not None]
+        return fast_train.evaluate_topk(score_block, users, train_data, test_data,
+                                        n_items, device, Ks, per_list=True)
 
     pre_log = {k: [] for k in Ks}
     rec_log = {k: [] for k in Ks}
