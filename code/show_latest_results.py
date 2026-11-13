@@ -26,6 +26,7 @@ ROOT = cor.ROOT
 LOGS = cor.LOGS
 BASELINE = 'RANDOM_PERM'
 SHARED = 10          # % background GPU load above which a run counts as shared
+UTIL = (('recall_10', 'R@10'), ('ndcg_10', 'N@10'), ('recall_20', 'R@20'), ('ndcg_20', 'N@20'), ('recall_50', 'R@50'), ('ndcg_50', 'N@50'))
 ARM_ORDER = ['PROPOSED', 'PROPOSED_BAL', 'SISA', 'RANDOM_PERM', 'RANDOM_EMB',
              'RECERASER', 'GLOBAL']
 N_SEEDS = 5
@@ -93,18 +94,21 @@ def print_pq(recs, brief):
     engines = {r.get('engine', 'python') for r in recs}
     eng = 'gpu' if 'gpu' in engines else 'python'
     if brief:
-        print(f'  {"arm":<14}{"n":>3}{"R@10":>17}{"NDCG@10":>17}{"unlearn(s)":>15}'
-              f'{"work(M)":>10}{"dR@10 vs RP":>13}{"p":>8}')
+        # means only, every cut-off; the full view adds the std, partition,
+        # load, instability and the paired tests
+        print(f'  {"arm":<14}{"n":>3}' + ''.join(f'{lab:>8}' for _, lab in UTIL)
+              + f'{"unlearn(s)":>12}{"work(M)":>9}{"dR@10":>9}{"p":>8}')
         for a in arms:
             rs = [r for r in recs if r['arm'] == a]
             pr = paired_test(recs, a, BASELINE, 'recall_10') if a != BASELINE else None
             d = f'{pr["mean_delta"]:+.4f}' if pr else '-'
             p = f'{pr["p"]:.4f}' if pr and pr['p'] == pr['p'] else '-'
             wk = [r['unlearn_samples'] / 1e6 for r in rs if r.get('unlearn_samples') is not None]
-            print(f'  {a:<14}{len(rs):>3}{ms([r.get("recall_10") for r in rs]):>17}'
-                  f'{ms([r.get("ndcg_10") for r in rs]):>17}'
-                  f'{ms([r.get("unlearn_time") for r in timed(rs, eng)], 1):>15}'
-                  f'{(f"{st.mean(wk):.2f}" if wk else "-"):>10}{d:>13}{p:>8}')
+            ul = [r.get('unlearn_time') for r in timed(rs, eng) if r.get('unlearn_time') is not None]
+            print(f'  {a:<14}{len(rs):>3}'
+                  + ''.join(f'{mean([r.get(k) for r in rs], 4):>8}' for k, _ in UTIL)
+                  + f'{(f"{st.mean(ul):.1f}" if ul else "-"):>12}'
+                  + f'{(f"{st.mean(wk):.2f}" if wk else "-"):>9}{d:>9}{p:>8}')
         if len(engines) > 1:
             print(f'  unlearn(s): {eng}-engine runs only; utility and work use every run')
         return
@@ -162,20 +166,30 @@ def print_pq(recs, brief):
         print('  work of the older runs is derived from their per-shard interaction counts x 50 epochs')
 
     if BASELINE in arms and len(arms) > 1:
-        print(f'  -- paired vs {BASELINE} (same seeds; * = p < 0.05)')
+        print(f'  -- paired vs {BASELINE}: mean delta over the same seeds, p of a '
+              f'one-sample t-test (* = p < 0.05, n/a below 3 seeds)')
+        cols = list(UTIL) + [('unlearn_samples', 'work'), ('unlearn_time', 'unlearn s')]
+        print(f'  {"arm":<14}' + ''.join(f'{lab:>17}' for _, lab in cols))
         for a in arms:
             if a == BASELINE:
                 continue
-            parts = []
-            for k, lab in (('recall_10', 'R@10'), ('ndcg_10', 'NDCG@10'),
-                           ('unlearn_time', 'unlearn')):
-                pr = paired_test(recs, a, BASELINE, k)
+            cells = []
+            for k, _ in cols:
+                rs = recs if k != 'unlearn_time' else timed(recs, eng)
+                pr = paired_test(rs, a, BASELINE, k)
                 if not pr:
+                    cells.append('-')
                     continue
-                star = ' *' if pr['p'] == pr['p'] and pr['p'] < 0.05 else ''
-                p = f'p={pr["p"]:.4f}' if pr['p'] == pr['p'] else 'p=n/a'
-                parts.append(f'{lab} {pr["mean_delta"]:+.4f} ({p}{star})')
-            print(f'  {a:<14}' + '   '.join(parts))
+                if k == 'unlearn_samples':
+                    dv = f'{pr["mean_delta"] / 1e6:+.2f}M'
+                elif k == 'unlearn_time':
+                    dv = f'{pr["mean_delta"]:+.1f}'
+                else:
+                    dv = f'{pr["mean_delta"]:+.4f}'
+                pv = 'n/a' if pr['p'] != pr['p'] else f'{pr["p"]:.3f}'
+                star = '*' if pr['p'] == pr['p'] and pr['p'] < 0.05 else ''
+                cells.append(f'{dv} ({pv}){star}')
+            print(f'  {a:<14}' + ''.join(f'{c:>17}' for c in cells))
 
 
 def print_single(rows):
@@ -226,7 +240,7 @@ def started_at(name):
     return best
 
 
-def print_partial(name, path, text, n_arms):
+def print_partial(name, path, text, n_arms, brief=False):
     """Tables of the runs that have finished in a log still running."""
     done, total, cur = progress(name, text, n_arms)
     t0 = started_at(name)
@@ -266,7 +280,7 @@ def print_partial(name, path, text, n_arms):
         for a in arms_of([{'arm': k} for k in rows]):
             print(f'  {a:<14}{len(rows[a]):>6}{st.mean(rows[a]):>10.2f}')
         return
-    print_pq(parse_log(path), brief=True)
+    print_pq(parse_log(path), brief=brief)
     print('  (n = seeds finished so far; the paired p-value needs 3 seeds)')
 
 
@@ -327,7 +341,7 @@ def main():
             print(f'  {name:<18}{v:<9}{why}')
 
     for name, p, text, n_arms in partial:
-        print_partial(name, p, text, n_arms)
+        print_partial(name, p, text, n_arms, args.brief)
 
 
 if __name__ == '__main__':
