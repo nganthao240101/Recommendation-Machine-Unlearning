@@ -45,6 +45,7 @@
 #     bash code/run_blocks.sh check        # tiến độ + log cũ/mới + kết quả
 #     bash code/run_blocks.sh clean        # xóa log CŨ, giữ log mới (nén backup trước)
 #   Chỉ 1 dataset:  DATASETS="ml-1m" bash code/run_blocks.sh start
+#   Ablation K/dim chỉ trên ml-1m:  ABLATE_DATASETS="ml-1m" bash code/run_blocks.sh start
 #
 #   Tránh sai thời gian: mọi khối giữ khóa logs/.run.lock, nên KHÔNG bao giờ
 #   có 2 thí nghiệm cùng chạy trên GPU; lệnh thứ 2 bị từ chối. Đầu mỗi log
@@ -55,6 +56,9 @@ cd "$(dirname "$0")/.."
 mkdir -p logs
 
 DATASETS="${DATASETS:-ml-1m yelp2018}"
+# Ablation K / số chiều chạy trên các dataset nào (mặc định: như DATASETS).
+# ABLATE_DATASETS="ml-1m" = ablation chỉ trên ml-1m (yelp chỉ main/modes/single/recpart).
+ABLATE_DATASETS="${ABLATE_DATASETS:-$DATASETS}"
 export CUDA_VISIBLE_DEVICES="${GPU:-0}"
 LOCK=logs/.run.lock
 PIDFILE=logs/.run.pid
@@ -254,9 +258,12 @@ block_single () {
   done
 }
 
+in_ablate () { case " $ABLATE_DATASETS " in *" $1 "*) return 0 ;; *) return 1 ;; esac; }
+
 block_shards () {
   preflight
   for ds in $DATASETS; do
+    in_ablate "$ds" || { echo "[skip] k4/k16 $ds (ABLATE_DATASETS=$ABLATE_DATASETS)"; continue; }
     for k in 4 16; do pq "k${k}_$(short $ds)" "$ds" k=$k; done
   done
 }
@@ -264,6 +271,7 @@ block_shards () {
 block_dims () {
   preflight
   for ds in $DATASETS; do
+    in_ablate "$ds" || { echo "[skip] dim32/dim128 $ds (ABLATE_DATASETS=$ABLATE_DATASETS)"; continue; }
     for d in 32 128; do pq "dim${d}_$(short $ds)" "$ds" dim=$d; done
   done
 }
