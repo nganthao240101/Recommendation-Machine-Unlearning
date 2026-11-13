@@ -326,6 +326,10 @@ def main():
             if name.startswith('.nfs'):
                 rows.append(('BUSY', p, 'NFS placeholder'))
                 continue
+            if name in ('.run.lock', '.run.pid', '.queue.pid'):
+                # the runner's lock and pid files: removing the lock while a
+                # chain holds it would let a second chain share the GPU
+                continue
             try:
                 mtime = os.path.getmtime(p)
             except OSError:
