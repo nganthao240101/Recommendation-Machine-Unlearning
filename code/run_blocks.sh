@@ -32,6 +32,7 @@
 #
 #   Cách dùng (trên máy SSH, tại thư mục repo):
 #     bash code/run_blocks.sh reset        # XÓA HẾT log + kết quả cũ (nén backup trước)
+#     bash code/run_blocks.sh start full   # MỘT LỆNH CHẠY HẾT: ml-1m rồi yelp, Rec trước, engine GPU
 #     bash code/run_blocks.sh start        # chạy NGẦM toàn bộ (all) trên GPU, 1 job/lần
 #     bash code/run_blocks.sh results      # in kết quả: xong trước in trước, chưa xong thì báo
 #     bash code/run_blocks.sh status       # tiến độ từng log
@@ -289,6 +290,32 @@ block_recpart () {
   done
 }
 
+# ------------------------------------------------------------------ full
+# MỘT LỆNH CHẠY HẾT, theo thứ tự:
+#   ml-1m : recpart -> main -> modes -> single -> shards -> dims
+#   yelp  : recpart -> main -> modes -> single  (ablation K/dim chỉ trên ml-1m)
+#   rồi xuất CSV.
+# Rec trước: mỗi dataset mở đầu bằng recpart, và trong mọi thí nghiệm arm
+# RECERASER chạy đầu tiên ở mỗi seed. Mỗi arm tự đặt lại seed của nó và tập
+# user bị xóa chỉ phụ thuộc vào seed, nên thứ tự không đổi kết quả.
+# Engine GPU mặc định (RECUNLEARN_ENGINE=python để dùng vòng lặp cũ).
+# Log đã xong thì bỏ qua, log dở thì chạy tiếp phần còn thiếu.
+block_full () {
+  export RECUNLEARN_ENGINE="${RECUNLEARN_ENGINE:-gpu}"
+  ARMS="RECERASER,PROPOSED,PROPOSED_BAL,SISA,RANDOM_PERM,RANDOM_EMB,GLOBAL"
+  ABLATE_DATASETS="${FULL_ABLATE:-ml-1m}"
+  local all_ds="${FULL_DATASETS:-ml-1m yelp2018}" ds
+  banner "FULL: $all_ds | Rec trước | engine=$RECUNLEARN_ENGINE | ablation trên: $ABLATE_DATASETS"
+  for ds in $all_ds; do
+    DATASETS="$ds"
+    banner "=== DATASET $ds ==="
+    block_recpart; block_main; block_modes; block_single; block_shards; block_dims
+  done
+  DATASETS="$all_ds"
+  block_csv
+  banner "FULL XONG - xem: bash code/run_blocks.sh results"
+}
+
 # ------------------------------------------------------------------ status
 block_status () {
   banner "STATUS"
@@ -296,7 +323,7 @@ block_status () {
   python code/clean_old_results.py --status
   echo ""
   echo "  Job dang chay:"
-  ps -ww -eo pid,etime,args | grep -E "exp_partition_quality|exp_single_request|run_blocks\.sh (main|modes|single|shards|dims|recpart|all)" \
+  ps -ww -eo pid,etime,args | grep -E "exp_partition_quality|exp_single_request|run_blocks\.sh (main|modes|single|shards|dims|recpart|all|full)" \
     | grep -v grep | sed 's/^/    /' || echo "    (khong co job nao)"
 }
 
@@ -396,16 +423,21 @@ block_smoke () {
 # Đang có chuỗi chạy thì KHÔNG dừng nó: xếp hàng, chờ nó xong rồi tự chạy
 # tiếp. Lúc đó all bỏ qua log đã xong, chạy tiếp log dở từ run còn thiếu.
 block_start () {
+  local blk="${1:-all}"
+  case "$blk" in all|full|main|modes|single|shards|dims|recpart) ;;
+    *) echo "!! start chỉ nhận: all | full | main | modes | single | shards | dims | recpart"; exit 1 ;;
+  esac
   if [ -f "$QUEUEFILE" ] && kill -0 "$(cat "$QUEUEFILE")" 2>/dev/null; then
     echo "!! Đã có một chuỗi đang xếp hàng (PID $(cat "$QUEUEFILE")). Không cần start thêm."; exit 1
   fi
   local busy=0 out
   lock_busy && busy=1
-  banner "START (ngầm) - DATASETS=$DATASETS"
+  [ "$blk" = full ] && DATASETS="${FULL_DATASETS:-ml-1m yelp2018}"
+  banner "START (ngầm) - khối $blk - DATASETS=${FULL_DATASETS:-$DATASETS}"
   preflight
   block_smoke || { echo "!! Smoke test hỏng - KHÔNG chạy ngầm. Sửa lỗi trên rồi start lại."; exit 1; }
-  out="logs/block_all_$(date +%Y%m%d_%H%M%S).out"
-  WAIT_LOCK=1 nohup setsid bash code/run_blocks.sh all > "$out" 2>&1 < /dev/null &
+  out="logs/block_${blk}_$(date +%Y%m%d_%H%M%S).out"
+  WAIT_LOCK=1 nohup setsid bash code/run_blocks.sh "$blk" > "$out" 2>&1 < /dev/null &
   local pid=$!
   sleep 3
   if ! kill -0 "$pid" 2>/dev/null; then
@@ -532,7 +564,7 @@ block_results () {
 }
 
 case "${1:-}" in
-  main|modes|single|shards|dims|recpart|all) take_lock ;;
+  main|modes|single|shards|dims|recpart|all|full) take_lock ;;
 esac
 
 case "${1:-}" in
@@ -544,7 +576,8 @@ case "${1:-}" in
   dims)    block_dims ;;
   recpart) block_recpart ;;
   all)     block_main; block_modes; block_single; block_shards; block_dims; block_recpart; block_csv ;;
-  start)   block_start ;;
+  start)   block_start "${2:-all}" ;;
+  full)    block_full ;;
   stop)    block_stop ;;
   reset)   block_reset ;;
   results) block_results ;;
@@ -555,5 +588,5 @@ case "${1:-}" in
   csv)     block_csv ;;
   check)   block_check ;;
   clean)   block_clean ;;
-  *) echo "dùng: bash code/run_blocks.sh <reset|start|results|status|gpu|smoke|bench|stop|torch|main|modes|single|shards|dims|recpart|all|csv|check|clean>"; exit 1 ;;
+  *) echo "dùng: bash code/run_blocks.sh <reset|start [full]|results|status|gpu|smoke|bench|stop|torch|full|main|modes|single|shards|dims|recpart|all|csv|check|clean>"; exit 1 ;;
 esac
