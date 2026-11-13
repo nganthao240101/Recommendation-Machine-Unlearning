@@ -81,6 +81,15 @@ def main():
     print(f'{args.dataset}: {len(users)} users, {sum(map(len, train.values()))} '
           f'interactions, {args.epochs} epochs, device={device}')
     out = {}
+    # warm-up, not timed: the first run otherwise pays for CUDA start-up and
+    # the first allocations, which on one epoch outweighs the epoch itself
+    wu = sorted(train)[:50]
+    wtrain = {u: train[u] for u in wu}
+    wtest = {u: test[u] for u in wu if u in test}
+    with contextlib.redirect_stdout(io.StringIO()):
+        for eng in ('gpu', 'python'):
+            run(eng, wtrain, wtest, n_users, n_items, 1, device)
+    print('  (warm-up done)', flush=True)
     # the GPU engine first: its numbers come in seconds, while the original
     # loop waits on a busy GPU after every batch and can take minutes
     for eng in ('gpu', 'python'):
