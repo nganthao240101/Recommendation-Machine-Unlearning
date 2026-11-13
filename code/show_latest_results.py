@@ -19,12 +19,11 @@ import time
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import clean_old_results as cor                       # noqa: E402
-from summarize_partition_logs import parse_log, paired_test   # noqa: E402
+from summarize_partition_logs import parse_log   # noqa: E402
 from export_single_request_csv import parse as parse_single   # noqa: E402
 
 ROOT = cor.ROOT
 LOGS = cor.LOGS
-BASELINE = 'RANDOM_PERM'
 SHARED = 10          # % background GPU load above which a run counts as shared
 UTIL = (('recall_10', 'R@10'), ('ndcg_10', 'N@10'), ('recall_20', 'R@20'), ('ndcg_20', 'N@20'), ('recall_50', 'R@50'), ('ndcg_50', 'N@50'))
 ARM_ORDER = ['PROPOSED', 'PROPOSED_BAL', 'SISA', 'RANDOM_PERM', 'RANDOM_EMB',
@@ -95,20 +94,17 @@ def print_pq(recs, brief):
     eng = 'gpu' if 'gpu' in engines else 'python'
     if brief:
         # means only, every cut-off; the full view adds the std, partition,
-        # load, instability and the paired tests
+        # load and instability
         print(f'  {"arm":<14}{"n":>3}' + ''.join(f'{lab:>8}' for _, lab in UTIL)
-              + f'{"unlearn(s)":>12}{"work(M)":>9}{"dR@10":>9}{"p":>8}')
+              + f'{"unlearn(s)":>12}{"work(M)":>9}')
         for a in arms:
             rs = [r for r in recs if r['arm'] == a]
-            pr = paired_test(recs, a, BASELINE, 'recall_10') if a != BASELINE else None
-            d = f'{pr["mean_delta"]:+.4f}' if pr else '-'
-            p = f'{pr["p"]:.4f}' if pr and pr['p'] == pr['p'] else '-'
             wk = [r['unlearn_samples'] / 1e6 for r in rs if r.get('unlearn_samples') is not None]
             ul = [r.get('unlearn_time') for r in timed(rs, eng) if r.get('unlearn_time') is not None]
             print(f'  {a:<14}{len(rs):>3}'
                   + ''.join(f'{mean([r.get(k) for r in rs], 4):>8}' for k, _ in UTIL)
                   + f'{(f"{st.mean(ul):.1f}" if ul else "-"):>12}'
-                  + f'{(f"{st.mean(wk):.2f}" if wk else "-"):>9}{d:>9}{p:>8}')
+                  + f'{(f"{st.mean(wk):.2f}" if wk else "-"):>9}')
         if len(engines) > 1:
             print(f'  unlearn(s): {eng}-engine runs only; utility and work use every run')
         return
@@ -164,32 +160,6 @@ def print_pq(recs, brief):
               f'are left out of them (utility and work use every run)')
     if any(r.get('work_derived') for r in recs):
         print('  work of the older runs is derived from their per-shard interaction counts x 50 epochs')
-
-    if BASELINE in arms and len(arms) > 1:
-        print(f'  -- paired vs {BASELINE}: mean delta over the same seeds, p of a '
-              f'one-sample t-test (* = p < 0.05, n/a below 3 seeds)')
-        cols = list(UTIL) + [('unlearn_samples', 'work'), ('unlearn_time', 'unlearn s')]
-        print(f'  {"arm":<14}' + ''.join(f'{lab:>17}' for _, lab in cols))
-        for a in arms:
-            if a == BASELINE:
-                continue
-            cells = []
-            for k, _ in cols:
-                rs = recs if k != 'unlearn_time' else timed(recs, eng)
-                pr = paired_test(rs, a, BASELINE, k)
-                if not pr:
-                    cells.append('-')
-                    continue
-                if k == 'unlearn_samples':
-                    dv = f'{pr["mean_delta"] / 1e6:+.2f}M'
-                elif k == 'unlearn_time':
-                    dv = f'{pr["mean_delta"]:+.1f}'
-                else:
-                    dv = f'{pr["mean_delta"]:+.4f}'
-                pv = 'n/a' if pr['p'] != pr['p'] else f'{pr["p"]:.3f}'
-                star = '*' if pr['p'] == pr['p'] and pr['p'] < 0.05 else ''
-                cells.append(f'{dv} ({pv}){star}')
-            print(f'  {a:<14}' + ''.join(f'{c:>17}' for c in cells))
 
 
 def print_single(rows):
@@ -281,7 +251,7 @@ def print_partial(name, path, text, n_arms, brief=False):
             print(f'  {a:<14}{len(rows[a]):>6}{st.mean(rows[a]):>10.2f}')
         return
     print_pq(parse_log(path), brief=brief)
-    print('  (n = seeds finished so far; the paired p-value needs 3 seeds)')
+    print('  (n = seeds finished so far)')
 
 
 def main():
