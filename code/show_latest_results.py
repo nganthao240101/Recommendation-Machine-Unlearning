@@ -151,6 +151,9 @@ def print_pq(recs, brief):
     if shared_runs:
         print(f'  ! {shared_runs} run(s) measured while other work used the GPU '
               f'(>= {SHARED}%): their seconds may be inflated; the work column is not')
+    if eng == 'gpu' and 'RECERASER' in arms:
+        print('  RecEraser trains on the original loops even under the GPU engine, so its '
+              'seconds are not comparable with the other arms; compare the work column')
     if len(engines) > 1:
         n_old = sum(1 for r in recs if r.get('engine', 'python') != eng)
         print(f'  seconds: {eng}-engine runs only; {n_old} run(s) of the original loops '

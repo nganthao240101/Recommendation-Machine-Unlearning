@@ -240,7 +240,7 @@ class RecEraserArm:
         m = self.model
         optimizer = torch.optim.Adagrad(m.parameters(), lr=lr,
                                         initial_accumulator_value=1e-8)
-        if fast_train.use_gpu_engine():
+        if fast_train.use_gpu_receraser_training():
             samples = fast_train.draw_samples(shard_data, n_items)
             if not samples[0]:
                 return 0.0, 0.0, 0
@@ -296,7 +296,7 @@ class RecEraserArm:
         """
         from method_3_receraser_v2 import train_aggregator
         t0 = time.time()
-        if fast_train.use_gpu_engine():
+        if fast_train.use_gpu_receraser_training():
             # method_3_receraser_v2.train_aggregator on the GPU: only the
             # attention and transform parameters move (the embeddings are
             # detached in the forward), a non-finite batch is skipped, the

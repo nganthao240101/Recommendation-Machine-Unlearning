@@ -46,6 +46,8 @@
 #     bash code/run_blocks.sh clean        # xóa log CŨ, giữ log mới (nén backup trước)
 #   Chỉ 1 dataset:  DATASETS="ml-1m" bash code/run_blocks.sh start
 #   Ablation K/dim chỉ trên ml-1m:  ABLATE_DATASETS="ml-1m" bash code/run_blocks.sh start
+#   Engine GPU (nhanh hơn trên GPU, xem bench):  RECUNLEARN_ENGINE=gpu bash code/run_blocks.sh start
+#     bash code/run_blocks.sh bench        # đo engine cũ vs GPU trên dữ liệu thật (vài phút)
 #
 #   Tránh sai thời gian: mọi khối giữ khóa logs/.run.lock, nên KHÔNG bao giờ
 #   có 2 thí nghiệm cùng chạy trên GPU; lệnh thứ 2 bị từ chối. Đầu mỗi log
@@ -548,9 +550,10 @@ case "${1:-}" in
   results) block_results ;;
   gpu)     block_gpu ;;
   smoke)   block_smoke ;;
+  bench)   python code/bench_engine.py --dataset "${BENCH_DATASET:-ml-1m}" ;;
   status)  block_status ;;
   csv)     block_csv ;;
   check)   block_check ;;
   clean)   block_clean ;;
-  *) echo "dùng: bash code/run_blocks.sh <reset|start|results|status|gpu|smoke|stop|torch|main|modes|single|shards|dims|recpart|all|csv|check|clean>"; exit 1 ;;
+  *) echo "dùng: bash code/run_blocks.sh <reset|start|results|status|gpu|smoke|bench|stop|torch|main|modes|single|shards|dims|recpart|all|csv|check|clean>"; exit 1 ;;
 esac

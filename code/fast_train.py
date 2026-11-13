@@ -44,9 +44,22 @@ def use_gpu_engine():
     return ENGINE != 'python'
 
 
+# RecEraser's shard and aggregator TRAINING keep the original loops even under
+# the GPU engine, for the reason above; its evaluation, which matches the
+# original exactly, does use the GPU. RECUNLEARN_REC_TRAIN=gpu overrides this.
+REC_TRAIN = os.environ.get('RECUNLEARN_REC_TRAIN', 'python').lower()
+
+
+def use_gpu_receraser_training():
+    return use_gpu_engine() and REC_TRAIN == 'gpu'
+
+
 def engine_name():
-    return ('gpu (resident batches, torch.topk evaluation)'
-            if use_gpu_engine() else 'python (original per-batch loops)')
+    if not use_gpu_engine():
+        return 'python (original per-batch loops)'
+    return ('gpu (resident batches, torch.topk evaluation'
+            + ('' if use_gpu_receraser_training()
+               else '; RecEraser training on the original loops') + ')')
 
 
 # ----------------------------------------------------------------- training
