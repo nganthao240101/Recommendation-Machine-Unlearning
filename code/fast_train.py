@@ -32,7 +32,11 @@ import random
 import numpy as np
 import torch
 
-ENGINE = os.environ.get('RECUNLEARN_ENGINE', 'gpu').lower()
+# Default: the original loops. The GPU engine matches them for every arm but
+# RecEraser, whose trained R@10 came out lower and more spread (8 seeds on a
+# synthetic set: 0.057 +- 0.015 against 0.087 +- 0.007), so it stays opt-in
+# (RECUNLEARN_ENGINE=gpu) until that is found and fixed.
+ENGINE = os.environ.get('RECUNLEARN_ENGINE', 'python').lower()
 EVAL_BLOCK = 1024           # users scored at once
 
 
