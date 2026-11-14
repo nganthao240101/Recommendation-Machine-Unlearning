@@ -75,8 +75,8 @@ K=8; DIM=64; SIG=64; MODE=random
 # Backbone mà mọi arm train: bprmf (mặc định) hoặc wmf (WMF của tác giả,
 # xem code/wmf_backbone.py). Log WMF có đuôi _wmf, không đè log BPRMF.
 BACKBONE="${BACKBONE:-bprmf}"
-# Khối single: số yêu cầu xóa (mỗi yêu cầu 1 user) mỗi seed. 5 x 5 seed = 25
-# lần đo cho mỗi method; RecEraser phải train lại aggregator ở MỖI yêu cầu nên
+# Khối single (ml-1m và yelp2018, BPRMF và WMF): train 1 model gốc (seed 0),
+# rồi unlearn SINGLE_N=5 user ngẫu nhiên, mỗi lần từ model gốc; RecEraser phải train lại aggregator ở MỖI yêu cầu nên
 # đây là phần chậm nhất. Retrain đo trên min(3, SINGLE_N) yêu cầu đầu.
 SINGLE_N="${SINGLE_N:-5}"
 # Như bài RecEraser: train MỘT model gốc, rồi đo từng yêu cầu xóa ngẫu nhiên và
