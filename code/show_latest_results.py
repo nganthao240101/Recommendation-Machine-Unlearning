@@ -252,7 +252,7 @@ def print_partial(name, path, text, n_arms, brief=False):
     print('-' * 112)
     print(f'PARTIAL  {name}   {head}')
     print('-' * 112)
-    if not done:
+    if not done and not name.startswith('single_'):
         print('  (no run finished yet)')
         return
     if name.startswith('single_'):
@@ -270,6 +270,9 @@ def print_partial(name, path, text, n_arms, brief=False):
         if not req:                       # logs from before the per-request line
             for arm, m, sd, n in SINGLE_LINE.findall(text):
                 req.setdefault(arm, []).append(float(m))
+        if not req:
+            print('  (no deletion request timed yet: the arm is still in its initial training)')
+            return
         print(f'  {"arm":<14}{"requests":>9}{"mean(s)":>10}{"std":>9}{"min":>9}{"max":>9}')
         for a in arms_of([{'arm': k} for k in req]):
             v = req[a]
