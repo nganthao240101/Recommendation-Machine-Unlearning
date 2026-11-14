@@ -357,18 +357,22 @@ block_full () {
 
 # ------------------------------------------------------------------ epochs
 # Thử số epoch cao hơn trên yelp2018 (log main_yelp_e<E>): main (1% random),
-# 1 model, xóa 1 lần (seed 0), các arm EP_ARMS. So R@k của Retrain và các
-# arm giữa 50 (main_yelp) / 100 / 200 epoch để chọn số epoch chung cho MỌI arm.
-#   EPOCH_LIST="100 200"  EP_DATASET=yelp2018  EP_SEEDS=0
+# train 1 model rồi unlearn 5 lần (SEEDS), như main_yelp nhưng E epoch.
+# Thứ tự arm: SAFER A, SAFER B, Random trước; rồi RecEraser; Retrain cuối
+# (mốc trên để xem backbone đã hội tụ chưa). 200 epoch chạy sau:
+#   EPOCH_LIST=200 bash code/run_blocks.sh start epochs
+#   EP_ARMS=...  EP_SEEDS=0 (1 lần xóa, nhanh hơn)  EP_DATASET=yelp2018
+# So sánh: bash code/run_blocks.sh epcompare
 block_epochs () {
   export RECUNLEARN_ENGINE="${RECUNLEARN_ENGINE:-gpu}"
   local ds="${EP_DATASET:-yelp2018}" e
-  local arms="${EP_ARMS:-GLOBAL,PROPOSED,SISA,RANDOM_PERM}"
-  banner "EPOCHS: $ds, epochs ${EPOCH_LIST:-100 200}, arms $arms"
-  for e in ${EPOCH_LIST:-100 200}; do
-    EPOCHS=$e pq "main_$(short $ds)" "$ds" arms=$arms -- --seeds "${EP_SEEDS:-0}"
+  local arms="${EP_ARMS:-PROPOSED,PROPOSED_BAL,RANDOM_PERM,RECERASER,GLOBAL}"
+  banner "EPOCHS: $ds, epochs ${EPOCH_LIST:-100}, arms $arms"
+  for e in ${EPOCH_LIST:-100}; do
+    EPOCHS=$e pq "main_$(short $ds)" "$ds" arms=$arms -- --seeds "${EP_SEEDS:-$SEEDS}"
   done
-  banner "EPOCHS XONG - xem: bash code/run_blocks.sh results"
+  python code/compare_epochs.py --dataset "$(short $ds)"
+  banner "EPOCHS XONG - so sánh: bash code/run_blocks.sh epcompare"
 }
 
 # Chia shard nhỏ hơn / lớn hơn (K=4, K=16) trên yelp2018 với số epoch đã chọn:
@@ -672,6 +676,7 @@ case "${1:-}" in
   compare) block_compare ;;
   epochs)  block_epochs ;;
   kyelp)   block_kyelp ;;
+  epcompare) python code/compare_epochs.py --dataset "$(short "${EP_DATASET:-yelp2018}")" ;;
   stop)    block_stop ;;
   reset)   block_reset ;;
   results) block_results ;;
@@ -682,5 +687,5 @@ case "${1:-}" in
   csv)     block_csv ;;
   check)   block_check ;;
   clean)   block_clean ;;
-  *) echo "dùng: bash code/run_blocks.sh <reset|start [full|compare|epochs|kyelp]|results|status|gpu|smoke|bench|stop|torch|full|main|modes|single|shards|dims|recpart|all|csv|check|clean>"; exit 1 ;;
+  *) echo "dùng: bash code/run_blocks.sh <reset|start [full|compare|epochs|kyelp]|epcompare|results|status|gpu|smoke|bench|stop|torch|full|main|modes|single|shards|dims|recpart|all|csv|check|clean>"; exit 1 ;;
 esac
