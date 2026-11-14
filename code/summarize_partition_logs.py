@@ -59,19 +59,19 @@ RE_BG = {
     'bg_load_after':  re.compile(r'after=(\d+)%'),
 }
 RE_INSTABILITY = {
-    'instability_label':   re.compile(r'label-matched=([\d.]+)%'),
-    'instability_pairwise': re.compile(r'pairwise=([\d.]+)%'),
+    'instability_label':   re.compile(r'label-matched=(-?(?:[\d.]+(?:e[-+]?\d+)?|nan))%'),
+    'instability_pairwise': re.compile(r'pairwise=(-?(?:[\d.]+(?:e[-+]?\d+)?|nan))%'),
 }
 RE_QUAL = {
-    'intra_similarity': re.compile(r'IntraSim=([\d.]+)'),
-    'nr_10':            re.compile(r'NR@10=([\d.]+)'),
-    'nr_20':            re.compile(r'NR@20=([\d.]+)'),
-    'nr_50':            re.compile(r'NR@50=([\d.]+)'),
+    'intra_similarity': re.compile(r'IntraSim=(-?(?:[\d.]+(?:e[-+]?\d+)?|nan))'),
+    'nr_10':            re.compile(r'NR@10=(-?(?:[\d.]+(?:e[-+]?\d+)?|nan))'),
+    'nr_20':            re.compile(r'NR@20=(-?(?:[\d.]+(?:e[-+]?\d+)?|nan))'),
+    'nr_50':            re.compile(r'NR@50=(-?(?:[\d.]+(?:e[-+]?\d+)?|nan))'),
 }
 RE_LOAD = {
-    'user_load_cv':         re.compile(r'user_cv=([\d.]+)'),
-    'interaction_load_cv':   re.compile(r'inter_cv=([\d.]+)'),
-    'max_mean_ratio':       re.compile(r'max/mean=([\d.]+)'),
+    'user_load_cv':         re.compile(r'user_cv=(-?(?:[\d.]+(?:e[-+]?\d+)?|nan))'),
+    'interaction_load_cv':   re.compile(r'inter_cv=(-?(?:[\d.]+(?:e[-+]?\d+)?|nan))'),
+    'max_mean_ratio':       re.compile(r'max/mean=(-?(?:[\d.]+(?:e[-+]?\d+)?|nan))'),
 }
 
 
