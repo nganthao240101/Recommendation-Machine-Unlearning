@@ -114,7 +114,12 @@ run () {
   local f="logs/${name}.out"
   local tee_opt="" skip=""
   if [ -f "$f" ]; then
-    if grep -q "CONSOLE SUMMARY" "$f" 2>/dev/null && is_new "$f"; then
+    # arms asked for (--arms) that the log has no run of: then the log is
+    # continued with them instead of skipped (e.g. RecEraser added later)
+    local want="" missing="" a prev=""
+    for a in "$@"; do [ "$prev" = "--arms" ] && want="$a"; prev="$a"; done
+    for a in ${want//,/ }; do grep -q -e "--- ARM $a (seed" -- "$f" || missing="$missing $a"; done
+    if [ -z "$missing" ] && grep -q "CONSOLE SUMMARY" "$f" 2>/dev/null && is_new "$f"; then
       echo "[skip] $name  (đã xong bằng code hiện tại)"
       return 0
     fi
@@ -358,15 +363,16 @@ block_full () {
 # ------------------------------------------------------------------ epochs
 # Thử số epoch cao hơn trên yelp2018 (log main_yelp_e<E>): main (1% random),
 # train 1 model rồi unlearn 5 lần (SEEDS), như main_yelp nhưng E epoch.
-# Thứ tự arm: SAFER A, SAFER B, Random trước; rồi RecEraser; Retrain cuối
-# (mốc trên để xem backbone đã hội tụ chưa). 200 epoch chạy sau:
+# Mặc định chỉ SAFER A, SAFER B, Random. Thêm RecEraser, Retrain sau vào CÙNG log:
+#   EP_ARMS=PROPOSED,PROPOSED_BAL,RANDOM_PERM,RECERASER,GLOBAL ... start epochs
+# 200 epoch chạy sau:
 #   EPOCH_LIST=200 bash code/run_blocks.sh start epochs
 #   EP_ARMS=...  EP_SEEDS=0 (1 lần xóa, nhanh hơn)  EP_DATASET=yelp2018
 # So sánh: bash code/run_blocks.sh epcompare
 block_epochs () {
   export RECUNLEARN_ENGINE="${RECUNLEARN_ENGINE:-gpu}"
   local ds="${EP_DATASET:-yelp2018}" e
-  local arms="${EP_ARMS:-PROPOSED,PROPOSED_BAL,RANDOM_PERM,RECERASER,GLOBAL}"
+  local arms="${EP_ARMS:-PROPOSED,PROPOSED_BAL,RANDOM_PERM}"
   banner "EPOCHS: $ds, epochs ${EPOCH_LIST:-100}, arms $arms"
   for e in ${EPOCH_LIST:-100}; do
     EPOCHS=$e pq "main_$(short $ds)" "$ds" arms=$arms -- --seeds "${EP_SEEDS:-$SEEDS}"
