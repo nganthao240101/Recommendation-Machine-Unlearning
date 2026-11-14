@@ -340,6 +340,21 @@ block_full () {
   banner "FULL XONG - xem: bash code/run_blocks.sh results"
 }
 
+# ------------------------------------------------------------------ compare
+# So sánh ml-1m với yelp2018 trên cùng các thí nghiệm: single ml-1m trước,
+# rồi yelp2018: main (1% random), most, fewest, single. Không chạy shards/dims/
+# recpart. Log đã xong thì bỏ qua, log dở thì chạy tiếp như full.
+block_compare () {
+  export RECUNLEARN_ENGINE="${RECUNLEARN_ENGINE:-gpu}"
+  ARMS="RECERASER,PROPOSED,PROPOSED_BAL,SISA,RANDOM_PERM,RANDOM_EMB,GLOBAL"
+  banner "COMPARE: single ml-1m, rồi yelp2018 (main, most, fewest, single) | engine=$RECUNLEARN_ENGINE"
+  DATASETS="ml-1m";    block_single
+  DATASETS="yelp2018"; block_main; block_modes; block_single
+  DATASETS="ml-1m yelp2018"
+  block_csv
+  banner "COMPARE XONG - xem: bash code/run_blocks.sh results"
+}
+
 # ------------------------------------------------------------------ fullwmf
 # Đúng các thí nghiệm của full, chỉ đổi model BPRMF -> WMF ở MỌI arm.
 # Log: <tên>_wmf (main_ml1m_wmf, ...). Mọi thứ khác như full.
@@ -355,7 +370,7 @@ block_status () {
   python code/clean_old_results.py --status
   echo ""
   echo "  Job dang chay:"
-  ps -ww -eo pid,etime,args | grep -E "exp_partition_quality|exp_single_request|run_blocks\.sh (main|modes|single|shards|dims|recpart|all|full|fullwmf)" \
+  ps -ww -eo pid,etime,args | grep -E "exp_partition_quality|exp_single_request|run_blocks\.sh (main|modes|single|shards|dims|recpart|all|full|fullwmf|compare)" \
     | grep -v grep | sed 's/^/    /' || echo "    (khong co job nao)"
 }
 
@@ -456,8 +471,8 @@ block_smoke () {
 # tiếp. Lúc đó all bỏ qua log đã xong, chạy tiếp log dở từ run còn thiếu.
 block_start () {
   local blk="${1:-all}"
-  case "$blk" in all|full|fullwmf|main|modes|single|shards|dims|recpart) ;;
-    *) echo "!! start chỉ nhận: all | full | fullwmf | main | modes | single | shards | dims | recpart"; exit 1 ;;
+  case "$blk" in all|full|fullwmf|compare|main|modes|single|shards|dims|recpart) ;;
+    *) echo "!! start chỉ nhận: all | full | fullwmf | compare | main | modes | single | shards | dims | recpart"; exit 1 ;;
   esac
   if [ -f "$QUEUEFILE" ] && kill -0 "$(cat "$QUEUEFILE")" 2>/dev/null; then
     echo "!! Đã có một chuỗi đang xếp hàng (PID $(cat "$QUEUEFILE")). Không cần start thêm."; exit 1
@@ -596,7 +611,7 @@ block_results () {
 }
 
 case "${1:-}" in
-  main|modes|single|shards|dims|recpart|all|full|fullwmf) take_lock ;;
+  main|modes|single|shards|dims|recpart|all|full|fullwmf|compare) take_lock ;;
 esac
 
 case "${1:-}" in
@@ -611,6 +626,7 @@ case "${1:-}" in
   start)   block_start "${2:-all}" ;;
   full)    block_full ;;
   fullwmf) block_fullwmf ;;
+  compare) block_compare ;;
   stop)    block_stop ;;
   reset)   block_reset ;;
   results) block_results ;;
@@ -621,5 +637,5 @@ case "${1:-}" in
   csv)     block_csv ;;
   check)   block_check ;;
   clean)   block_clean ;;
-  *) echo "dùng: bash code/run_blocks.sh <reset|start [full]|results|status|gpu|smoke|bench|stop|torch|full|main|modes|single|shards|dims|recpart|all|csv|check|clean>"; exit 1 ;;
+  *) echo "dùng: bash code/run_blocks.sh <reset|start [full|compare]|results|status|gpu|smoke|bench|stop|torch|full|main|modes|single|shards|dims|recpart|all|csv|check|clean>"; exit 1 ;;
 esac
