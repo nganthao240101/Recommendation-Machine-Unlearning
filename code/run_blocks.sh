@@ -269,8 +269,16 @@ block_modes () {
   done
 }
 
+# Khối single: như các mode khác (cùng script, cùng bảng R/NDCG@10/20/50 +
+# cost), mỗi lần xóa 1 user ngẫu nhiên: train model gốc 1 lần, unlearn 5 lần
+# (SEEDS) từ model đó, mean+-std qua 5 lần. Log: mode_single_<ds>.
+# SINGLE_TIMEONLY=1: cách cũ (chỉ đo thời gian, log single_<ds>).
 block_single () {
   preflight
+  if [ "${SINGLE_TIMEONLY:-0}" != 1 ]; then
+    for ds in $DATASETS; do pq "mode_single_$(short $ds)" "$ds" mode=single; done
+    return
+  fi
   for ds in $DATASETS; do
     run "single_$(short $ds)$(bsuffix)" python code/exp_single_request.py --dataset "$ds" \
       --n_shards $K --emb_dim $DIM --sig_dim $SIG --epochs 50 --retrain_epochs 50 \
@@ -406,12 +414,12 @@ block_csv () {
   local L_main="" L_modes="" L_shards="" L_dims="" L_rec="" L_single="" L_all=""
   for s in $all_ds; do
     L_main="$L_main main_$s$x"
-    L_modes="$L_modes mode_most_$s$x mode_fewest_$s$x"
+    L_modes="$L_modes mode_most_$s$x mode_fewest_$s$x mode_single_$s$x"
     L_shards="$L_shards k4_$s$x main_$s$x k16_$s$x"      # K=8 là main
     L_dims="$L_dims dim32_$s$x main_$s$x dim128_$s$x"    # dim=64 là main
     L_rec="$L_rec main_$s$x recrand_$s$x"                # RECERASER UBP nằm trong main
     L_single="$L_single logs/single_$s$x.out"
-    L_all="$L_all main_$s$x mode_most_$s$x mode_fewest_$s$x k4_$s$x k16_$s$x dim32_$s$x dim128_$s$x recrand_$s$x"
+    L_all="$L_all main_$s$x mode_most_$s$x mode_fewest_$s$x mode_single_$s$x k4_$s$x k16_$s$x dim32_$s$x dim128_$s$x recrand_$s$x"
   done
   csv_group "main$x"    $L_main
   csv_group "modes$x"   $L_main $L_modes

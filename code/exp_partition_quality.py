@@ -143,6 +143,9 @@ def pick_deletion_users(train_items, ratio, mode, seed):
     rng = random.Random(seed)
     users = [u for u, it in train_items.items() if len(it) > 0]
     n_del = max(1, int(len(users) * ratio))
+    if mode == 'single':
+        # one deletion request: one user, drawn at random for this seed
+        return set(rng.sample(users, 1))
 
     if mode == 'most':
         users.sort(key=lambda u: len(train_items[u]), reverse=True)
@@ -990,8 +993,10 @@ def main():
         del_users = dels_by_seed[seed]
         if seed != shown or one_model:
             shown = seed
+            what = (f"user {next(iter(del_users))}" if args.unlearn_mode == 'single'
+                    else f"{args.unlearn_ratio*100:.1f}%, {args.unlearn_mode}")
             print(f"\n{'='*70}\nSEED {seed} | deleted {len(del_users)} users "
-                  f"({args.unlearn_ratio*100:.1f}%, {args.unlearn_mode})"
+                  f"({what})"
                   + (f" | model trained with seed {tseed}" if one_model else "")
                   + f"\n{'='*70}")
 
@@ -1226,11 +1231,12 @@ def main():
                 n_int = per_shard_inter.get(s, 0)
                 per_epoch = per_shard_time[s] / max(args.retrain_epochs, 1)
                 rate[s] = (per_epoch / n_int) if n_int else float('nan')
-            if len(rate) > 1:
+            if rate:          # one shard (single request): nothing to compare
                 ok = [r for r in rate.values() if r == r]
                 span = (max(ok) - min(ok)) / max(_mean(ok), 1e-12) \
                     if ok else 0.0
-                flag = "OK" if span < 1.5 else \
+                flag = "OK (one shard)" if len(rate) == 1 else \
+                    "OK" if span < 1.5 else \
                     "CHECK: per-epoch time does not scale with the " \
                     f"shard size (spread {span:.2f}x)"
                 print(f"       S5 rate check: sec/epoch per interaction "

@@ -53,7 +53,7 @@ LIVE_FALLBACK_S = 60 * 60
 _DS = ('ml1m', 'yelp')
 EXPERIMENT_LOGS = (
     [f'main_{d}' for d in _DS]
-    + [f'mode_{m}_{d}' for d in _DS for m in ('most', 'fewest')]
+    + [f'mode_{m}_{d}' for d in _DS for m in ('most', 'fewest', 'single')]
     + [f'single_{d}' for d in _DS]
     + [f'k{k}_{d}' for d in _DS for k in (4, 16)]
     + [f'dim{x}_{d}' for d in _DS for x in (32, 128)]
