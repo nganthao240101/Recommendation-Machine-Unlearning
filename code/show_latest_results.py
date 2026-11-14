@@ -196,7 +196,7 @@ def progress(name, text, n_arms):
     return done, total, cur
 
 
-REQ_LINE = re.compile(r'^\s*request (\d+)/(\d+) \(user \d+\): ([\d.]+)s')
+REQ_LINE = re.compile(r'^\s*request (\d+)/(\d+) \(user \d+\): ([\d.]+)s', re.M)
 SINGLE_LINE = re.compile(
     r'^\s*\[([A-Z_]+)\]\s+single-request unlearn time:\s+([\d.]+)\+-([\d.]+)s over (\d+)',
     re.M)
@@ -312,7 +312,7 @@ def main():
         else:
             d, t, cur = progress(name, text, n_arms)
             last = cor.last_error(text)
-            if d:
+            if d or (name.startswith('single_') and REQ_LINE.search(text)):
                 partial.append((name, p, text, n_arms))
             waiting.append((name, 'FAILED',
                             f'stopped at {d}/{t} runs ({cur}): {last}'))
