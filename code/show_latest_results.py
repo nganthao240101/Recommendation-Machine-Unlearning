@@ -132,15 +132,16 @@ def print_pq(recs, brief):
                       'recall_50', 'ndcg_50')))
 
     print(f'  -- partition quality / load / instability (mean)')
-    print(f'  {"arm":<14}{"IntraSim":>10}{"NR@10":>8}{"NR@20":>8}{"NR@50":>8}'
-          f'{"user_cv":>9}{"inter_cv":>9}{"max/mean":>9}{"instab%":>9}{"pair%":>8}')
+    print(f'  {"arm":<14}{"IntraSim":>10}{"NR@10":>9}{"NR@20":>9}{"NR@50":>9}'
+          f'{"user_cv":>9}{"inter_cv":>9}{"max/mean":>9}{"instab%":>9}{"pair%":>9}')
     for a in arms:
         rs = [r for r in recs if r['arm'] == a]
         g = lambda k, p=4: mean([r.get(k) for r in rs], p)
-        print(f'  {label(a):<14}{g("intra_similarity"):>10}{g("nr_10", 3):>8}'
-              f'{g("nr_20", 3):>8}{g("nr_50", 3):>8}{g("user_load_cv", 3):>9}'
-              f'{g("interaction_load_cv", 3):>9}{g("max_mean_ratio", 2):>9}'
-              f'{g("instability_label"):>9}{g("instability_pairwise"):>8}')
+        # every column with 4 decimals, as the tables of the paper
+        print(f'  {label(a):<14}{g("intra_similarity"):>10}{g("nr_10"):>9}'
+              f'{g("nr_20"):>9}{g("nr_50"):>9}{g("user_load_cv"):>9}'
+              f'{g("interaction_load_cv"):>9}{g("max_mean_ratio"):>9}'
+              f'{g("instability_label"):>9}{g("instability_pairwise"):>9}')
 
     print(f'  -- cost: seconds (mean+-std), affected shards, unlearn work, GPU background load')
     print(f'  {"arm":<14}{"train":>14}{"unlearn":>14}{"parallel":>14}{"shards":>11}'
