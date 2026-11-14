@@ -160,6 +160,7 @@ def main():
                                  replace=False).tolist())
     print(f"  {len(victims)} single-deletion requests, the same for every arm: "
           f"{victims[:10]}{'...' if len(victims) > 10 else ''}")
+    print(f"  seeds: {','.join(map(str, seeds))}")
 
     results = []
 

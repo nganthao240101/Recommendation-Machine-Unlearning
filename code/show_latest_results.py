@@ -54,7 +54,7 @@ def describe(name):
     elif stem.startswith('mode_'):
         base['mode'] = stem[5:]
     elif stem == 'single':
-        base['mode'] = 'single request (20 users)'
+        base['mode'] = 'single request'
     elif stem.startswith('k'):
         base['k'] = int(stem[1:])
     elif stem.startswith('dim'):
@@ -185,7 +185,8 @@ def print_single(rows):
 
 def progress(name, text, n_arms):
     """-> (done runs, total runs, current arm/seed)"""
-    total = n_arms * N_SEEDS
+    m = re.search(r'^\s*seeds: ([\d,]+)\s*$', text, re.M)   # the single block prints it
+    total = n_arms * (len(m.group(1).split(',')) if m else N_SEEDS)
     if name.startswith('single_'):
         done = len(SINGLE_DONE.findall(text))
     else:

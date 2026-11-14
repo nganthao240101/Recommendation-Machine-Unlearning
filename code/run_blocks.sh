@@ -79,6 +79,10 @@ BACKBONE="${BACKBONE:-bprmf}"
 # lần đo cho mỗi method; RecEraser phải train lại aggregator ở MỖI yêu cầu nên
 # đây là phần chậm nhất. Retrain đo trên min(3, SINGLE_N) yêu cầu đầu.
 SINGLE_N="${SINGLE_N:-5}"
+# Như bài RecEraser: train MỘT model gốc, rồi đo từng yêu cầu xóa ngẫu nhiên và
+# lấy trung bình; không lặp lại theo seed (thời gian xóa phụ thuộc kích thước
+# shard, không phụ thuộc seed). SINGLE_SEEDS="0,1,2" để lặp lại nếu cần.
+SINGLE_SEEDS="${SINGLE_SEEDS:-0}"
 bsuffix () { [ "$BACKBONE" = wmf ] && echo _wmf; }
 
 short () { case "$1" in ml-1m) echo ml1m ;; yelp2018) echo yelp ;; *) echo "$1" ;; esac; }
@@ -264,7 +268,7 @@ block_single () {
   for ds in $DATASETS; do
     run "single_$(short $ds)$(bsuffix)" python code/exp_single_request.py --dataset "$ds" \
       --n_shards $K --emb_dim $DIM --sig_dim $SIG --epochs 50 --retrain_epochs 50 \
-      --lr 0.05 --batch_size 512 --n_users $SINGLE_N --seeds $SEEDS --arms "$ARMS" \
+      --lr 0.05 --batch_size 512 --n_users $SINGLE_N --seeds $SINGLE_SEEDS --arms "$ARMS" \
       --backbone "$BACKBONE"
   done
 }
