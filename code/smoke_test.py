@@ -64,14 +64,14 @@ def main():
     print(f'smoke test on a {120}-user synthetic set, all 7 arms, BPRMF and WMF ({root})')
     ok = run('partition_quality',
              [py, os.path.join(HERE, 'exp_partition_quality.py'), *common,
-              '--unlearn_mode', 'random', '--unlearn_ratio', '0.05'], root)
+              '--unlearn_mode', 'random', '--unlearn_ratio', '0.05', '--seeds', '0,1', '--train_seed', '0'], root)
     ok &= run('single_request',
               [py, os.path.join(HERE, 'exp_single_request.py'), *common,
                '--n_users', '2'], root)
     # the same two with the WMF backbone (run_blocks.sh fullwmf)
     ok &= run('partition_quality_wmf',
               [py, os.path.join(HERE, 'exp_partition_quality.py'), *common,
-               '--unlearn_mode', 'random', '--unlearn_ratio', '0.05',
+               '--unlearn_mode', 'random', '--unlearn_ratio', '0.05', '--seeds', '0,1', '--train_seed', '0',
                '--backbone', 'wmf'], root)
     ok &= run('single_request_wmf',
               [py, os.path.join(HERE, 'exp_single_request.py'), *common,

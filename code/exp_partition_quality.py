@@ -591,7 +591,7 @@ def build_shard_data(train_items, user_to_shard, n_shards):
 def run_sharded_arm(train_items, test_data, n_users, n_items, n_shards,
                     emb_dim, user_to_shard, del_users, epochs, lr, batch_size,
                     device, seed, retrain_epochs, reset_on_retrain=False,
-                    eval_mode='hard'):
+                    eval_mode='hard', cache=None):
     """Train K shard models, delete users, retrain affected shards, evaluate.
 
     The per-shard retrain times and interaction counts are returned so the
@@ -603,12 +603,29 @@ def run_sharded_arm(train_items, test_data, n_users, n_items, n_shards,
     shard_data = build_shard_data(train_items, user_to_shard, n_shards)
     shard_models = ShardModels(n_users, n_items, emb_dim, n_shards)
 
-    t0 = time.time()
-    for sid in range(n_shards):
-        model = shard_models.create_model(sid, device)
-        train_shard_model(model, shard_data[sid], n_items, device,
-                          batch_size=batch_size, lr=lr, n_epochs=epochs)
-    train_time = time.time() - t0
+    if cache and 'states' in cache:
+        # one model for every deletion: start again from the trained shards
+        for sid in range(n_shards):
+            shard_models.create_model(sid, device).load_state_dict(cache['states'][sid])
+        train_time = cache['train_time']
+        # the retrain of this deletion gets its own random stream: with the
+        # same seed every repeat would retrain identically (most/fewest even
+        # delete the same users), and the 5 deletions would be one
+        set_all_seeds(cache['rng_seed'])
+        print("       model: the trained shards are reused (trained once), "
+              f"train time {train_time:.1f}s from that training")
+    else:
+        t0 = time.time()
+        for sid in range(n_shards):
+            model = shard_models.create_model(sid, device)
+            train_shard_model(model, shard_data[sid], n_items, device,
+                              batch_size=batch_size, lr=lr, n_epochs=epochs)
+        train_time = time.time() - t0
+        if cache is not None:
+            cache['states'] = [{k: v.detach().clone() for k, v in
+                                shard_models.get_model(sid).state_dict().items()}
+                               for sid in range(n_shards)]
+            cache['train_time'] = train_time
 
     # ---- unlearn: remove deleted users, retrain ONLY affected shards ----
     # reset_on_retrain controls whether the affected shard starts from a FRESH
@@ -751,7 +768,7 @@ def _train_bprmf(train_items, n_users, n_items, emb_dim, epochs, lr,
 
 
 def run_global_arm(train_items, test_data, n_users, n_items, del_users,
-                   emb_dim, epochs, lr, batch_size, device, seed):
+                   emb_dim, epochs, lr, batch_size, device, seed, cache=None):
     """Retrain reference: one BPRMF on the whole retained dataset.
 
     The global model has no shards, so unlearning it means retraining a fresh
@@ -773,12 +790,23 @@ def run_global_arm(train_items, test_data, n_users, n_items, del_users,
     retained = {u: it for u, it in train_items.items() if u not in del_users}
 
     # ---- the original model, on the full dataset ----
-    _, train_time, n_full, ep_full = _train_bprmf(train_items, n_users, n_items,
-                                                   emb_dim, epochs, lr,
-                                                   batch_size, device, seed)
+    # (with one model for every deletion it is trained once and its time
+    # reused: the retrain below does not start from it)
+    if cache and 'train_time' in cache:
+        train_time, n_full, ep_full = cache['train_time'], cache['n_full'], cache['ep_full']
+        cache['reused'] = True
+        print("       model: the original model is reused (trained once), "
+              f"train time {train_time:.1f}s from that training")
+    else:
+        _, train_time, n_full, ep_full = _train_bprmf(train_items, n_users, n_items,
+                                                       emb_dim, epochs, lr,
+                                                       batch_size, device, seed)
+        if cache is not None:
+            cache.update(train_time=train_time, n_full=n_full, ep_full=ep_full)
     # ---- the retrained model, on the data with the deleted users removed ----
+    rseed = cache['rng_seed'] if cache and 'reused' in cache else seed
     model, unlearn_time, n_ret, ep_ret = _train_bprmf(
-        retained, n_users, n_items, emb_dim, epochs, lr, batch_size, device, seed)
+        retained, n_users, n_items, emb_dim, epochs, lr, batch_size, device, rseed)
 
     test_retained = {u: it for u, it in test_data.items() if u not in del_users}
     if fast_train.use_gpu_engine():
@@ -830,6 +858,10 @@ def main():
     ap.add_argument('--unlearn_ratio', type=float, default=0.01)
     ap.add_argument('--unlearn_mode', default='most')
     ap.add_argument('--seeds', default='0,1,2,3,4')
+    ap.add_argument('--train_seed', type=int, default=-1,
+                    help='>= 0: train every arm ONCE with this seed and use --seeds '
+                         'only to pick the deleted users (each deletion starts from '
+                         'that one model). -1 (default): one model per seed.')
     ap.add_argument('--arms', default='PROPOSED,PROPOSED_BAL,RANDOM_EMB,RANDOM_PERM,RANDOM_BAL,RANDOM_MODULO,SISA,GLOBAL')
     ap.add_argument('--data_root', default=None)
     ap.add_argument('--backbone', default='bprmf', choices=['bprmf', 'wmf'],
@@ -914,274 +946,301 @@ def main():
     # Results are printed to the console as they are produced; no CSV is written.
     RESULTS = []
 
-    for seed in seeds:
-        if args.legacy_mode:
-            # exactly reproduce the original method_4_ours.py deletion set
-            ui = sorted(train_items.items(), key=lambda kv: len(kv[1]), reverse=True)
-            del_users = {u for u, _ in ui[:int(len(train_items) * args.unlearn_ratio)]}
+    # One model (--train_seed >= 0): each arm is trained ONCE with that seed
+    # and every seed in --seeds only picks a different set of deleted users;
+    # each deletion starts again from the same trained model (the unaffected
+    # shards keep the original weights, the affected ones are retrained from
+    # scratch). Otherwise every seed trains its own model, as before.
+    one_model = args.train_seed >= 0
+    # The signature the partition-quality metrics are measured on does not
+    # depend on the run seed (legacy_seed), so it is built once for every arm.
+    # The metrics use this ORIGINAL signature - not the post-train
+    # embeddings, which carry no useful user similarity yet at few epochs
+    # (NR@q would read ~1.0 for every arm and tell us nothing).
+    sigs_for_metrics = pv_build_signature(
+        train_items, n_users, n_items, d=args.sig_dim,
+        seed=args.legacy_seed, weighting=args.sig_weighting, verbose=False)
+    if one_model:
+        print(f"  one model: every arm trained once (seed {args.train_seed}), then "
+              f"unlearned {len(seeds)} times from that model "
+              f"(deletion seeds {','.join(map(str, seeds))})")
+        pairs = [(a, s) for a in arms for s in seeds]
+    else:
+        pairs = [(a, s) for s in seeds for a in arms]
+
+    dels_by_seed, caches, shown = {}, {}, None
+    for arm, seed in pairs:
+        if (arm, seed) in skip:
+            continue
+        tseed = args.train_seed if one_model else seed
+        cache = None
+        if one_model:
+            if arm not in caches:
+                caches.clear()            # the previous arm's model is done
+            cache = caches.setdefault(arm, {})
+            cache['rng_seed'] = seed      # the retrain of a reused model
+        if seed not in dels_by_seed:
+            if args.legacy_mode:
+                # exactly reproduce the original method_4_ours.py deletion set
+                ui = sorted(train_items.items(), key=lambda kv: len(kv[1]), reverse=True)
+                dels_by_seed[seed] = {u for u, _ in ui[:int(len(train_items) * args.unlearn_ratio)]}
+            else:
+                dels_by_seed[seed] = pick_deletion_users(
+                    train_items, args.unlearn_ratio, args.unlearn_mode, seed)
+        del_users = dels_by_seed[seed]
+        if seed != shown or one_model:
+            shown = seed
+            print(f"\n{'='*70}\nSEED {seed} | deleted {len(del_users)} users "
+                  f"({args.unlearn_ratio*100:.1f}%, {args.unlearn_mode})"
+                  + (f" | model trained with seed {tseed}" if one_model else "")
+                  + f"\n{'='*70}")
+
+        print(f"\n--- ARM {arm} (seed {seed}) ---")
+        bg0 = gpu_probe.background_load()
+        row = {
+            'dataset': args.dataset, 'seed': seed, 'arm': arm, 'K': args.n_shards,
+            'deletion_ratio': args.unlearn_ratio, 'deletion_mode': args.unlearn_mode,
+            'backbone': 'BPRMF', 'embedding_dim': args.emb_dim,
+            'epochs': args.epochs, 'learning_rate': args.lr,
+            'regularization': 0.01,
+        }
+
+        if arm == 'GLOBAL':
+            res, tt, ut, ptime, n_full, n_ret, ep_full, ep_ret = run_global_arm(
+                train_items, test_data, n_users, n_items, del_users,
+                args.emb_dim, args.epochs, args.lr, args.batch_size, device, tseed,
+                cache=cache)
+            row.update({
+                'partition': 'none', 'train_time': tt, 'unlearn_time': ut,
+                'parallel_time': ptime,
+                'affected_shards': 1, 'intra_similarity': '',
+                'nr_10': '', 'nr_20': '', 'nr_50': '',
+                'user_load_cv': '', 'interaction_load_cv': '', 'max_mean_ratio': '',
+                'instability_label': '', 'instability_pairwise': '',
+                'shard_interactions_total': n_full,
+                'shard_interactions_unlearn': n_ret,
+                'sec_per_epoch_global': (_mean(ep_ret) if ep_ret else ''),
+                'sec_per_interaction_global': (
+                    (_mean(ep_ret) / n_ret) if ep_ret and n_ret else ''),
+            })
+            per_shard_time, per_shard_inter = {}, {}
         else:
-            del_users = pick_deletion_users(train_items, args.unlearn_ratio,
-                                            args.unlearn_mode, seed)
-        print(f"\n{'='*70}\nSEED {seed} | deleted {len(del_users)} users "
-              f"({args.unlearn_ratio*100:.1f}%, {args.unlearn_mode})\n{'='*70}")
-
-        # Build the signature ONCE per seed, shared by every arm. The
-        # partition-quality metrics (intra-similarity, neighbour retention)
-        # are measured on this ORIGINAL signature - not on the post-train
-        # embeddings, which carry no useful user similarity yet at few
-        # epochs (NR@q would read ~1.0 for every arm and tell us nothing).
-        sigs_for_metrics = pv_build_signature(
-            train_items, n_users, n_items, d=args.sig_dim,
-            seed=args.legacy_seed, weighting=args.sig_weighting, verbose=False)
-
-        for arm in arms:
-            if (arm, seed) in skip:
-                continue
-            print(f"\n--- ARM {arm} (seed {seed}) ---")
-            bg0 = gpu_probe.background_load()
-            row = {
-                'dataset': args.dataset, 'seed': seed, 'arm': arm, 'K': args.n_shards,
-                'deletion_ratio': args.unlearn_ratio, 'deletion_mode': args.unlearn_mode,
-                'backbone': 'BPRMF', 'embedding_dim': args.emb_dim,
-                'epochs': args.epochs, 'learning_rate': args.lr,
-                'regularization': 0.01,
-            }
-
-            if arm == 'GLOBAL':
-                res, tt, ut, ptime, n_full, n_ret, ep_full, ep_ret = run_global_arm(
-                    train_items, test_data, n_users, n_items, del_users,
-                    args.emb_dim, args.epochs, args.lr, args.batch_size, device, seed)
-                row.update({
-                    'partition': 'none', 'train_time': tt, 'unlearn_time': ut,
-                    'parallel_time': ptime,
-                    'affected_shards': 1, 'intra_similarity': '',
-                    'nr_10': '', 'nr_20': '', 'nr_50': '',
-                    'user_load_cv': '', 'interaction_load_cv': '', 'max_mean_ratio': '',
-                    'instability_label': '', 'instability_pairwise': '',
-                    'shard_interactions_total': n_full,
-                    'shard_interactions_unlearn': n_ret,
-                    'sec_per_epoch_global': (_mean(ep_ret) if ep_ret else ''),
-                    'sec_per_interaction_global': (
-                        (_mean(ep_ret) / n_ret) if ep_ret and n_ret else ''),
-                })
-                per_shard_time, per_shard_inter = {}, {}
+            if arm == 'PROPOSED':
+                # legacy_seed keeps the signature matrix R and the LSH
+                # hyperplanes identical to the earlier runs (seed 42),
+                # so PROPOSED is directly comparable with the old logs.
+                #
+                # The router is FIXED to hyperplane here (spec S6): the old
+                # code took it from --router, so running the router ablation
+                # with --router minhash turned BOTH this arm and
+                # PROPOSED_MINHASH into minhash and the two arms came out
+                # identical. PROPOSED_MINHASH now carries the variant.
+                umap = partition_proposed(train_items, n_users, n_items,
+                                          args.n_shards, args.sig_dim,
+                                          args.legacy_seed,
+                                          router='hyperplane',
+                                          sig_weighting=args.sig_weighting)
+                pname = f'signature_hyperplane_{args.sig_weighting}'
+            elif arm == 'PROPOSED_MINHASH':
+                umap = partition_proposed(train_items, n_users, n_items,
+                                          args.n_shards, args.sig_dim,
+                                          args.legacy_seed,
+                                          router='minhash',
+                                          sig_weighting=args.sig_weighting)
+                pname = f'signature_minhash_{args.sig_weighting}'
+            elif arm == 'PROPOSED_BAL':
+                umap = partition_proposed_balanced(
+                    train_items, n_users, n_items, args.n_shards,
+                    args.sig_dim, args.legacy_seed)
+                pname = 'signature_lsh_balanced'
+            elif arm == 'RANDOM_EMB':
+                # control for the signature: random user embedding routed
+                # through the SAME LSH router as Ours-signature
+                umap = partition_random_embedding(
+                    train_items, n_users, n_items, args.n_shards,
+                    args.sig_dim, tseed, router=args.router)
+                pname = f'random_embedding_{args.router}'
+            elif arm == 'RANDOM_PERM':
+                umap = pv_random_perm(n_users, args.n_shards, tseed)
+                pname = 'random_perm'
+            elif arm == 'RANDOM_BAL':
+                # random, greedy-balanced by interaction load: the control
+                # that removes the "one large shard ~= global model" confound
+                umap = random_perm_balanced(train_items, n_users,
+                                            args.n_shards, tseed)
+                pname = 'random_balanced'
+            elif arm == 'RANDOM_MODULO':
+                umap = pv_random_modulo(n_users, args.n_shards, tseed)
+                pname = 'random_modulo'
+            elif arm == 'SISA':
+                umap = pv_random_modulo(n_users, args.n_shards, tseed)
+                pname = 'sisa_modulo'
+            elif arm == 'INP':
+                # embedding-based upper reference (frozen k-means over WMF)
+                umap = partition_embedding_based(train_items, n_users, n_items,
+                                                 args.n_shards, tseed,
+                                                 kind='inp',
+                                                 data_root=data_root)
+                pname = 'inp_frozen'
+            elif arm == 'UBP':
+                umap = partition_embedding_based(train_items, n_users, n_items,
+                                                 args.n_shards, tseed,
+                                                 kind='ubp',
+                                                 data_root=data_root)
+                pname = 'ubp_frozen'
+            elif arm == 'RECERASER':
+                # RecEraser: UBP partition over WMF embeddings + attention
+                # aggregation. Structurally different from the other arms,
+                # so it gets its own runner.
+                from exp_receraser_arm import receraser_ubp_partition
+                umap = receraser_ubp_partition(
+                    train_items, n_users, n_items, args.n_shards, tseed,
+                    data_root=data_root, kind=args.receraser_partition)
+                pname = f'receraser_{args.receraser_partition}_attention'
             else:
-                if arm == 'PROPOSED':
-                    # legacy_seed keeps the signature matrix R and the LSH
-                    # hyperplanes identical to the earlier runs (seed 42),
-                    # so PROPOSED is directly comparable with the old logs.
-                    #
-                    # The router is FIXED to hyperplane here (spec S6): the old
-                    # code took it from --router, so running the router ablation
-                    # with --router minhash turned BOTH this arm and
-                    # PROPOSED_MINHASH into minhash and the two arms came out
-                    # identical. PROPOSED_MINHASH now carries the variant.
-                    umap = partition_proposed(train_items, n_users, n_items,
-                                              args.n_shards, args.sig_dim,
-                                              args.legacy_seed,
-                                              router='hyperplane',
-                                              sig_weighting=args.sig_weighting)
-                    pname = f'signature_hyperplane_{args.sig_weighting}'
-                elif arm == 'PROPOSED_MINHASH':
-                    umap = partition_proposed(train_items, n_users, n_items,
-                                              args.n_shards, args.sig_dim,
-                                              args.legacy_seed,
-                                              router='minhash',
-                                              sig_weighting=args.sig_weighting)
-                    pname = f'signature_minhash_{args.sig_weighting}'
-                elif arm == 'PROPOSED_BAL':
-                    umap = partition_proposed_balanced(
-                        train_items, n_users, n_items, args.n_shards,
-                        args.sig_dim, args.legacy_seed)
-                    pname = 'signature_lsh_balanced'
-                elif arm == 'RANDOM_EMB':
-                    # control for the signature: random user embedding routed
-                    # through the SAME LSH router as Ours-signature
-                    umap = partition_random_embedding(
-                        train_items, n_users, n_items, args.n_shards,
-                        args.sig_dim, seed, router=args.router)
-                    pname = f'random_embedding_{args.router}'
-                elif arm == 'RANDOM_PERM':
-                    umap = pv_random_perm(n_users, args.n_shards, seed)
-                    pname = 'random_perm'
-                elif arm == 'RANDOM_BAL':
-                    # random, greedy-balanced by interaction load: the control
-                    # that removes the "one large shard ~= global model" confound
-                    umap = random_perm_balanced(train_items, n_users,
-                                                args.n_shards, seed)
-                    pname = 'random_balanced'
-                elif arm == 'RANDOM_MODULO':
-                    umap = pv_random_modulo(n_users, args.n_shards, seed)
-                    pname = 'random_modulo'
-                elif arm == 'SISA':
-                    umap = pv_random_modulo(n_users, args.n_shards, seed)
-                    pname = 'sisa_modulo'
-                elif arm == 'INP':
-                    # embedding-based upper reference (frozen k-means over WMF)
-                    umap = partition_embedding_based(train_items, n_users, n_items,
-                                                     args.n_shards, seed,
-                                                     kind='inp',
-                                                     data_root=data_root)
-                    pname = 'inp_frozen'
-                elif arm == 'UBP':
-                    umap = partition_embedding_based(train_items, n_users, n_items,
-                                                     args.n_shards, seed,
-                                                     kind='ubp',
-                                                     data_root=data_root)
-                    pname = 'ubp_frozen'
-                elif arm == 'RECERASER':
-                    # RecEraser: UBP partition over WMF embeddings + attention
-                    # aggregation. Structurally different from the other arms,
-                    # so it gets its own runner.
-                    from exp_receraser_arm import receraser_ubp_partition
-                    umap = receraser_ubp_partition(
-                        train_items, n_users, n_items, args.n_shards, seed,
-                        data_root=data_root, kind=args.receraser_partition)
-                    pname = f'receraser_{args.receraser_partition}_attention'
-                else:
-                    raise ValueError(f'unknown arm {arm}')
+                raise ValueError(f'unknown arm {arm}')
 
-                if arm == 'RECERASER':
-                    from exp_receraser_arm import run_receraser_arm
-                    (res, tt, ut, affected, _sm, ptime,
-                     per_shard_time, per_shard_inter) = run_receraser_arm(
-                        train_items, test_data, n_users, n_items, args.n_shards,
-                        args.emb_dim, umap, del_users, args.epochs, args.lr,
-                        args.batch_size, device, seed, args.retrain_epochs,
-                        data_root=data_root, agg_epochs=args.agg_epochs,
-                        init=args.receraser_init)
-                else:
-                    # SISA is evaluated with its own mean aggregation, which
-                    # is what makes it SISA. Every other arm keeps the hard
-                    # routing the spec fixes for the experiment.
-                    eval_mode = ('sisa_mean' if arm == 'SISA' else 'hard')
-                    (res, tt, ut, affected, _sm, ptime,
-                     per_shard_time, per_shard_inter) = run_sharded_arm(
-                        train_items, test_data, n_users, n_items, args.n_shards,
-                        args.emb_dim, umap, del_users, args.epochs, args.lr,
-                        args.batch_size, device, seed, args.retrain_epochs,
-                        reset_on_retrain=not args.keep_weights_on_retrain,
-                        eval_mode=eval_mode)
-
-                # Partition-quality metrics are measured on the ORIGINAL
-                # signature (built once per seed above), not on post-train
-                # embeddings: the latter carry no useful user similarity at a
-                # few epochs, so NR@q reads ~1.0 for every arm and proves nothing
-                # about the partition. The signature is the quantity the
-                # partition was actually designed to co-locate, so it is the
-                # honest measure of co-location quality (spec section 6).
-                isim = intra_similarity(sigs_for_metrics, umap,
-                                        args.n_shards, seed=seed)
-                nr10 = neighbour_retention(sigs_for_metrics, umap, q=10, seed=seed)
-                nr20 = neighbour_retention(sigs_for_metrics, umap, q=20, seed=seed)
-                nr50 = neighbour_retention(sigs_for_metrics, umap, q=50, seed=seed)
-                ucv, icv, mmr = load_balance(umap, train_items, args.n_shards)
-
-                # ---- instability rate (spec S2) ----
-                # Re-run the partition on the RETAINED data, then measure how
-                # many retained users end up in a different shard.
-                inst_lab, inst_pair = '', ''
-                if args.instability:
-                    retained_now = {u: it for u, it in train_items.items()
-                                    if u not in del_users}
-                    try:
-                        umap_after = _rebuild_partition(
-                            arm, retained_now, n_users, n_items, args,
-                            seed, data_root)
-                        retained_ids = [u for u in range(n_users) if u not in del_users]
-                        inst_lab, inst_pair = instability_rate(
-                            umap, umap_after, retained_ids, args.n_shards)
-                    except Exception as exc:      # a partition that needs
-                        inst_lab = inst_pair = f'n/a ({type(exc).__name__})'
-                        print(f"       [instability] not measurable: {exc}")
-
-                row.update({
-                    'partition': pname, 'train_time': tt, 'unlearn_time': ut,
-                    'parallel_time': ptime,
-                    'affected_shards': len(affected),
-                    'intra_similarity': isim, 'nr_10': nr10, 'nr_20': nr20, 'nr_50': nr50,
-                    'user_load_cv': ucv, 'interaction_load_cv': icv, 'max_mean_ratio': mmr,
-                    'instability_label': inst_lab, 'instability_pairwise': inst_pair,
-                    'shard_interactions_total': sum(per_shard_inter.values()),
-                    'shard_interactions_unlearn': sum(
-                        per_shard_inter[s] for s in affected if s in per_shard_inter),
-                    'sec_per_epoch_global': '',
-                    'sec_per_interaction_global': '',
-                })
-
-            for i, k in enumerate(KS):
-                row[f'recall_{k}'] = res['recall'][i]
-                row[f'ndcg_{k}'] = res['ndcg'][i]
-
-            RESULTS.append(row)
-            print(f"  [{arm}] R@10={row['recall_10']:.4f} NDCG@10={row['ndcg_10']:.4f} "
-                  f"| R@20={row['recall_20']:.4f} NDCG@20={row['ndcg_20']:.4f} "
-                  f"| R@50={row['recall_50']:.4f} NDCG@50={row['ndcg_50']:.4f}")
-            print(f"       cost: train={row['train_time']:.1f}s "
-                  f"unlearn={row['unlearn_time']:.1f}s "
-                  f"parallel={row.get('parallel_time', 0.0):.1f}s "
-                  f"shards={row['affected_shards']}")
-            # Unlearning cost in training samples processed: the interactions
-            # of every retrained shard times its epochs (plus the aggregator
-            # pass for RecEraser, the whole retained set for the retrain).
-            # Unlike the seconds above it does not depend on the hardware or
-            # on what else runs on the GPU.
-            if arm == 'GLOBAL':
-                work = int(row.get('shard_interactions_unlearn') or 0) * args.epochs
+            if arm == 'RECERASER':
+                from exp_receraser_arm import run_receraser_arm
+                (res, tt, ut, affected, _sm, ptime,
+                 per_shard_time, per_shard_inter) = run_receraser_arm(
+                    train_items, test_data, n_users, n_items, args.n_shards,
+                    args.emb_dim, umap, del_users, args.epochs, args.lr,
+                    args.batch_size, device, tseed, args.retrain_epochs,
+                    data_root=data_root, agg_epochs=args.agg_epochs,
+                    init=args.receraser_init, cache=cache)
             else:
-                work = sum(per_shard_inter.values()) * args.retrain_epochs
-                if arm == 'RECERASER':
-                    n_kept = sum(len(it) for u, it in train_items.items()
-                                 if u not in del_users)
-                    work += n_kept * args.agg_epochs
-            bg1 = gpu_probe.background_load()
-            row['unlearn_samples'] = work
-            row['bg_load_before'], row['bg_load_after'] = bg0, bg1
-            print(f"       work: unlearn_samples={work}")
-            shared = any(v is not None and v >= gpu_probe.THRESHOLD for v in (bg0, bg1))
-            print(f"       bg-load: before={gpu_probe.fmt(bg0)} after={gpu_probe.fmt(bg1)}"
-                  + ("  [SHARED GPU - other work was running, times may be inflated]"
-                     if shared else ""))
-            print(f"       partition quality: IntraSim={row['intra_similarity']} "
-                  f"NR@10={row['nr_10']} NR@20={row['nr_20']} NR@50={row['nr_50']}")
-            print(f"       load: user_cv={row['user_load_cv']} "
-                  f"inter_cv={row['interaction_load_cv']} max/mean={row['max_mean_ratio']}")
-            if row.get('instability_label') != '':
-                print(f"       instability: label-matched={row['instability_label']}% "
-                      f"pairwise={row['instability_pairwise']}%")
-            if per_shard_time:
-                print("       per-shard retrain (s): "
-                      + ", ".join(f"s{s}={per_shard_time[s]:.1f}s/"
-                                  f"{per_shard_inter.get(s, 0)}int"
-                                  for s in sorted(per_shard_time))
-                      + f"  | sum={sum(per_shard_time.values()):.1f}s "
-                        f"vs unlearn_time={row['unlearn_time']:.1f}s")
+                # SISA is evaluated with its own mean aggregation, which
+                # is what makes it SISA. Every other arm keeps the hard
+                # routing the spec fixes for the experiment.
+                eval_mode = ('sisa_mean' if arm == 'SISA' else 'hard')
+                (res, tt, ut, affected, _sm, ptime,
+                 per_shard_time, per_shard_inter) = run_sharded_arm(
+                    train_items, test_data, n_users, n_items, args.n_shards,
+                    args.emb_dim, umap, del_users, args.epochs, args.lr,
+                    args.batch_size, device, tseed, args.retrain_epochs,
+                    reset_on_retrain=not args.keep_weights_on_retrain,
+                    eval_mode=eval_mode, cache=cache)
 
-                # S5 check: the time per epoch should scale with the number
-                # of interactions a shard holds. If a small shard takes about
-                # as long per epoch as a large one (or as the global model),
-                # the training loop is iterating over more than that shard's
-                # data.
-                rate = {}
-                for s in per_shard_time:
-                    n_int = per_shard_inter.get(s, 0)
-                    per_epoch = per_shard_time[s] / max(args.retrain_epochs, 1)
-                    rate[s] = (per_epoch / n_int) if n_int else float('nan')
-                if len(rate) > 1:
-                    ok = [r for r in rate.values() if r == r]
-                    span = (max(ok) - min(ok)) / max(_mean(ok), 1e-12) \
-                        if ok else 0.0
-                    flag = "OK" if span < 1.5 else \
-                        "CHECK: per-epoch time does not scale with the " \
-                        f"shard size (spread {span:.2f}x)"
-                    print(f"       S5 rate check: sec/epoch per interaction "
-                          f"= " + ", ".join(f"s{s}={rate[s]:.2e}"
-                                            for s in sorted(rate))
-                          + f"  [{flag}]")
-                    if row.get('sec_per_epoch_global'):
-                        print(f"       global (GLOBAL arm) "
-                              f"sec/epoch/interaction="
-                              f"{row.get('sec_per_interaction_global', ''):.2e}")
+            # Partition-quality metrics are measured on the ORIGINAL
+            # signature (built once per seed above), not on post-train
+            # embeddings: the latter carry no useful user similarity at a
+            # few epochs, so NR@q reads ~1.0 for every arm and proves nothing
+            # about the partition. The signature is the quantity the
+            # partition was actually designed to co-locate, so it is the
+            # honest measure of co-location quality (spec section 6).
+            isim = intra_similarity(sigs_for_metrics, umap,
+                                    args.n_shards, seed=tseed)
+            nr10 = neighbour_retention(sigs_for_metrics, umap, q=10, seed=tseed)
+            nr20 = neighbour_retention(sigs_for_metrics, umap, q=20, seed=tseed)
+            nr50 = neighbour_retention(sigs_for_metrics, umap, q=50, seed=tseed)
+            ucv, icv, mmr = load_balance(umap, train_items, args.n_shards)
+
+            # ---- instability rate (spec S2) ----
+            # Re-run the partition on the RETAINED data, then measure how
+            # many retained users end up in a different shard.
+            inst_lab, inst_pair = '', ''
+            if args.instability:
+                retained_now = {u: it for u, it in train_items.items()
+                                if u not in del_users}
+                try:
+                    umap_after = _rebuild_partition(
+                        arm, retained_now, n_users, n_items, args,
+                        tseed, data_root)
+                    retained_ids = [u for u in range(n_users) if u not in del_users]
+                    inst_lab, inst_pair = instability_rate(
+                        umap, umap_after, retained_ids, args.n_shards)
+                except Exception as exc:      # a partition that needs
+                    inst_lab = inst_pair = f'n/a ({type(exc).__name__})'
+                    print(f"       [instability] not measurable: {exc}")
+
+            row.update({
+                'partition': pname, 'train_time': tt, 'unlearn_time': ut,
+                'parallel_time': ptime,
+                'affected_shards': len(affected),
+                'intra_similarity': isim, 'nr_10': nr10, 'nr_20': nr20, 'nr_50': nr50,
+                'user_load_cv': ucv, 'interaction_load_cv': icv, 'max_mean_ratio': mmr,
+                'instability_label': inst_lab, 'instability_pairwise': inst_pair,
+                'shard_interactions_total': sum(per_shard_inter.values()),
+                'shard_interactions_unlearn': sum(
+                    per_shard_inter[s] for s in affected if s in per_shard_inter),
+                'sec_per_epoch_global': '',
+                'sec_per_interaction_global': '',
+            })
+
+        for i, k in enumerate(KS):
+            row[f'recall_{k}'] = res['recall'][i]
+            row[f'ndcg_{k}'] = res['ndcg'][i]
+
+        RESULTS.append(row)
+        print(f"  [{arm}] R@10={row['recall_10']:.4f} NDCG@10={row['ndcg_10']:.4f} "
+              f"| R@20={row['recall_20']:.4f} NDCG@20={row['ndcg_20']:.4f} "
+              f"| R@50={row['recall_50']:.4f} NDCG@50={row['ndcg_50']:.4f}")
+        print(f"       cost: train={row['train_time']:.1f}s "
+              f"unlearn={row['unlearn_time']:.1f}s "
+              f"parallel={row.get('parallel_time', 0.0):.1f}s "
+              f"shards={row['affected_shards']}")
+        # Unlearning cost in training samples processed: the interactions
+        # of every retrained shard times its epochs (plus the aggregator
+        # pass for RecEraser, the whole retained set for the retrain).
+        # Unlike the seconds above it does not depend on the hardware or
+        # on what else runs on the GPU.
+        if arm == 'GLOBAL':
+            work = int(row.get('shard_interactions_unlearn') or 0) * args.epochs
+        else:
+            work = sum(per_shard_inter.values()) * args.retrain_epochs
+            if arm == 'RECERASER':
+                n_kept = sum(len(it) for u, it in train_items.items()
+                             if u not in del_users)
+                work += n_kept * args.agg_epochs
+        bg1 = gpu_probe.background_load()
+        row['unlearn_samples'] = work
+        row['bg_load_before'], row['bg_load_after'] = bg0, bg1
+        print(f"       work: unlearn_samples={work}")
+        shared = any(v is not None and v >= gpu_probe.THRESHOLD for v in (bg0, bg1))
+        print(f"       bg-load: before={gpu_probe.fmt(bg0)} after={gpu_probe.fmt(bg1)}"
+              + ("  [SHARED GPU - other work was running, times may be inflated]"
+                 if shared else ""))
+        print(f"       partition quality: IntraSim={row['intra_similarity']} "
+              f"NR@10={row['nr_10']} NR@20={row['nr_20']} NR@50={row['nr_50']}")
+        print(f"       load: user_cv={row['user_load_cv']} "
+              f"inter_cv={row['interaction_load_cv']} max/mean={row['max_mean_ratio']}")
+        if row.get('instability_label') != '':
+            print(f"       instability: label-matched={row['instability_label']}% "
+                  f"pairwise={row['instability_pairwise']}%")
+        if per_shard_time:
+            print("       per-shard retrain (s): "
+                  + ", ".join(f"s{s}={per_shard_time[s]:.1f}s/"
+                              f"{per_shard_inter.get(s, 0)}int"
+                              for s in sorted(per_shard_time))
+                  + f"  | sum={sum(per_shard_time.values()):.1f}s "
+                    f"vs unlearn_time={row['unlearn_time']:.1f}s")
+
+            # S5 check: the time per epoch should scale with the number
+            # of interactions a shard holds. If a small shard takes about
+            # as long per epoch as a large one (or as the global model),
+            # the training loop is iterating over more than that shard's
+            # data.
+            rate = {}
+            for s in per_shard_time:
+                n_int = per_shard_inter.get(s, 0)
+                per_epoch = per_shard_time[s] / max(args.retrain_epochs, 1)
+                rate[s] = (per_epoch / n_int) if n_int else float('nan')
+            if len(rate) > 1:
+                ok = [r for r in rate.values() if r == r]
+                span = (max(ok) - min(ok)) / max(_mean(ok), 1e-12) \
+                    if ok else 0.0
+                flag = "OK" if span < 1.5 else \
+                    "CHECK: per-epoch time does not scale with the " \
+                    f"shard size (spread {span:.2f}x)"
+                print(f"       S5 rate check: sec/epoch per interaction "
+                      f"= " + ", ".join(f"s{s}={rate[s]:.2e}"
+                                        for s in sorted(rate))
+                      + f"  [{flag}]")
+                if row.get('sec_per_epoch_global'):
+                    print(f"       global (GLOBAL arm) "
+                          f"sec/epoch/interaction="
+                          f"{row.get('sec_per_interaction_global', ''):.2e}")
 
     print_console_summary(RESULTS, seeds, arms, args)
 

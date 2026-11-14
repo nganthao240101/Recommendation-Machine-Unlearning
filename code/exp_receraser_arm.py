@@ -418,7 +418,7 @@ class RecEraserArm:
 def run_receraser_arm(train_items, test_data, n_users, n_items, n_shards,
                       emb_dim, user_to_shard, del_users, epochs, lr, batch_size,
                       device, seed, retrain_epochs, data_root=None,
-                      agg_epochs=50, init='random'):
+                      agg_epochs=50, init='random', cache=None):
     """Full RecEraser arm: train K shard slices + aggregator, delete users,
     retrain the affected shards + the aggregator, evaluate.
 
@@ -456,13 +456,25 @@ def run_receraser_arm(train_items, test_data, n_users, n_items, n_shards,
             shard_data[user_to_shard[u]][u] = list(items)
 
     # ---- train all shards + the aggregator ----
-    t0 = time.time()
-    for sid in range(n_shards):
-        arm.train_shard(sid, shard_data[sid], n_items, batch_size=batch_size,
-                         lr=lr, n_epochs=epochs)
-    arm.train_aggregator(train_items, n_users, n_items, batch_size=batch_size,
-                         n_epochs=agg_epochs)
-    train_time = time.time() - t0
+    if cache and 'state' in cache:
+        # one model for every deletion: start again from the trained model
+        arm.model.load_state_dict(cache['state'])
+        train_time = cache['train_time']
+        set_all_seeds(cache['rng_seed'])   # own random stream per deletion
+        print("    [RecEraser] model: shards + aggregator reused (trained once), "
+              f"train time {train_time:.1f}s from that training")
+    else:
+        t0 = time.time()
+        for sid in range(n_shards):
+            arm.train_shard(sid, shard_data[sid], n_items, batch_size=batch_size,
+                             lr=lr, n_epochs=epochs)
+        arm.train_aggregator(train_items, n_users, n_items, batch_size=batch_size,
+                             n_epochs=agg_epochs)
+        train_time = time.time() - t0
+        if cache is not None:
+            cache['state'] = {k: v.detach().clone()
+                              for k, v in arm.model.state_dict().items()}
+            cache['train_time'] = train_time
 
     # ---- unlearn ----
     affected = sorted({int(user_to_shard[u]) for u in del_users if u < len(user_to_shard)})

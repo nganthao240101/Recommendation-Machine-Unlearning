@@ -79,6 +79,11 @@ BACKBONE="${BACKBONE:-bprmf}"
 # rồi unlearn SINGLE_N=5 user ngẫu nhiên, mỗi lần từ model gốc; RecEraser phải train lại aggregator ở MỖI yêu cầu nên
 # đây là phần chậm nhất. Retrain đo trên min(3, SINGLE_N) yêu cầu đầu.
 SINGLE_N="${SINGLE_N:-5}"
+# Các khối unlearn 1% (main, modes, shards, dims, recpart): train model gốc
+# MỘT lần (seed TRAIN_SEED), rồi unlearn 5 lần - mỗi seed trong SEEDS chỉ chọn
+# một tập 1% user bị xóa khác, lần nào cũng bắt đầu lại từ model gốc đó.
+# TRAIN_SEED=-1 để quay lại cách cũ (mỗi seed train một model riêng).
+TRAIN_SEED="${TRAIN_SEED:-0}"
 # Như bài RecEraser: train MỘT model gốc, rồi đo từng yêu cầu xóa ngẫu nhiên và
 # lấy trung bình; không lặp lại theo seed (thời gian xóa phụ thuộc kích thước
 # shard, không phụ thuộc seed). SINGLE_SEEDS="0,1,2" để lặp lại nếu cần.
@@ -157,7 +162,8 @@ pq () {   # pq <log> <ds> [k=..] [dim=..] [mode=..] [arms=..] [-- extra args]
   run "${name}$(bsuffix)" python code/exp_partition_quality.py --dataset "$ds" \
     --unlearn_mode "$m" --n_shards "$k" --emb_dim "$d" --sig_dim $SIG \
     --epochs 50 --retrain_epochs 50 --lr 0.05 --batch_size 512 \
-    --unlearn_ratio 0.01 --seeds $SEEDS --arms "$a" --backbone "$BACKBONE" "$@"
+    --unlearn_ratio 0.01 --seeds $SEEDS --train_seed $TRAIN_SEED --arms "$a" \
+    --backbone "$BACKBONE" "$@"
 }
 
 # trạng thái GPU: tên, bộ nhớ đã dùng, % tải, số process đang dùng GPU
