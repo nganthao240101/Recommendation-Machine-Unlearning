@@ -88,7 +88,14 @@ TRAIN_SEED="${TRAIN_SEED:-0}"
 # lấy trung bình; không lặp lại theo seed (thời gian xóa phụ thuộc kích thước
 # shard, không phụ thuộc seed). SINGLE_SEEDS="0,1,2" để lặp lại nếu cần.
 SINGLE_SEEDS="${SINGLE_SEEDS:-0}"
-bsuffix () { [ "$BACKBONE" = wmf ] && echo _wmf; }
+# Số epoch train (và train lại khi unlearn) của mọi arm. Khác 50 thì log có
+# đuôi _e<số epoch> (main_yelp_e100, ...), không đè log 50 epoch.
+EPOCHS="${EPOCHS:-50}"
+bsuffix () {
+  [ "$BACKBONE" = wmf ] && printf _wmf
+  [ "$EPOCHS" != 50 ] && printf "_e%s" "$EPOCHS"
+  echo
+}
 
 short () { case "$1" in ml-1m) echo ml1m ;; yelp2018) echo yelp ;; *) echo "$1" ;; esac; }
 
@@ -161,7 +168,7 @@ pq () {   # pq <log> <ds> [k=..] [dim=..] [mode=..] [arms=..] [-- extra args]
   [ "${1:-}" = "--" ] && shift
   run "${name}$(bsuffix)" python code/exp_partition_quality.py --dataset "$ds" \
     --unlearn_mode "$m" --n_shards "$k" --emb_dim "$d" --sig_dim $SIG \
-    --epochs 50 --retrain_epochs 50 --lr 0.05 --batch_size 512 \
+    --epochs $EPOCHS --retrain_epochs $EPOCHS --lr 0.05 --batch_size 512 \
     --unlearn_ratio 0.01 --seeds $SEEDS --train_seed $TRAIN_SEED --arms "$a" \
     --backbone "$BACKBONE" "$@"
 }
@@ -281,7 +288,7 @@ block_single () {
   fi
   for ds in $DATASETS; do
     run "single_$(short $ds)$(bsuffix)" python code/exp_single_request.py --dataset "$ds" \
-      --n_shards $K --emb_dim $DIM --sig_dim $SIG --epochs 50 --retrain_epochs 50 \
+      --n_shards $K --emb_dim $DIM --sig_dim $SIG --epochs $EPOCHS --retrain_epochs $EPOCHS \
       --lr 0.05 --batch_size 512 --n_users $SINGLE_N --seeds $SINGLE_SEEDS --arms "$ARMS" \
       --backbone "$BACKBONE"
   done
@@ -348,6 +355,34 @@ block_full () {
   banner "FULL XONG - xem: bash code/run_blocks.sh results"
 }
 
+# ------------------------------------------------------------------ epochs
+# Thử số epoch cao hơn trên yelp2018 (log main_yelp_e<E>): main (1% random),
+# 1 model, xóa 1 lần (seed 0), các arm EP_ARMS. So R@k của Retrain và các
+# arm giữa 50 (main_yelp) / 100 / 200 epoch để chọn số epoch chung cho MỌI arm.
+#   EPOCH_LIST="100 200"  EP_DATASET=yelp2018  EP_SEEDS=0
+block_epochs () {
+  export RECUNLEARN_ENGINE="${RECUNLEARN_ENGINE:-gpu}"
+  local ds="${EP_DATASET:-yelp2018}" e
+  local arms="${EP_ARMS:-GLOBAL,PROPOSED,SISA,RANDOM_PERM}"
+  banner "EPOCHS: $ds, epochs ${EPOCH_LIST:-100 200}, arms $arms"
+  for e in ${EPOCH_LIST:-100 200}; do
+    EPOCHS=$e pq "main_$(short $ds)" "$ds" arms=$arms -- --seeds "${EP_SEEDS:-0}"
+  done
+  banner "EPOCHS XONG - xem: bash code/run_blocks.sh results"
+}
+
+# Chia shard nhỏ hơn / lớn hơn (K=4, K=16) trên yelp2018 với số epoch đã chọn:
+#   EPOCHS=200 bash code/run_blocks.sh start kyelp
+block_kyelp () {
+  export RECUNLEARN_ENGINE="${RECUNLEARN_ENGINE:-gpu}"
+  ARMS="RECERASER,PROPOSED,PROPOSED_BAL,SISA,RANDOM_PERM,RANDOM_EMB,GLOBAL"
+  local k
+  banner "K trên yelp2018: ${KLIST:-4 16}, epochs=$EPOCHS"
+  [ "$EPOCHS" != 50 ] && pq "main_yelp" yelp2018    # K=8 với cùng số epoch
+  for k in ${KLIST:-4 16}; do pq "k${k}_yelp" yelp2018 k=$k; done
+  banner "KYELP XONG - xem: bash code/run_blocks.sh results"
+}
+
 # ------------------------------------------------------------------ compare
 # So sánh ml-1m với yelp2018 trên cùng các thí nghiệm: single ml-1m trước,
 # rồi yelp2018: main (1% random), most, fewest, single. Không chạy shards/dims/
@@ -378,7 +413,7 @@ block_status () {
   python code/clean_old_results.py --status
   echo ""
   echo "  Job dang chay:"
-  ps -ww -eo pid,etime,args | grep -E "exp_partition_quality|exp_single_request|run_blocks\.sh (main|modes|single|shards|dims|recpart|all|full|fullwmf|compare)" \
+  ps -ww -eo pid,etime,args | grep -E "exp_partition_quality|exp_single_request|run_blocks\.sh (main|modes|single|shards|dims|recpart|all|full|fullwmf|compare|epochs|kyelp)" \
     | grep -v grep | sed 's/^/    /' || echo "    (khong co job nao)"
 }
 
@@ -479,8 +514,8 @@ block_smoke () {
 # tiếp. Lúc đó all bỏ qua log đã xong, chạy tiếp log dở từ run còn thiếu.
 block_start () {
   local blk="${1:-all}"
-  case "$blk" in all|full|fullwmf|compare|main|modes|single|shards|dims|recpart) ;;
-    *) echo "!! start chỉ nhận: all | full | fullwmf | compare | main | modes | single | shards | dims | recpart"; exit 1 ;;
+  case "$blk" in all|full|fullwmf|compare|epochs|kyelp|main|modes|single|shards|dims|recpart) ;;
+    *) echo "!! start chỉ nhận: all | full | fullwmf | compare | epochs | kyelp | main | modes | single | shards | dims | recpart"; exit 1 ;;
   esac
   if [ -f "$QUEUEFILE" ] && kill -0 "$(cat "$QUEUEFILE")" 2>/dev/null; then
     echo "!! Đã có một chuỗi đang xếp hàng (PID $(cat "$QUEUEFILE")). Không cần start thêm."; exit 1
@@ -619,7 +654,7 @@ block_results () {
 }
 
 case "${1:-}" in
-  main|modes|single|shards|dims|recpart|all|full|fullwmf|compare) take_lock ;;
+  main|modes|single|shards|dims|recpart|all|full|fullwmf|compare|epochs|kyelp) take_lock ;;
 esac
 
 case "${1:-}" in
@@ -635,6 +670,8 @@ case "${1:-}" in
   full)    block_full ;;
   fullwmf) block_fullwmf ;;
   compare) block_compare ;;
+  epochs)  block_epochs ;;
+  kyelp)   block_kyelp ;;
   stop)    block_stop ;;
   reset)   block_reset ;;
   results) block_results ;;
@@ -645,5 +682,5 @@ case "${1:-}" in
   csv)     block_csv ;;
   check)   block_check ;;
   clean)   block_clean ;;
-  *) echo "dùng: bash code/run_blocks.sh <reset|start [full|compare]|results|status|gpu|smoke|bench|stop|torch|full|main|modes|single|shards|dims|recpart|all|csv|check|clean>"; exit 1 ;;
+  *) echo "dùng: bash code/run_blocks.sh <reset|start [full|compare|epochs|kyelp]|results|status|gpu|smoke|bench|stop|torch|full|main|modes|single|shards|dims|recpart|all|csv|check|clean>"; exit 1 ;;
 esac

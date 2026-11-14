@@ -61,6 +61,15 @@ EXPERIMENT_LOGS = (
 )
 # the same experiments with the WMF backbone (run_blocks.sh fullwmf)
 EXPERIMENT_LOGS = EXPERIMENT_LOGS + [n + '_wmf' for n in EXPERIMENT_LOGS]
+# the same experiments with another number of epochs (EPOCHS=100 ... in
+# run_blocks.sh): <name>_e<epochs>, listed when such a log exists
+try:
+    EXPERIMENT_LOGS = EXPERIMENT_LOGS + sorted(
+        f[:-4] for f in os.listdir(LOGS)
+        if f.endswith('.out') and re.fullmatch(r'.+_e\d+', f[:-4])
+        and re.sub(r'_e\d+$', '', f[:-4]) in EXPERIMENT_LOGS)
+except OSError:
+    pass
 # the RECERASER arm prints this since it starts from a random model, as the
 # original does; before that it was seeded with a scrambled WMF vector
 REC_MARK = '[RecEraser] init='

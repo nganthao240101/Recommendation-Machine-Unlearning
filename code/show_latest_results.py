@@ -42,6 +42,10 @@ SINGLE_DONE = re.compile(r'^\s*\[([A-Z_]+)\]\s+single-request unlearn time', re.
 
 def describe(name):
     """log name -> (dataset, setting, number of arms)"""
+    m = re.search(r'_e(\d+)$', name)
+    epochs = int(m.group(1)) if m else 50
+    if m:
+        name = name[:m.start()]
     wmf = name.endswith('_wmf')
     if wmf:
         name = name[:-4]
@@ -63,6 +67,7 @@ def describe(name):
         base['partition'] = {'recinp': 'InP', 'recrand': 'random'}[stem]
         n_arms = 1
     base['model'] = 'WMF' if wmf else 'BPRMF'
+    base['epochs'] = epochs
     setting = '  '.join(f'{k}={v}' for k, v in base.items())
     return ds, setting, n_arms
 
@@ -188,6 +193,10 @@ def progress(name, text, n_arms):
     """-> (done runs, total runs, current arm/seed)"""
     m = re.search(r'^\s*seeds: ([\d,]+)\s*$', text, re.M)   # the single block prints it
     total = n_arms * (len(m.group(1).split(',')) if m else N_SEEDS)
+    a = re.search(r'^\s*arms: (\S+)\s*$', text, re.M)        # printed since the epoch runs
+    s = re.search(r'^\s*seeds: ([\d,]+)\s*$', text, re.M)
+    if a and s:
+        total = len(a.group(1).split(',')) * len(s.group(1).split(','))
     if name.startswith('single_'):
         done = len(SINGLE_DONE.findall(text))
     else:

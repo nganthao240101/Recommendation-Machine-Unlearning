@@ -938,6 +938,7 @@ def main():
     emb = os.path.join(data_root, 'wmf_embeddings.npz')
     print(f"  WMF embeddings: {emb} ({'found' if os.path.exists(emb) else 'MISSING'})")
     print(f"  engine: {fast_train.engine_name()}")
+    print(f"  epochs: {args.epochs} (retrain {args.retrain_epochs})")
     print(f"  backbone: {wmf_backbone.describe()}")
 
     seeds = [int(s) for s in args.seeds.split(',') if s.strip()]
@@ -945,6 +946,8 @@ def main():
     if skip:
         print(f"  resuming: {len(skip)} run(s) already done earlier, not run again")
     arms = [a.strip() for a in args.arms.split(',') if a.strip()]
+    print(f"  arms: {','.join(arms)}")
+    print(f"  seeds: {','.join(map(str, seeds))}")
 
     # Results are printed to the console as they are produced; no CSV is written.
     RESULTS = []
