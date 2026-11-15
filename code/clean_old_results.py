@@ -66,8 +66,8 @@ EXPERIMENT_LOGS = EXPERIMENT_LOGS + [n + '_wmf' for n in EXPERIMENT_LOGS]
 try:
     EXPERIMENT_LOGS = EXPERIMENT_LOGS + sorted(
         f[:-4] for f in os.listdir(LOGS)
-        if f.endswith('.out') and re.fullmatch(r'.+_e\d+', f[:-4])
-        and re.sub(r'_e\d+$', '', f[:-4]) in EXPERIMENT_LOGS)
+        if f.endswith('.out') and re.fullmatch(r'.+_(e\d+|ps)', f[:-4])
+        and re.sub(r'_(e\d+|ps)$', '', f[:-4]) in EXPERIMENT_LOGS)
 except OSError:
     pass
 # the RECERASER arm prints this since it starts from a random model, as the
@@ -257,6 +257,42 @@ def prepare_resume(path):
     return ','.join(f'{a}:{s}' for a, s, _ in kept)
 
 
+def seed_from(src, dst, seeds=(0,)):
+    """Start a one-model-per-seed log (dst) from the runs of a one-model log
+    (src) that are the same run under both protocols.
+
+    In a one-model log every arm is trained once with seed 0 and seed s only
+    picks the deleted users; its seed-0 run is therefore exactly the seed-0
+    run of the per-seed protocol (same training seed, same deletion set), and
+    is copied. Its other seeds reuse the seed-0 model, so they are not.
+    The header lines that describe the protocol are left out; the run that
+    continues dst prints its own.
+    """
+    text = open(src, encoding='utf-8', errors='replace').read()
+    cut = text.find('CONSOLE SUMMARY')
+    if cut >= 0:
+        text = text[:cut]
+    head, blocks, cur = [], [], None
+    for ln in text.splitlines(keepends=True):
+        m = ARM_SEED.search(ln)
+        if m:
+            cur = [m.group(1), int(m.group(2)), [ln]]
+            blocks.append(cur)
+        elif cur is None:
+            if not re.match(r'\s*(one model:|arms:|seeds:)', ln):
+                head.append(ln)
+        else:
+            cur[2].append(ln)
+    kept = [b for b in blocks if b[1] in seeds and RUN_LINE.search(''.join(b[2]))]
+    with open(dst, 'w', encoding='utf-8') as f:
+        f.write(''.join(head))
+        for _, _, blk in kept:
+            f.write(''.join(blk))
+        f.write(chr(10) + f'[seeded] {len(kept)} seed-{",".join(map(str, seeds))} run(s) '
+                f'copied from {os.path.basename(src)}; one model per seed from here on' + chr(10))
+    return len(kept)
+
+
 def last_error(text):
     """The exception line of the last traceback, else the last line."""
     lines = [ln.strip() for ln in text.splitlines() if ln.strip()]
@@ -319,6 +355,9 @@ def main():
                          'finished log can be skipped)')
     ap.add_argument('--status', action='store_true',
                     help='print the progress of the 12 experiment logs and exit')
+    ap.add_argument('--seed-from', dest='seed_from', nargs=2, metavar=('SRC', 'DST'),
+                    help='start the per-seed log DST from the seed-0 runs of the '
+                         'one-model log SRC')
     ap.add_argument('--prepare-resume', dest='prepare_resume', metavar='LOG',
                     default=None,
                     help='cut an interrupted LOG back to its last finished run '
@@ -326,6 +365,9 @@ def main():
                          'cannot be continued)')
     args = ap.parse_args()
 
+    if args.seed_from:
+        print(seed_from(*args.seed_from))
+        return
     if args.prepare_resume:
         print(prepare_resume(args.prepare_resume))
         return

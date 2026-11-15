@@ -409,6 +409,37 @@ block_kyelp () {
   banner "KYELP XONG - so sánh: bash code/run_blocks.sh kcompare"
 }
 
+# ------------------------------------------------------------------ yseeds
+# Chất lượng trên yelp2018 với MỖI SEED MỘT MODEL (log main_yelp_ps), để kiểm
+# định SAFER vs Random (std gồm cả độ dao động khi train). Seed 0 lấy từ
+# main_yelp (cùng một run ở hai cách chạy), chỉ chạy seed 1-4. SAFER A và
+# Random trước (YS_FIRST), rồi các arm còn lại (YS_ARMS) nối vào cùng log.
+# main_yelp (1 model) giữ nguyên cho thời gian / work.
+#   so sánh ghép cặp: bash code/run_blocks.sh paired logs/main_yelp_ps.out
+block_yseeds () {
+  export RECUNLEARN_ENGINE="${RECUNLEARN_ENGINE:-gpu}"
+  local f="logs/main_yelp_ps.out"
+  if [ ! -f "$f" ] && [ -f logs/main_yelp.out ]; then
+    echo "[seeded] $(python code/clean_old_results.py --seed-from logs/main_yelp.out "$f") run seed 0 lấy từ main_yelp"
+  fi
+  banner "YSEEDS: yelp2018, mỗi seed một model, ${YS_FIRST:-PROPOSED,RANDOM_PERM} trước"
+  TRAIN_SEED=-1 pq "main_yelp_ps" yelp2018 arms="${YS_FIRST:-PROPOSED,RANDOM_PERM}"
+  block_paired "$f"
+  TRAIN_SEED=-1 pq "main_yelp_ps" yelp2018 \
+    arms="${YS_ARMS:-PROPOSED,RANDOM_PERM,PROPOSED_BAL,SISA,RANDOM_EMB,RECERASER,GLOBAL}"
+  block_paired "$f"
+  banner "YSEEDS XONG - xem: bash code/run_blocks.sh paired $f"
+}
+
+# So sánh ghép cặp theo seed (SAFER A - Random, mọi metric, p-value t-test)
+block_paired () {
+  local f="${1:-logs/main_yelp_ps.out}"
+  [ -f "$f" ] || { echo "không có $f"; return 0; }
+  python code/summarize_partition_logs.py "$f" 2>/dev/null | sed -n '/^PAIRED:/,/^$/p'
+  python code/summarize_partition_logs.py "$f" --proposed PROPOSED_BAL 2>/dev/null \
+    | sed -n '/^PAIRED:/,/^  affected/p'
+}
+
 # ------------------------------------------------------------------ compare
 # So sánh yelp2018 với ml-1m trên cùng các thí nghiệm: yelp2018 trước, rồi
 # ml-1m (CMP_DATASETS="ml-1m yelp2018" để đảo): main (1% random), most, fewest, single. Không chạy shards/dims/
@@ -442,7 +473,7 @@ block_status () {
   python code/clean_old_results.py --status
   echo ""
   echo "  Job dang chay:"
-  ps -ww -eo pid,etime,args | grep -E "exp_partition_quality|exp_single_request|run_blocks\.sh (main|modes|single|shards|dims|recpart|all|full|fullwmf|compare|epochs|kyelp)" \
+  ps -ww -eo pid,etime,args | grep -E "exp_partition_quality|exp_single_request|run_blocks\.sh (main|modes|single|shards|dims|recpart|all|full|fullwmf|compare|epochs|kyelp|yseeds)" \
     | grep -v grep | sed 's/^/    /' || echo "    (khong co job nao)"
 }
 
@@ -543,8 +574,8 @@ block_smoke () {
 # tiếp. Lúc đó all bỏ qua log đã xong, chạy tiếp log dở từ run còn thiếu.
 block_start () {
   local blk="${1:-all}"
-  case "$blk" in all|full|fullwmf|compare|epochs|kyelp|main|modes|single|shards|dims|recpart) ;;
-    *) echo "!! start chỉ nhận: all | full | fullwmf | compare | epochs | kyelp | main | modes | single | shards | dims | recpart"; exit 1 ;;
+  case "$blk" in all|full|fullwmf|compare|epochs|kyelp|yseeds|main|modes|single|shards|dims|recpart) ;;
+    *) echo "!! start chỉ nhận: all | full | fullwmf | compare | epochs | kyelp | yseeds | main | modes | single | shards | dims | recpart"; exit 1 ;;
   esac
   if [ -f "$QUEUEFILE" ] && kill -0 "$(cat "$QUEUEFILE")" 2>/dev/null; then
     echo "!! Đã có một chuỗi đang xếp hàng (PID $(cat "$QUEUEFILE")). Không cần start thêm."; exit 1
@@ -683,7 +714,7 @@ block_results () {
 }
 
 case "${1:-}" in
-  main|modes|single|shards|dims|recpart|all|full|fullwmf|compare|epochs|kyelp) take_lock ;;
+  main|modes|single|shards|dims|recpart|all|full|fullwmf|compare|epochs|kyelp|yseeds) take_lock ;;
 esac
 
 case "${1:-}" in
@@ -701,6 +732,8 @@ case "${1:-}" in
   compare) block_compare ;;
   epochs)  block_epochs ;;
   kyelp)   block_kyelp ;;
+  yseeds)  block_yseeds ;;
+  paired)  block_paired "${2:-}" ;;
   epcompare) python code/compare_epochs.py --dataset "$(short "${EP_DATASET:-yelp2018}")" ;;
   kcompare) python code/compare_epochs.py --dataset "$(short "${EP_DATASET:-yelp2018}")" --by k ;;
   stop)    block_stop ;;
@@ -713,5 +746,5 @@ case "${1:-}" in
   csv)     block_csv ;;
   check)   block_check ;;
   clean)   block_clean ;;
-  *) echo "dùng: bash code/run_blocks.sh <reset|start [full|compare|epochs|kyelp]|epcompare|kcompare|results|status|gpu|smoke|bench|stop|torch|full|main|modes|single|shards|dims|recpart|all|csv|check|clean>"; exit 1 ;;
+  *) echo "dùng: bash code/run_blocks.sh <reset|start [full|compare|epochs|kyelp]|epcompare|kcompare|paired|results|status|gpu|smoke|bench|stop|torch|full|main|modes|single|shards|dims|recpart|all|csv|check|clean>"; exit 1 ;;
 esac

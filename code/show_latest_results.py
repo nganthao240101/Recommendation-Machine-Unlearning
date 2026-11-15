@@ -42,6 +42,9 @@ SINGLE_DONE = re.compile(r'^\s*\[([A-Z_]+)\]\s+single-request unlearn time', re.
 
 def describe(name):
     """log name -> (dataset, setting, number of arms)"""
+    ps = name.endswith('_ps')                 # one model per seed (main_yelp_ps)
+    if ps:
+        name = name[:-3]
     m = re.search(r'_e(\d+)$', name)
     epochs = int(m.group(1)) if m else 50
     if m:
@@ -68,6 +71,8 @@ def describe(name):
         n_arms = 1
     base['model'] = 'WMF' if wmf else 'BPRMF'
     base['epochs'] = epochs
+    if ps:
+        base['models'] = 'one per seed'
     setting = '  '.join(f'{k}={v}' for k, v in base.items())
     return ds, setting, n_arms
 
