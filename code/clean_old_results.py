@@ -237,6 +237,8 @@ def prepare_resume(path):
             return False                      # the earlier greedy cell map
         if arm in retime and shared_gpu(body):
             return False                      # timed on the shared GPU: time it again
+        if (arm, seed) in rerun:
+            return False                      # asked for by RERUN_RUNS
         if arm == 'RECERASER':
             if REC_MARK not in body or ATTN_MARK not in body:
                 return False                  # broken attention / old init
@@ -245,6 +247,7 @@ def prepare_resume(path):
         return True
 
     retime = retime_arms()
+    rerun = rerun_runs()
     kept = [b for b in blocks if valid(*b)]
     dropped = [f'{a}:{s}' for a, s, blk in blocks if not valid(a, s, blk)]
     if not kept:
@@ -277,6 +280,26 @@ def shared_gpu(body, threshold=None):
 def retime_arms():
     """Arms whose shared-GPU runs are dropped to be timed again (env RETIME_ARMS)."""
     return {a for a in os.environ.get('RETIME_ARMS', '').split(',') if a}
+
+
+def rerun_runs():
+    """(arm, seed) runs to run again whatever they hold (env RERUN_RUNS,
+    'PROPOSED:0,PROPOSED:1')."""
+    out = set()
+    for x in os.environ.get('RERUN_RUNS', '').split(','):
+        if ':' in x:
+            a, s = x.split(':', 1)
+            out.add((a.strip(), int(s)))
+    return out
+
+
+def has_rerun(path):
+    """Does LOG hold a finished run listed in RERUN_RUNS?"""
+    want = rerun_runs()
+    if not want:
+        return False
+    text = open(path, encoding='utf-8', errors='replace').read()
+    return any((m.group(1), int(m.group(2))) in want for m in ARM_SEED.finditer(text))
 
 
 def has_shared(path):
@@ -413,7 +436,7 @@ def main():
         print(seed_from(*args.seed_from))
         return
     if args.has_shared:
-        sys.exit(0 if has_shared(args.has_shared) else 1)
+        sys.exit(0 if has_shared(args.has_shared) or has_rerun(args.has_shared) else 1)
     if args.prepare_resume:
         print(prepare_resume(args.prepare_resume))
         return

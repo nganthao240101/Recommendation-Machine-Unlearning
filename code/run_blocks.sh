@@ -121,7 +121,9 @@ run () {
     for a in ${want//,/ }; do grep -q -e "--- ARM $a (seed" -- "$f" || missing="$missing $a"; done
     # RETIME_ARMS: runs of these arms timed on the shared GPU are run again
     local retime=""
-    [ -n "${RETIME_ARMS:-}" ] && python code/clean_old_results.py --has-shared "$f" && retime=1
+    # RERUN_RUNS=ARM:seed,...: these runs are run again (e.g. timing outliers)
+    { [ -n "${RETIME_ARMS:-}" ] || [ -n "${RERUN_RUNS:-}" ]; } \
+      && python code/clean_old_results.py --has-shared "$f" && retime=1
     if [ -z "$missing" ] && [ -z "$retime" ] && grep -q "CONSOLE SUMMARY" "$f" 2>/dev/null && is_new "$f"; then
       echo "[skip] $name  (đã xong bằng code hiện tại)"
       return 0
@@ -423,7 +425,8 @@ block_kyelp () {
 #     (bg-load >= GPU_IDLE_PCT, mặc định 10%) được chạy lại, mỗi run chờ GPU
 #     rảnh tối đa WAIT_IDLE_MIN phút (mặc định 15) rồi mới bắt đầu.
 #   Bước 2: SAFER B (Gray-cut), SISA, RandomEmb (YS_ARMS) ở cả 3 mode.
-#   YS_STEPS="1 retime 2" (mặc định) - ví dụ YS_STEPS="retime" chỉ đo lại.
+#   YS_STEPS="1 2" (mặc định); "1 retime 2" để thêm bước đo lại theo cờ bg-load.
+#   Chạy lại đúng vài run (vd. thời gian lệch): RERUN_RUNS=PROPOSED:0,PROPOSED:1
 # RecEraser và Retrain KHÔNG chạy mặc định; khi cần:
 #   YS_ARMS=PROPOSED,RANDOM_PERM,PROPOSED_BAL,SISA,RANDOM_EMB,RECERASER,GLOBAL ... start yseeds
 # Log 1 model (main_yelp, mode_*_yelp) giữ nguyên cho thời gian / work.
@@ -440,7 +443,7 @@ block_yseeds () {
       echo "[seeded] ${n}_ps: $(python code/clean_old_results.py --seed-from "logs/${n}.out" "logs/${n}_ps.out") run seed 0 lấy từ $n"
     fi
   done
-  for step in ${YS_STEPS:-1 retime 2}; do
+  for step in ${YS_STEPS:-1 2}; do
     case $step in
       1|retime) arms="${YS_FIRST:-PROPOSED,RANDOM_PERM}" ;;
       *)        arms="${YS_ARMS:-PROPOSED,RANDOM_PERM,PROPOSED_BAL,SISA,RANDOM_EMB}" ;;
