@@ -410,36 +410,54 @@ block_kyelp () {
 }
 
 # ------------------------------------------------------------------ yseeds
-# Chất lượng trên yelp2018 với MỖI SEED MỘT MODEL (log main_yelp_ps), để kiểm
-# định SAFER vs Random (std gồm cả độ dao động khi train). Seed 0 lấy từ
-# main_yelp (cùng một run ở hai cách chạy), chỉ chạy seed 1-4. SAFER A và
-# Random trước (YS_FIRST), rồi SAFER B (bản Gray-cut), SISA, RandomEmb (YS_ARMS)
-# nối vào cùng log. RecEraser và Retrain KHÔNG chạy mặc định; khi cần:
+# Chất lượng trên yelp2018 với MỖI SEED MỘT MODEL, 3 mode xóa 1%: random
+# (main_yelp_ps), most (mode_most_yelp_ps), fewest (mode_fewest_yelp_ps), để
+# kiểm định SAFER vs Random (std gồm cả độ dao động khi train). Seed 0 của mỗi
+# mode lấy từ log 1 model tương ứng (cùng một run ở hai cách chạy), chỉ chạy
+# seed 1-4.
+#   Bước 1: SAFER A + Random (YS_FIRST) ở cả 3 mode.
+#   Bước 2: SAFER B (Gray-cut), SISA, RandomEmb (YS_ARMS) ở cả 3 mode.
+# RecEraser và Retrain KHÔNG chạy mặc định; khi cần:
 #   YS_ARMS=PROPOSED,RANDOM_PERM,PROPOSED_BAL,SISA,RANDOM_EMB,RECERASER,GLOBAL ... start yseeds
-# main_yelp (1 model) giữ nguyên cho thời gian / work.
-#   so sánh ghép cặp: bash code/run_blocks.sh paired logs/main_yelp_ps.out
+# Log 1 model (main_yelp, mode_*_yelp) giữ nguyên cho thời gian / work.
+#   YS_MODES="random most fewest"     so sánh: bash code/run_blocks.sh paired
+yseeds_log () { case "$1" in random) echo main_yelp ;; *) echo "mode_${1}_yelp" ;; esac; }
+
 block_yseeds () {
   export RECUNLEARN_ENGINE="${RECUNLEARN_ENGINE:-gpu}"
-  local f="logs/main_yelp_ps.out"
-  if [ ! -f "$f" ] && [ -f logs/main_yelp.out ]; then
-    echo "[seeded] $(python code/clean_old_results.py --seed-from logs/main_yelp.out "$f") run seed 0 lấy từ main_yelp"
-  fi
-  banner "YSEEDS: yelp2018, mỗi seed một model, ${YS_FIRST:-PROPOSED,RANDOM_PERM} trước"
-  TRAIN_SEED=-1 pq "main_yelp_ps" yelp2018 arms="${YS_FIRST:-PROPOSED,RANDOM_PERM}"
-  block_paired "$f"
-  TRAIN_SEED=-1 pq "main_yelp_ps" yelp2018 \
-    arms="${YS_ARMS:-PROPOSED,RANDOM_PERM,PROPOSED_BAL,SISA,RANDOM_EMB}"
-  block_paired "$f"
-  banner "YSEEDS XONG - xem: bash code/run_blocks.sh paired $f"
+  local m n step arms
+  local modes="${YS_MODES:-random most fewest}"
+  for m in $modes; do
+    n=$(yseeds_log "$m")
+    if [ ! -f "logs/${n}_ps.out" ] && [ -f "logs/${n}.out" ]; then
+      echo "[seeded] ${n}_ps: $(python code/clean_old_results.py --seed-from "logs/${n}.out" "logs/${n}_ps.out") run seed 0 lấy từ $n"
+    fi
+  done
+  for step in 1 2; do
+    if [ $step = 1 ]; then arms="${YS_FIRST:-PROPOSED,RANDOM_PERM}"
+    else arms="${YS_ARMS:-PROPOSED,RANDOM_PERM,PROPOSED_BAL,SISA,RANDOM_EMB}"; fi
+    banner "YSEEDS bước $step: yelp2018, mỗi seed một model, mode $modes, arms $arms"
+    for m in $modes; do
+      n=$(yseeds_log "$m")
+      TRAIN_SEED=-1 pq "${n}_ps" yelp2018 mode=$m arms="$arms"
+    done
+    block_paired
+  done
+  banner "YSEEDS XONG - xem: bash code/run_blocks.sh paired"
 }
 
-# So sánh ghép cặp theo seed (SAFER A - Random, mọi metric, p-value t-test)
+# So sánh ghép cặp theo seed (SAFER A / SAFER B - Random, mọi metric, p-value).
+# Không đối số: cả 3 log mỗi seed một model của yelp (yseeds).
 block_paired () {
-  local f="${1:-logs/main_yelp_ps.out}"
-  [ -f "$f" ] || { echo "không có $f"; return 0; }
-  python code/summarize_partition_logs.py "$f" 2>/dev/null | sed -n '/^PAIRED:/,/^$/p'
-  python code/summarize_partition_logs.py "$f" --proposed PROPOSED_BAL 2>/dev/null \
-    | sed -n '/^PAIRED:/,/^  affected/p'
+  local f files="$*"
+  [ -n "$files" ] || files="logs/main_yelp_ps.out logs/mode_most_yelp_ps.out logs/mode_fewest_yelp_ps.out"
+  for f in $files; do
+    [ -f "$f" ] || { echo "không có $f"; continue; }
+    echo ""; echo "=== $f"
+    python code/summarize_partition_logs.py "$f" 2>/dev/null | sed -n '/^PAIRED:/,/^  ndcg_50/p'
+    python code/summarize_partition_logs.py "$f" --proposed PROPOSED_BAL 2>/dev/null \
+      | sed -n '/^PAIRED:/,/^  ndcg_50/p'
+  done
 }
 
 # ------------------------------------------------------------------ compare
@@ -735,7 +753,7 @@ case "${1:-}" in
   epochs)  block_epochs ;;
   kyelp)   block_kyelp ;;
   yseeds)  block_yseeds ;;
-  paired)  block_paired "${2:-}" ;;
+  paired)  shift; block_paired "$@" ;;
   epcompare) python code/compare_epochs.py --dataset "$(short "${EP_DATASET:-yelp2018}")" ;;
   kcompare) python code/compare_epochs.py --dataset "$(short "${EP_DATASET:-yelp2018}")" --by k ;;
   stop)    block_stop ;;
