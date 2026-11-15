@@ -381,16 +381,21 @@ block_epochs () {
   banner "EPOCHS XONG - so sánh: bash code/run_blocks.sh epcompare"
 }
 
-# Chia shard nhỏ hơn / lớn hơn (K=4, K=16) trên yelp2018 với số epoch đã chọn:
-#   EPOCHS=200 bash code/run_blocks.sh start kyelp
+# Chia shard nhỏ hơn / lớn hơn (K=4, K=16) trên yelp2018 (log k<K>_yelp), train
+# 1 model rồi unlearn 5 lần. Mặc định SAFER A, SAFER B, Random trước; thêm arm
+# khác sau vào CÙNG log (chạy nối, giữ run đã xong):
+#   KLIST=16 bash code/run_blocks.sh start kyelp
+#   KLIST=16 KY_ARMS=PROPOSED,PROPOSED_BAL,RANDOM_PERM,SISA,RANDOM_EMB,RECERASER,GLOBAL ... start kyelp
+#   EPOCHS=100 ... (log k16_yelp_e100)    so sánh: bash code/run_blocks.sh kcompare
 block_kyelp () {
   export RECUNLEARN_ENGINE="${RECUNLEARN_ENGINE:-gpu}"
-  ARMS="RECERASER,PROPOSED,PROPOSED_BAL,SISA,RANDOM_PERM,RANDOM_EMB,GLOBAL"
+  ARMS="${KY_ARMS:-PROPOSED,PROPOSED_BAL,RANDOM_PERM}"
   local k
-  banner "K trên yelp2018: ${KLIST:-4 16}, epochs=$EPOCHS"
+  banner "K trên yelp2018: ${KLIST:-4 16}, epochs=$EPOCHS, arms $ARMS"
   [ "$EPOCHS" != 50 ] && pq "main_yelp" yelp2018    # K=8 với cùng số epoch
   for k in ${KLIST:-4 16}; do pq "k${k}_yelp" yelp2018 k=$k; done
-  banner "KYELP XONG - xem: bash code/run_blocks.sh results"
+  python code/compare_epochs.py --dataset yelp --by k
+  banner "KYELP XONG - so sánh: bash code/run_blocks.sh kcompare"
 }
 
 # ------------------------------------------------------------------ compare
@@ -683,6 +688,7 @@ case "${1:-}" in
   epochs)  block_epochs ;;
   kyelp)   block_kyelp ;;
   epcompare) python code/compare_epochs.py --dataset "$(short "${EP_DATASET:-yelp2018}")" ;;
+  kcompare) python code/compare_epochs.py --dataset "$(short "${EP_DATASET:-yelp2018}")" --by k ;;
   stop)    block_stop ;;
   reset)   block_reset ;;
   results) block_results ;;
@@ -693,5 +699,5 @@ case "${1:-}" in
   csv)     block_csv ;;
   check)   block_check ;;
   clean)   block_clean ;;
-  *) echo "dùng: bash code/run_blocks.sh <reset|start [full|compare|epochs|kyelp]|epcompare|results|status|gpu|smoke|bench|stop|torch|full|main|modes|single|shards|dims|recpart|all|csv|check|clean>"; exit 1 ;;
+  *) echo "dùng: bash code/run_blocks.sh <reset|start [full|compare|epochs|kyelp]|epcompare|kcompare|results|status|gpu|smoke|bench|stop|torch|full|main|modes|single|shards|dims|recpart|all|csv|check|clean>"; exit 1 ;;
 esac

@@ -46,14 +46,22 @@ def mean(v):
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument('--dataset', default='yelp')
+    ap.add_argument('--by', default='epochs', choices=['epochs', 'k'],
+                    help='epochs: main_<ds> vs main_<ds>_e<E>; '
+                         'k: K=8 (main_<ds>) vs k4_<ds> / k16_<ds>, 50 epochs')
     args = ap.parse_args()
+    ds = re.escape(args.dataset)
+    if args.by == 'k':
+        ref, pat, what = 8, rf'k(\d+)_{ds}\.out', 'K'
+    else:
+        ref, pat, what = 50, rf'main_{ds}_e(\d+)\.out', 'epochs'
 
-    runs = {}                                   # epochs -> records
+    runs = {}                                   # epochs (or K) -> records
     base = os.path.join(LOGS, f'main_{args.dataset}.out')
     if os.path.exists(base):
-        runs[50] = parse_log(base)
+        runs[ref] = parse_log(base)
     for f in sorted(os.listdir(LOGS)) if os.path.isdir(LOGS) else []:
-        m = re.fullmatch(rf'main_{re.escape(args.dataset)}_e(\d+)\.out', f)
+        m = re.fullmatch(pat, f)
         if m:
             runs[int(m.group(1))] = parse_log(os.path.join(LOGS, f))
     runs = {e: r for e, r in runs.items() if r}
@@ -65,14 +73,15 @@ def main():
     arms = [a for a in ORDER if a in present]
 
     print('=' * 118)
-    print(f'EPOCHS: main_{args.dataset} (1% random deletion, K=8, dim=64)  -  '
-          f'epochs {", ".join(map(str, epochs))}')
+    fixed = 'K=8, dim=64' if what == 'epochs' else '50 epochs, dim=64'
+    print(f'{what.upper()}: {args.dataset} (1% random deletion, {fixed})  -  '
+          f'{what} {", ".join(map(str, epochs))}')
     print('=' * 118)
     for a in arms:
         print(f'\n  {LABEL.get(a, a)}')
-        print(f'  {"epochs":>8}{"n":>4}' + ''.join(f'{lab:>16}' for _, lab in UTIL)
-              + f'{"unlearn(s)":>12}{"dR@20 vs 50":>13}')
-        b20 = mean([r.get('recall_20') for r in runs.get(50, []) if r['arm'] == a])
+        print(f'  {what:>8}{"n":>4}' + ''.join(f'{lab:>16}' for _, lab in UTIL)
+              + f'{"unlearn(s)":>12}{f"dR@20 vs {ref}":>13}')
+        b20 = mean([r.get('recall_20') for r in runs.get(ref, []) if r['arm'] == a])
         for e in epochs:
             rs = [r for r in runs[e] if r['arm'] == a]
             if not rs:
@@ -81,7 +90,7 @@ def main():
             r20 = mean([r.get('recall_20') for r in rs])
             ul = mean([r.get('unlearn_time') for r in rs])
             d = (f'{(r20 - b20) / b20 * 100:+.1f}%' if b20 and r20 is not None
-                 and e != 50 else '')
+                 and e != ref else '')
             print(f'  {e:>8}{len(rs):>4}'
                   + ''.join(f'{ms([r.get(k) for r in rs]):>16}' for k, _ in UTIL)
                   + f'{(f"{ul:.1f}" if ul is not None else "-"):>12}{d:>13}')
@@ -107,7 +116,7 @@ def main():
                 verdict = ('within noise' if abs(d) <= sd or len(x) < 2 or len(y) < 2
                            else ('SAFER higher' if d > 0 else 'Random higher'))
                 out.append(f'{lab} {d:+.4f} ({d / st.mean(y) * 100:+.1f}%, {verdict})')
-            print(f'    {e:>4} epochs  {LABEL[a]:<8} - Random: ' + '   '.join(out)
+            print(f'    {what}={e:<5} {LABEL[a]:<8} - Random: ' + '   '.join(out)
                   + f'   [n={len(rs)} vs {len(rnd)}]')
 
 
