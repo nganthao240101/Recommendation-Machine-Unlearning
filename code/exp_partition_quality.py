@@ -219,34 +219,50 @@ def partition_random_embedding(train_items, n_users, n_items, n_shards,
     return route_hyperplane(sigs, n_shards, seed=seed)
 
 
-def partition_proposed_balanced(train_items, n_users, n_items, n_shards, sig_dim, seed):
-    """PROPOSED but LOAD-BALANCED: same LSH cells (so similar users still
-    co-locate), only the cell->shard mapping is rebalanced by interaction load.
+SAFER_B_MAP = os.environ.get('SAFER_B_MAP', 'gray')     # 'greedy' = the earlier logs
 
-    Motivation (measured on ml-1m, K=8): the default mapping in
-    DeletionStableAssignment balances the NUMBER OF CELLS per shard, not the
-    number of interactions, so shard loads came out very uneven
-    (interaction CV 0.668, max/mean 2.39) against 0.047 / 1.06 for a modulo
-    partition. With hard routing, the lean shards drag the average utility
-    down. This arm isolates that: if it beats a random partition, the
-    similarity-aware routing does carry utility and the imbalance was the
-    confound; if it ties random, similarity in user space does not help here.
+
+def partition_proposed_balanced(train_items, n_users, n_items, n_shards, sig_dim, seed,
+                                cell_map=None):
+    """SAFER B: the signature and hyperplane LSH of SAFER A, with more cells
+    and a LOAD-BALANCED cell->shard map that is also DELETION-STABLE.
+
+    SAFER A gives each shard the same number of LSH cells, and the cells hold
+    very different numbers of users, so its shards are uneven (ml-1m, K=8:
+    interaction CV 0.668, max/mean 2.39). SAFER B uses B = K^3 cells (b =
+    3*log2 K hyperplanes) and maps them to shards by load.
+
+    cell_map='gray' (default): the cells are laid out in reflected Gray-code
+    order - neighbouring cells differ in one hyperplane, so a run of cells is a
+    coherent region of the signature space - and the sequence is cut into K
+    contiguous runs holding equal shares of the interactions (a cell goes to
+    the run that holds the midpoint of its load). A user's shard depends on
+    his own signature and on where the K-1 cut points fall. A deletion only
+    shifts the cut points by about its share of the load, so a re-fit on the
+    retained data moves only the users of the cells at a cut point (measured,
+    1% random deletion, K=8: 0.33% of the users on ml-1m, 0.37% on yelp2018;
+    the greedy map moved 27% / 49%). During unlearning the map is kept as
+    fitted, so no retained user changes shard at all.
+
+    cell_map='greedy': the earlier map - B = K^2 cells, the heaviest cell to
+    the lightest shard. Balanced, but any change of the loads reorders the
+    cells and reshuffles the map (instability 27-66%).
     """
+    cell_map = cell_map or SAFER_B_MAP
     builder = UserSignatureBuilder(n_users, n_items, d=sig_dim, seed=seed)
     sigs = builder.build_signature(train_items)
     assigner = DeletionStableAssignment(n_shards=n_shards, d=sig_dim, seed=seed)
 
-    # Use MORE hash cells than shards so the cell->shard mapping has freedom
-    # to balance load. With B == K the default mapping gives each shard exactly
-    # one cell, and no rebalancing is possible (measured: same CV as PROPOSED).
-    extra_bits = max(1, int(np.ceil(np.log2(n_shards))))
+    # more hash cells than shards, so the map has freedom to balance the load
+    base_bits = max(1, int(np.ceil(np.log2(n_shards))))
+    extra_bits = 2 * base_bits if cell_map == 'gray' else base_bits
     b = assigner.b + extra_bits
     hp = np.random.RandomState(seed).randn(b, sig_dim)
 
     h_bits = (sigs @ hp.T) >= 0
-    h_codes = np.zeros(n_users, dtype=np.int32)
+    h_codes = np.zeros(n_users, dtype=np.int64)
     for t in range(b):
-        h_codes += h_bits[:, t].astype(np.int32) * (2 ** (b - 1 - t))
+        h_codes += h_bits[:, t].astype(np.int64) * (2 ** (b - 1 - t))
     B = 2 ** b
 
     # interaction load per cell
@@ -254,18 +270,27 @@ def partition_proposed_balanced(train_items, n_users, n_items, n_shards, sig_dim
     for u, items in train_items.items():
         cell_load[h_codes[u]] += len(items)
 
-    # greedy: repeatedly give the heaviest cell to the currently lightest shard
-    order = np.argsort(-cell_load)
     cell_to_shard = np.zeros(B, dtype=np.int32)
-    shard_load = np.zeros(n_shards, dtype=np.float64)
-    for c in order:
-        s = int(np.argmin(shard_load))
-        cell_to_shard[c] = s
-        shard_load[s] += cell_load[c]
+    if cell_map == 'gray':
+        gray = np.arange(B) ^ (np.arange(B) >> 1)     # i-th cell of the Gray sequence
+        load = cell_load[gray]
+        mid = np.cumsum(load) - load / 2
+        total = max(load.sum(), 1e-12)
+        cell_to_shard[gray] = np.minimum((mid / total * n_shards).astype(np.int64),
+                                         n_shards - 1)
+    else:
+        # greedy: repeatedly give the heaviest cell to the currently lightest shard
+        order = np.argsort(-cell_load)
+        shard_load = np.zeros(n_shards, dtype=np.float64)
+        for c in order:
+            s = int(np.argmin(shard_load))
+            cell_to_shard[c] = s
+            shard_load[s] += cell_load[c]
 
-    umap = cell_to_shard[h_codes]
+    umap = cell_to_shard[h_codes].astype(np.int32)
     counts = np.bincount(umap, minlength=n_shards)
-    print(f"    [PROPOSED_BAL] b={b} bits, {B} cells -> {n_shards} shards, "
+    print(f"    [PROPOSED_BAL] map={'gray-cut' if cell_map == 'gray' else 'greedy'} "
+          f"b={b} bits, {B} cells -> {n_shards} shards, "
           f"users min={counts.min()} max={counts.max()} mean={counts.mean():.1f}")
     return umap
 

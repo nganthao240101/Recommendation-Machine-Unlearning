@@ -80,6 +80,9 @@ UBP_MARK = 'empty-shard restart'
 # initialised, items aggregated on WB); before that WA/WB were uninitialised
 # memory and its R@10 collapsed (0.0035 on ml-1m against ~0.07 for the others)
 ATTN_MARK = 'attention=authors'
+# printed by SAFER B since its cell->shard map is the deletion-stable Gray cut;
+# before that a greedy map reshuffled on any load change (instability 27-66%)
+SAFERB_MARK = 'map=gray-cut'
 
 
 def live_logs():
@@ -126,6 +129,9 @@ def first_line(text):
     return '(empty)'
 
 
+SAFERB_OLD = 'SAFER B with the earlier greedy cell map (only its runs run again)'
+
+
 def classify_log(path):
     """-> (verdict, reason)"""
     name = os.path.basename(path)
@@ -158,6 +164,8 @@ def classify_log(path):
         return 'OLD', 'RECERASER seeded with the scrambled WMF vector (old code)'
     if rec and ATTN_MARK not in text:
         return 'OLD', 'RECERASER with the uninitialised attention (its runs run again)'
+    if 'PROPOSED_BAL' in arms and SAFERB_MARK not in text:
+        return 'OLD', SAFERB_OLD
     if rec and not name.startswith('recrand') and UBP_MARK not in text:
         return 'OLD', 'RECERASER with the earlier UBP port (interaction-balanced)'
     if name.startswith('single_'):
@@ -225,6 +233,8 @@ def prepare_resume(path):
         r = done_re.search(body)
         if not r or r.group(1) != arm:
             return False                      # never finished
+        if arm == 'PROPOSED_BAL' and not single and SAFERB_MARK not in body:
+            return False                      # the earlier greedy cell map
         if arm == 'RECERASER':
             if REC_MARK not in body or ATTN_MARK not in body:
                 return False                  # broken attention / old init

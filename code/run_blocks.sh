@@ -126,6 +126,17 @@ run () {
     # Log dở, hoặc log đã xong nhưng có run RecEraser cũ/hỏng: giữ mọi cặp
     # arm/seed còn hợp lệ, bỏ run hỏng, chỉ chạy phần còn thiếu và ghi NỐI
     # vào log. Log của code cũ (trước a716452) thì chạy lại từ đầu.
+    # a log written with one model per seed (before --train_seed) continues
+    # that way, so every arm of one table is measured alike
+    if grep -q -e "--- ARM " -- "$f" && ! grep -q "one model:" "$f"; then
+      local args=() p=""
+      for a in "$@"; do
+        [ "$p" = "--train_seed" ] && a=-1
+        args+=("$a"); p="$a"
+      done
+      set -- "${args[@]}"
+      echo "[resume] $name: log cũ mỗi seed một model -> chạy tiếp cũng như vậy (--train_seed -1)"
+    fi
     skip=$(python code/clean_old_results.py --prepare-resume "$f")
     if [ -n "$skip" ]; then
       tee_opt="-a"
@@ -399,14 +410,15 @@ block_kyelp () {
 }
 
 # ------------------------------------------------------------------ compare
-# So sánh ml-1m với yelp2018 trên cùng các thí nghiệm: single ml-1m trước,
-# rồi yelp2018: main (1% random), most, fewest, single. Không chạy shards/dims/
+# So sánh ml-1m với yelp2018 trên cùng các thí nghiệm: ml-1m trước, rồi
+# yelp2018: main (1% random), most, fewest, single. Không chạy shards/dims/
 # recpart. Log đã xong thì bỏ qua, log dở thì chạy tiếp như full.
 block_compare () {
   export RECUNLEARN_ENGINE="${RECUNLEARN_ENGINE:-gpu}"
   ARMS="RECERASER,PROPOSED,PROPOSED_BAL,SISA,RANDOM_PERM,RANDOM_EMB,GLOBAL"
-  banner "COMPARE: single ml-1m, rồi yelp2018 (main, most, fewest, single) | engine=$RECUNLEARN_ENGINE"
-  DATASETS="ml-1m";    block_single
+  banner "COMPARE: ml-1m rồi yelp2018 (main, most, fewest, single) | engine=$RECUNLEARN_ENGINE"
+  # log đã xong được bỏ qua; log có run SAFER B cũ chỉ chạy lại SAFER B
+  DATASETS="ml-1m";    block_main; block_modes; block_single
   DATASETS="yelp2018"; block_main; block_modes; block_single
   DATASETS="ml-1m yelp2018"
   block_csv
