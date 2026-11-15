@@ -119,7 +119,10 @@ run () {
     local want="" missing="" a prev=""
     for a in "$@"; do [ "$prev" = "--arms" ] && want="$a"; prev="$a"; done
     for a in ${want//,/ }; do grep -q -e "--- ARM $a (seed" -- "$f" || missing="$missing $a"; done
-    if [ -z "$missing" ] && grep -q "CONSOLE SUMMARY" "$f" 2>/dev/null && is_new "$f"; then
+    # RETIME_ARMS: runs of these arms timed on the shared GPU are run again
+    local retime=""
+    [ -n "${RETIME_ARMS:-}" ] && python code/clean_old_results.py --has-shared "$f" && retime=1
+    if [ -z "$missing" ] && [ -z "$retime" ] && grep -q "CONSOLE SUMMARY" "$f" 2>/dev/null && is_new "$f"; then
       echo "[skip] $name  (đã xong bằng code hiện tại)"
       return 0
     fi
@@ -416,7 +419,11 @@ block_kyelp () {
 # mode lấy từ log 1 model tương ứng (cùng một run ở hai cách chạy), chỉ chạy
 # seed 1-4.
 #   Bước 1: SAFER A + Random (YS_FIRST) ở cả 3 mode.
+#   Đo lại: run SAFER A / Random (RETIME_ARMS) bị gắn cờ GPU dùng chung
+#     (bg-load >= GPU_IDLE_PCT, mặc định 10%) được chạy lại, mỗi run chờ GPU
+#     rảnh tối đa WAIT_IDLE_MIN phút (mặc định 15) rồi mới bắt đầu.
 #   Bước 2: SAFER B (Gray-cut), SISA, RandomEmb (YS_ARMS) ở cả 3 mode.
+#   YS_STEPS="1 retime 2" (mặc định) - ví dụ YS_STEPS="retime" chỉ đo lại.
 # RecEraser và Retrain KHÔNG chạy mặc định; khi cần:
 #   YS_ARMS=PROPOSED,RANDOM_PERM,PROPOSED_BAL,SISA,RANDOM_EMB,RECERASER,GLOBAL ... start yseeds
 # Log 1 model (main_yelp, mode_*_yelp) giữ nguyên cho thời gian / work.
@@ -433,13 +440,20 @@ block_yseeds () {
       echo "[seeded] ${n}_ps: $(python code/clean_old_results.py --seed-from "logs/${n}.out" "logs/${n}_ps.out") run seed 0 lấy từ $n"
     fi
   done
-  for step in 1 2; do
-    if [ $step = 1 ]; then arms="${YS_FIRST:-PROPOSED,RANDOM_PERM}"
-    else arms="${YS_ARMS:-PROPOSED,RANDOM_PERM,PROPOSED_BAL,SISA,RANDOM_EMB}"; fi
+  for step in ${YS_STEPS:-1 retime 2}; do
+    case $step in
+      1|retime) arms="${YS_FIRST:-PROPOSED,RANDOM_PERM}" ;;
+      *)        arms="${YS_ARMS:-PROPOSED,RANDOM_PERM,PROPOSED_BAL,SISA,RANDOM_EMB}" ;;
+    esac
     banner "YSEEDS bước $step: yelp2018, mỗi seed một model, mode $modes, arms $arms"
     for m in $modes; do
       n=$(yseeds_log "$m")
-      TRAIN_SEED=-1 pq "${n}_ps" yelp2018 mode=$m arms="$arms"
+      if [ $step = retime ]; then
+        RETIME_ARMS="${RETIME_ARMS:-$arms}" WAIT_IDLE_MIN="${WAIT_IDLE_MIN:-15}" \
+          TRAIN_SEED=-1 pq "${n}_ps" yelp2018 mode=$m arms="$arms"
+      else
+        TRAIN_SEED=-1 pq "${n}_ps" yelp2018 mode=$m arms="$arms"
+      fi
     done
     block_paired
   done

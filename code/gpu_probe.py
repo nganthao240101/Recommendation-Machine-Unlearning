@@ -17,7 +17,7 @@ import shutil
 import subprocess
 import time
 
-THRESHOLD = 10      # % above which a run counts as shared
+THRESHOLD = int(os.environ.get('GPU_IDLE_PCT', '10'))   # % above which a run counts as shared
 
 
 def background_load(samples=3, gap=0.4):

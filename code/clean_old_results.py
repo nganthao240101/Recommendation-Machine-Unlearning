@@ -235,6 +235,8 @@ def prepare_resume(path):
             return False                      # never finished
         if arm == 'PROPOSED_BAL' and not single and SAFERB_MARK not in body:
             return False                      # the earlier greedy cell map
+        if arm in retime and shared_gpu(body):
+            return False                      # timed on the shared GPU: time it again
         if arm == 'RECERASER':
             if REC_MARK not in body or ATTN_MARK not in body:
                 return False                  # broken attention / old init
@@ -242,6 +244,7 @@ def prepare_resume(path):
                 return False                  # earlier UBP port
         return True
 
+    retime = retime_arms()
     kept = [b for b in blocks if valid(*b)]
     dropped = [f'{a}:{s}' for a, s, blk in blocks if not valid(a, s, blk)]
     if not kept:
@@ -255,6 +258,44 @@ def prepare_resume(path):
                    if dropped else '')
                 + f'; continuing {time.strftime("%Y-%m-%d %H:%M:%S")}' + chr(10))
     return ','.join(f'{a}:{s}' for a, s, _ in kept)
+
+
+BG_LINE = re.compile(r'bg-load: before=(\d+|n/a)%? after=(\d+|n/a)%?')
+
+
+def shared_gpu(body, threshold=None):
+    """True when the run's bg-load line shows the other workload at or above
+    the threshold (gpu_probe.THRESHOLD, env GPU_IDLE_PCT) before or after it."""
+    if threshold is None:
+        threshold = int(os.environ.get('GPU_IDLE_PCT', '10'))
+    m = BG_LINE.search(body)
+    if not m:
+        return False
+    return any(v != 'n/a' and int(v) >= threshold for v in m.groups())
+
+
+def retime_arms():
+    """Arms whose shared-GPU runs are dropped to be timed again (env RETIME_ARMS)."""
+    return {a for a in os.environ.get('RETIME_ARMS', '').split(',') if a}
+
+
+def has_shared(path):
+    """Any finished run of a RETIME_ARMS arm timed on the shared GPU?"""
+    arms = retime_arms()
+    if not arms:
+        return False
+    text = open(path, encoding='utf-8', errors='replace').read()
+    cur, body = None, []
+    hits = 0
+    for ln in text.splitlines(keepends=True) + ['--- ARM END (seed 0) ---']:
+        m = ARM_SEED.search(ln)
+        if m:
+            if cur in arms and RUN_LINE.search(''.join(body)) and shared_gpu(''.join(body)):
+                hits += 1
+            cur, body = m.group(1), [ln]
+        else:
+            body.append(ln)
+    return hits > 0
 
 
 def seed_from(src, dst, seeds=(0,)):
@@ -355,6 +396,9 @@ def main():
                          'finished log can be skipped)')
     ap.add_argument('--status', action='store_true',
                     help='print the progress of the 12 experiment logs and exit')
+    ap.add_argument('--has-shared', dest='has_shared', metavar='LOG', default=None,
+                    help='exit 0 if a run of a RETIME_ARMS arm in LOG was timed on '
+                         'the shared GPU')
     ap.add_argument('--seed-from', dest='seed_from', nargs=2, metavar=('SRC', 'DST'),
                     help='start the per-seed log DST from the seed-0 runs of the '
                          'one-model log SRC')
@@ -368,6 +412,8 @@ def main():
     if args.seed_from:
         print(seed_from(*args.seed_from))
         return
+    if args.has_shared:
+        sys.exit(0 if has_shared(args.has_shared) else 1)
     if args.prepare_resume:
         print(prepare_resume(args.prepare_resume))
         return
