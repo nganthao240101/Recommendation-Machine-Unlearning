@@ -198,12 +198,28 @@ def progress(name, text, n_arms):
     """-> (done runs, total runs, current arm/seed)"""
     m = re.search(r'^\s*seeds: ([\d,]+)\s*$', text, re.M)   # the single block prints it
     total = n_arms * (len(m.group(1).split(',')) if m else N_SEEDS)
-    a = re.search(r'^\s*arms: (\S+)\s*$', text, re.M)        # printed since the epoch runs
-    s = re.search(r'^\s*seeds: ([\d,]+)\s*$', text, re.M)
+    # the run writing the log now printed the last arms:/seeds: lines; count
+    # only its (arm, seed) runs - a resumed log can also hold runs of other
+    # arms (copied seed-0 runs, arms of an earlier step)
+    a = re.findall(r'^\s*arms: (\S+)\s*$', text, re.M)        # printed since the epoch runs
+    s = re.findall(r'^\s*seeds: ([\d,]+)\s*$', text, re.M)
+    want = None
     if a and s:
-        total = len(a.group(1).split(',')) * len(s.group(1).split(','))
+        want = {(x, int(y)) for x in a[-1].split(',') for y in s[-1].split(',')}
+        total = len(want)
     if name.startswith('single_'):
         done = len(SINGLE_DONE.findall(text))
+    elif want is not None:
+        fin, cur_run = set(), None
+        for ln in text.splitlines():
+            m = cor.ARM_SEED.search(ln)
+            if m:
+                cur_run = (m.group(1), int(m.group(2)))
+                continue
+            m = cor.RUN_LINE.match(ln)
+            if m and cur_run and m.group(1) == cur_run[0]:
+                fin.add(cur_run)
+        done = len(fin & want)
     else:
         done = len(cor.RUN_LINE.findall(text))
     hdr = cor.ARM_HDR.findall(text)
@@ -251,6 +267,7 @@ def print_partial(name, path, text, n_arms, brief=False):
         after = text[text.rindex('[resume]'):]
         new = (len(SINGLE_DONE.findall(after)) if name.startswith('single_')
                else len(cor.RUN_LINE.findall(after)))
+        new = min(new, done)
         head += f' ({done - new} kept from before the resume)'
     if t0 and done and not new:
         head += f' | resumed {ago(t0)} ago, no new run finished yet'
