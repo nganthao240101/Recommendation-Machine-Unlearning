@@ -1029,6 +1029,7 @@ def main():
                   + f"\n{'='*70}")
 
         print(f"\n--- ARM {arm} (seed {seed}) ---")
+        gpu_probe.wait_idle()          # WAIT_IDLE_MIN > 0: start when the GPU is quiet
         bg0 = gpu_probe.background_load()
         row = {
             'dataset': args.dataset, 'seed': seed, 'arm': arm, 'K': args.n_shards,

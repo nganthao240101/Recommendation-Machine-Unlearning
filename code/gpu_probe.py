@@ -45,5 +45,34 @@ def background_load(samples=3, gap=0.4):
     return max(vals) if vals else None
 
 
+def wait_idle(max_wait_min=None, quiet_checks=3, gap=20):
+    """Hold the next timed run until the other workload is quiet.
+
+    Waits until background_load() stays below THRESHOLD for `quiet_checks`
+    checks in a row (gap seconds apart), at most max_wait_min minutes; then
+    the run starts anyway (its bg-load line still flags it). Off when
+    max_wait_min is 0 / unset (env WAIT_IDLE_MIN), or without nvidia-smi.
+    Returns (seconds waited, last load).
+    """
+    if max_wait_min is None:
+        max_wait_min = float(os.environ.get('WAIT_IDLE_MIN', '0') or 0)
+    if max_wait_min <= 0:
+        return 0.0, None
+    t0, quiet, load = time.time(), 0, None
+    while time.time() - t0 < max_wait_min * 60:
+        load = background_load()
+        if load is None:
+            return 0.0, None
+        quiet = quiet + 1 if load < THRESHOLD else 0
+        if quiet >= quiet_checks:
+            break
+        time.sleep(gap)
+    waited = time.time() - t0
+    print(f"       [idle-wait] waited {waited / 60:.1f} min, GPU background now {fmt(load)}"
+          + ("" if quiet >= quiet_checks else "  (gave up waiting, run starts anyway)"),
+          flush=True)
+    return waited, load
+
+
 def fmt(v):
     return 'n/a' if v is None else f'{v}%'
