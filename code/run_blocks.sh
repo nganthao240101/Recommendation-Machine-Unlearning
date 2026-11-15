@@ -410,16 +410,18 @@ block_kyelp () {
 }
 
 # ------------------------------------------------------------------ compare
-# So sánh ml-1m với yelp2018 trên cùng các thí nghiệm: ml-1m trước, rồi
-# yelp2018: main (1% random), most, fewest, single. Không chạy shards/dims/
+# So sánh yelp2018 với ml-1m trên cùng các thí nghiệm: yelp2018 trước, rồi
+# ml-1m (CMP_DATASETS="ml-1m yelp2018" để đảo): main (1% random), most, fewest, single. Không chạy shards/dims/
 # recpart. Log đã xong thì bỏ qua, log dở thì chạy tiếp như full.
 block_compare () {
   export RECUNLEARN_ENGINE="${RECUNLEARN_ENGINE:-gpu}"
   ARMS="RECERASER,PROPOSED,PROPOSED_BAL,SISA,RANDOM_PERM,RANDOM_EMB,GLOBAL"
-  banner "COMPARE: ml-1m rồi yelp2018 (main, most, fewest, single) | engine=$RECUNLEARN_ENGINE"
+  local ds order="${CMP_DATASETS:-yelp2018 ml-1m}"
+  banner "COMPARE: $order (main, most, fewest, single) | engine=$RECUNLEARN_ENGINE"
   # log đã xong được bỏ qua; log có run SAFER B cũ chỉ chạy lại SAFER B
-  DATASETS="ml-1m";    block_main; block_modes; block_single
-  DATASETS="yelp2018"; block_main; block_modes; block_single
+  for ds in $order; do
+    DATASETS="$ds"; block_main; block_modes; block_single
+  done
   DATASETS="ml-1m yelp2018"
   block_csv
   banner "COMPARE XONG - xem: bash code/run_blocks.sh results"
