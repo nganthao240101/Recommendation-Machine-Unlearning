@@ -413,7 +413,9 @@ block_kyelp () {
 # Chất lượng trên yelp2018 với MỖI SEED MỘT MODEL (log main_yelp_ps), để kiểm
 # định SAFER vs Random (std gồm cả độ dao động khi train). Seed 0 lấy từ
 # main_yelp (cùng một run ở hai cách chạy), chỉ chạy seed 1-4. SAFER A và
-# Random trước (YS_FIRST), rồi các arm còn lại (YS_ARMS) nối vào cùng log.
+# Random trước (YS_FIRST), rồi SAFER B (bản Gray-cut), SISA, RandomEmb (YS_ARMS)
+# nối vào cùng log. RecEraser và Retrain KHÔNG chạy mặc định; khi cần:
+#   YS_ARMS=PROPOSED,RANDOM_PERM,PROPOSED_BAL,SISA,RANDOM_EMB,RECERASER,GLOBAL ... start yseeds
 # main_yelp (1 model) giữ nguyên cho thời gian / work.
 #   so sánh ghép cặp: bash code/run_blocks.sh paired logs/main_yelp_ps.out
 block_yseeds () {
@@ -426,7 +428,7 @@ block_yseeds () {
   TRAIN_SEED=-1 pq "main_yelp_ps" yelp2018 arms="${YS_FIRST:-PROPOSED,RANDOM_PERM}"
   block_paired "$f"
   TRAIN_SEED=-1 pq "main_yelp_ps" yelp2018 \
-    arms="${YS_ARMS:-PROPOSED,RANDOM_PERM,PROPOSED_BAL,SISA,RANDOM_EMB,RECERASER,GLOBAL}"
+    arms="${YS_ARMS:-PROPOSED,RANDOM_PERM,PROPOSED_BAL,SISA,RANDOM_EMB}"
   block_paired "$f"
   banner "YSEEDS XONG - xem: bash code/run_blocks.sh paired $f"
 }
