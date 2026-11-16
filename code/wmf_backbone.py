@@ -128,8 +128,8 @@ def train_wmf(user_emb, item_emb, params, data, device, lr, n_epochs,
             total += loss.detach()
         if log_every and (ep + 1) % log_every == 0:
             print(log_fmt.format(ep=ep + 1, loss=float(total) / max(1, n)))
-        if epoch_end is not None:
-            epoch_end(ep)
+        if epoch_end is not None and epoch_end(ep):
+            break                                  # early stopping
     if str(device).startswith('cuda') and torch.cuda.is_available():
         torch.cuda.synchronize()
     return float(total), int(indptr[-1])

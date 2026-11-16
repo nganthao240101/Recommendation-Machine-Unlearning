@@ -30,6 +30,7 @@ import numpy as np
 import torch
 import fast_train
 import wmf_backbone
+import early_stop
 
 PROJ = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, PROJ)
@@ -240,7 +241,7 @@ class RecEraserArm:
         m.item_embedding.weight.data[:, shard_id * d:(shard_id + 1) * d] = is_
 
     def train_shard(self, shard_id, shard_data, n_items, batch_size=512,
-                    lr=0.05, n_epochs=50):
+                    lr=0.05, n_epochs=50, epoch_end=None):
         """Train one shard's slice of the embedding table."""
         m = self.model
         if wmf_backbone.use_wmf():
@@ -250,7 +251,7 @@ class RecEraserArm:
                 lambda u: m.user_embedding(u).view(-1, K, D)[:, shard_id, :],
                 lambda: m.item_embedding.weight.view(-1, K, D)[:, shard_id, :],
                 [m.user_embedding.weight, m.item_embedding.weight],
-                shard_data, self.device, lr, n_epochs)
+                shard_data, self.device, lr, n_epochs, epoch_end=epoch_end)
             return loss, time.time() - t0, n
         optimizer = torch.optim.Adagrad(m.parameters(), lr=lr,
                                         initial_accumulator_value=1e-8)
@@ -267,7 +268,7 @@ class RecEraserArm:
                 optimizer.step()
                 return loss
             total, _ = fast_train.train_epochs(step, samples, self.device,
-                                               batch_size, n_epochs)
+                                               batch_size, n_epochs, epoch_end=epoch_end)
             fast_train.sync(self.device)
             return total, time.time() - t0, len(samples[0])
         samples = []
@@ -297,10 +298,12 @@ class RecEraserArm:
                 loss.backward()
                 optimizer.step()
                 total_loss += loss.item()
+            if epoch_end is not None and epoch_end(epoch):
+                break
         return total_loss, time.time() - t0, len(samples)
 
     def train_aggregator(self, train_data, n_users, n_items, batch_size=512,
-                         lr=0.005, n_epochs=50):
+                         lr=0.005, n_epochs=50, epoch_end=None):
         """Retrain the attention aggregator.
 
         The aggregator's attention weights are a function of every user's
@@ -329,7 +332,7 @@ class RecEraserArm:
                 lambda: agg(m.item_embedding.weight, True),
                 agg_params, train_data, self.device, lr, n_epochs, log_every=10,
                 log_fmt='    Agg Epoch {ep}: loss={loss:.4f}', optimizer=opt,
-                clip=agg_params, skip_nonfinite=True)
+                clip=agg_params, skip_nonfinite=True, epoch_end=epoch_end)
             return time.time() - t0
         if fast_train.use_gpu_receraser_training():
             # method_3_receraser_v2.train_aggregator on the GPU: only the
@@ -354,13 +357,14 @@ class RecEraserArm:
                 return loss
             fast_train.train_epochs(
                 step, samples, self.device, batch_size, n_epochs, log_every=10,
-                log_fmt='    Agg Epoch {ep}: loss={loss:.4f}')
+                log_fmt='    Agg Epoch {ep}: loss={loss:.4f}', epoch_end=epoch_end)
             fast_train.sync(self.device)
             if skipped[0]:
                 print(f"    [RecEraser] aggregator skipped {skipped[0]} non-finite batches")
             return time.time() - t0
         train_aggregator(self.model, train_data, n_users, n_items, self.device,
-                         batch_size=batch_size, lr=lr, max_epochs=n_epochs)
+                         batch_size=batch_size, lr=lr, max_epochs=n_epochs,
+                         epoch_end=epoch_end)
         return time.time() - t0
 
     @torch.no_grad()
@@ -415,6 +419,54 @@ class RecEraserArm:
         }
 
 
+def _shard_stopper(arm, sid, shard_data, n_items, device):
+    """Early stopping for one RecEraser shard: its slice of the tables, its
+    users' validation items."""
+    m = arm.model
+
+    def score(ut):
+        K, D = m.num_local, m.emb_dim
+        u = m.user_embedding.weight.view(-1, K, D)[ut, sid]
+        i = m.item_embedding.weight.view(-1, K, D)[:, sid]
+        return u @ i.T
+
+    def load(st):
+        arm.set_shard_parameters(sid, *st)
+    return early_stop.EarlyStopper(score, list(shard_data), shard_data, n_items, device,
+                                   lambda: arm.shard_parameters(sid), load)
+
+
+def _agg_stopper(arm, train_data, n_users, n_items, device):
+    """Early stopping for the aggregator, evaluated every epoch on the whole
+    validation split with the attention inference (authors: --epoch_agg 50,
+    every epoch, flag_step 10)."""
+    m = arm.model
+    agg_params = ['WA', 'BA', 'HA', 'WB', 'BB', 'HB', 'trans_W', 'trans_B']
+
+    def agg(emb, item=False):
+        K, D = m.num_local, m.emb_dim
+        es = emb.view(-1, K, D)
+        es = torch.einsum('bkd,kde->bke', es, m.trans_W) + m.trans_B
+        return m._attention_aggregate(es, item=item)[0]
+
+    def score(ut):
+        items = torch.cat([agg(m.item_embedding.weight[i:i + 8192], item=True)
+                           for i in range(0, n_items, 8192)])
+        return agg(m.user_embedding.weight[ut]) @ items.T
+
+    def state():
+        return {k: getattr(m, k).detach().clone() for k in agg_params}
+
+    def load(st):
+        with torch.no_grad():
+            for k, v in st.items():
+                getattr(m, k).copy_(v)
+    return early_stop.EarlyStopper(score, list(range(n_users)), train_data, n_items,
+                                   device, state, load,
+                                   every=early_stop.CFG['agg_every'],
+                                   patience=early_stop.CFG['agg_patience'])
+
+
 def run_receraser_arm(train_items, test_data, n_users, n_items, n_shards,
                       emb_dim, user_to_shard, del_users, epochs, lr, batch_size,
                       device, seed, retrain_epochs, data_root=None,
@@ -456,25 +508,45 @@ def run_receraser_arm(train_items, test_data, n_users, n_items, n_shards,
             shard_data[user_to_shard[u]][u] = list(items)
 
     # ---- train all shards + the aggregator ----
+    es_on = early_stop.on()
+    shard_epochs, agg_ep = {}, agg_epochs
     if cache and 'state' in cache:
         # one model for every deletion: start again from the trained model
         arm.model.load_state_dict(cache['state'])
         train_time = cache['train_time']
+        shard_epochs = dict(cache.get('shard_epochs', {}))
+        agg_ep = cache.get('agg_ep', agg_epochs)
         set_all_seeds(cache['rng_seed'])   # own random stream per deletion
         print("    [RecEraser] model: shards + aggregator reused (trained once), "
               f"train time {train_time:.1f}s from that training")
     else:
         t0 = time.time()
         for sid in range(n_shards):
-            arm.train_shard(sid, shard_data[sid], n_items, batch_size=batch_size,
-                             lr=lr, n_epochs=epochs)
-        arm.train_aggregator(train_items, n_users, n_items, batch_size=batch_size,
-                             n_epochs=agg_epochs)
+            if es_on:
+                es = _shard_stopper(arm, sid, shard_data[sid], n_items, device)
+                arm.train_shard(sid, shard_data[sid], n_items, batch_size=batch_size,
+                                lr=lr, n_epochs=early_stop.CFG['max_epochs'], epoch_end=es)
+                shard_epochs[sid] = es.finish()
+            else:
+                arm.train_shard(sid, shard_data[sid], n_items, batch_size=batch_size,
+                                lr=lr, n_epochs=epochs)
+        if es_on:
+            es = _agg_stopper(arm, train_items, n_users, n_items, device)
+            arm.train_aggregator(train_items, n_users, n_items, batch_size=batch_size,
+                                 n_epochs=early_stop.CFG['agg_max_epochs'], epoch_end=es)
+            agg_ep = es.finish()
+            print("    [RecEraser] early stop: shard epochs "
+                  + ", ".join(f"s{s}={shard_epochs[s]}" for s in sorted(shard_epochs))
+                  + f", aggregator epoch {agg_ep}")
+        else:
+            arm.train_aggregator(train_items, n_users, n_items, batch_size=batch_size,
+                                 n_epochs=agg_epochs)
         train_time = time.time() - t0
         if cache is not None:
             cache['state'] = {k: v.detach().clone()
                               for k, v in arm.model.state_dict().items()}
             cache['train_time'] = train_time
+            cache['shard_epochs'], cache['agg_ep'] = dict(shard_epochs), agg_ep
 
     # ---- unlearn ----
     affected = sorted({int(user_to_shard[u]) for u in del_users if u < len(user_to_shard)})
@@ -486,6 +558,7 @@ def run_receraser_arm(train_items, test_data, n_users, n_items, n_shards,
 
     per_shard_time = {}
     per_shard_inter = {}
+    per_shard_epochs = {}
     t0 = time.time()
     for sid in affected:
         # the shard is retrained FROM SCRATCH: its slice of the embedding
@@ -501,20 +574,25 @@ def run_receraser_arm(train_items, test_data, n_users, n_items, n_shards,
             torch.nn.init.xavier_uniform_(fresh_u)
             torch.nn.init.xavier_uniform_(fresh_i)
         arm.set_shard_parameters(sid, fresh_u, fresh_i)
+        n_ep = shard_epochs.get(sid, retrain_epochs) if es_on else retrain_epochs
         _, elapsed, n_samples = arm.train_shard(
             sid, retained_shard_data[sid], n_items, batch_size=batch_size,
-            lr=lr, n_epochs=retrain_epochs)
+            lr=lr, n_epochs=n_ep)
         per_shard_time[sid] = elapsed
         per_shard_inter[sid] = n_samples
+        per_shard_epochs[sid] = n_ep
     # the aggregator must be retrained too: its attention depends on every
     # user's embedding, including the deleted ones
     agg_time = arm.train_aggregator(retained, n_users, n_items,
-                                    batch_size=batch_size, n_epochs=agg_epochs)
+                                    batch_size=batch_size,
+                                    n_epochs=agg_ep if es_on else agg_epochs)
     unlearn_time = time.time() - t0
     parallel_time = max(per_shard_time.values()) if per_shard_time else 0.0
+    early_stop.LAST = {'shards': per_shard_epochs, 'agg': agg_ep if es_on else agg_epochs}
 
     test_retained = {u: it for u, it in test_data.items() if u not in del_users}
-    res = arm.evaluate(user_to_shard, retained, test_retained, n_users, n_items)
+    excl = early_stop.with_val(retained) if es_on else retained
+    res = arm.evaluate(user_to_shard, excl, test_retained, n_users, n_items)
 
     print(f"    [RecEraser] unlearn: {len(affected)} shard(s) retrained "
           f"({sum(per_shard_time.values()):.1f}s) + aggregator {agg_time:.1f}s "

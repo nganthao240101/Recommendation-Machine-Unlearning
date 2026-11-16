@@ -682,7 +682,8 @@ def train_model(model, partitioner, shard_data, n_items, device, batch_size=512,
             print(f"    Epoch {epoch+1}: loss={total_loss/n_batches:.4f}")
 
 
-def train_aggregator(model, train_data, n_users, n_items, device, batch_size=512, lr=0.005, max_epochs=50):
+def train_aggregator(model, train_data, n_users, n_items, device, batch_size=512, lr=0.005,
+                     max_epochs=50, epoch_end=None):
     """Train attention aggregator (Phase 2) - KHỚP CODE GỐC TÁC GIẢ.
 
     Code gốc (`RecEraser_WMF.py` dòng 122 & 128) dùng `tf.stop_gradient` cho
@@ -753,6 +754,8 @@ def train_aggregator(model, train_data, n_users, n_items, device, batch_size=512
                   + (f"  (skipped {n_nan_skipped} NaN batches)" if n_nan_skipped else ""))
 
 
+        if epoch_end is not None and epoch_end(epoch):
+            break
 # ============================================================================
 # EVALUATION
 # ============================================================================

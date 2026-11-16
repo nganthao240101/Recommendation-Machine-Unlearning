@@ -84,8 +84,8 @@ def train_epochs(step, samples, device, batch_size, n_epochs, log_every=None,
 
     step(users, pos, neg) -> loss tensor; it does the forward, backward and
     optimiser step, and may return None for a batch it skipped. epoch_end(ep)
-    is called after each epoch. Returns (total loss of the last epoch, batches
-    per epoch).
+    is called after each epoch; when it returns True the loop stops (early
+    stopping). Returns (total loss of the last epoch, batches per epoch).
     """
     us, ps, ns = samples
     n = len(us)
@@ -110,8 +110,8 @@ def train_epochs(step, samples, device, batch_size, n_epochs, log_every=None,
                 total += loss.detach()
         if log_every and (ep + 1) % log_every == 0:
             print(log_fmt.format(ep=ep + 1, loss=float(total) / nb))
-        if epoch_end is not None:
-            epoch_end(ep)
+        if epoch_end is not None and epoch_end(ep):
+            break
     return float(total), nb
 
 

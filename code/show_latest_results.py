@@ -42,13 +42,16 @@ SINGLE_DONE = re.compile(r'^\s*\[([A-Z_]+)\]\s+single-request unlearn time', re.
 
 def describe(name):
     """log name -> (dataset, setting, number of arms)"""
-    ps = name.endswith('_ps')                 # one model per seed (main_yelp_ps)
-    if ps:
+    es = name.endswith('_es')                 # early stopping on validation
+    if es:
         name = name[:-3]
     m = re.search(r'_e(\d+)$', name)
     epochs = int(m.group(1)) if m else 50
     if m:
         name = name[:m.start()]
+    ps = name.endswith('_ps')                 # one model per seed (main_yelp_ps)
+    if ps:
+        name = name[:-3]
     wmf = name.endswith('_wmf')
     if wmf:
         name = name[:-4]
@@ -70,7 +73,7 @@ def describe(name):
         base['partition'] = {'recinp': 'InP', 'recrand': 'random'}[stem]
         n_arms = 1
     base['model'] = 'WMF' if wmf else 'BPRMF'
-    base['epochs'] = epochs
+    base['epochs'] = 'early stop' if es else epochs
     if ps:
         base['models'] = 'one per seed'
     setting = '  '.join(f'{k}={v}' for k, v in base.items())

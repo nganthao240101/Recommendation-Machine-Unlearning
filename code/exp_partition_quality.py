@@ -63,6 +63,7 @@ PROJ = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, PROJ)
 
 import gpu_probe
+import early_stop
 import fast_train
 import wmf_backbone
 from partition_variants import (
@@ -631,11 +632,14 @@ def run_sharded_arm(train_items, test_data, n_users, n_items, n_shards,
     shard_data = build_shard_data(train_items, user_to_shard, n_shards)
     shard_models = ShardModels(n_users, n_items, emb_dim, n_shards)
 
+    es_on = early_stop.on()
+    shard_epochs = {}
     if cache and 'states' in cache:
         # one model for every deletion: start again from the trained shards
         for sid in range(n_shards):
             shard_models.create_model(sid, device).load_state_dict(cache['states'][sid])
         train_time = cache['train_time']
+        shard_epochs = dict(cache.get('shard_epochs', {}))
         # the retrain of this deletion gets its own random stream: with the
         # same seed every repeat would retrain identically (most/fewest even
         # delete the same users), and the 5 deletions would be one
@@ -646,14 +650,27 @@ def run_sharded_arm(train_items, test_data, n_users, n_items, n_shards,
         t0 = time.time()
         for sid in range(n_shards):
             model = shard_models.create_model(sid, device)
-            train_shard_model(model, shard_data[sid], n_items, device,
-                              batch_size=batch_size, lr=lr, n_epochs=epochs)
+            if es_on:
+                # early stopping on the validation items of this shard's users
+                es = early_stop.model_stopper(model, list(shard_data[sid]),
+                                              shard_data[sid], n_items, device)
+                train_shard_model(model, shard_data[sid], n_items, device,
+                                  batch_size=batch_size, lr=lr,
+                                  n_epochs=early_stop.CFG['max_epochs'], epoch_end=es)
+                shard_epochs[sid] = es.finish()
+            else:
+                train_shard_model(model, shard_data[sid], n_items, device,
+                                  batch_size=batch_size, lr=lr, n_epochs=epochs)
         train_time = time.time() - t0
+        if es_on:
+            print("       early stop: shard epochs "
+                  + ", ".join(f"s{s}={shard_epochs[s]}" for s in sorted(shard_epochs)))
         if cache is not None:
             cache['states'] = [{k: v.detach().clone() for k, v in
                                 shard_models.get_model(sid).state_dict().items()}
                                for sid in range(n_shards)]
             cache['train_time'] = train_time
+            cache['shard_epochs'] = dict(shard_epochs)
 
     # ---- unlearn: remove deleted users, retrain ONLY affected shards ----
     # reset_on_retrain controls whether the affected shard starts from a FRESH
@@ -675,28 +692,37 @@ def run_sharded_arm(train_items, test_data, n_users, n_items, n_shards,
 
     per_shard_time = {}
     per_shard_inter = {}
+    per_shard_epochs = {}
     t0 = time.time()
     for sid in affected:
         model = shard_models.get_model(sid)
         if reset_on_retrain:
             model = shard_models.create_model(sid, device)
+        # with early stopping the retrain runs the epochs the shard settled
+        # on when it was trained (no evaluation inside the timed retrain)
+        n_ep = shard_epochs.get(sid, retrain_epochs) if es_on else retrain_epochs
         _, elapsed, n_samples = train_shard_model(
             model, retained_shard_data[sid], n_items, device,
-            batch_size=batch_size, lr=lr, n_epochs=retrain_epochs)
+            batch_size=batch_size, lr=lr, n_epochs=n_ep)
         per_shard_time[sid] = elapsed
         per_shard_inter[sid] = n_samples
+        per_shard_epochs[sid] = n_ep
     unlearn_time = time.time() - t0
+    early_stop.LAST = {'shards': per_shard_epochs}
     parallel_time = max(per_shard_time.values()) if per_shard_time else 0.0
 
     # ---- evaluate on retained test users only ----
     test_retained = {u: it for u, it in test_data.items() if u not in del_users}
+    # the ranking excludes the training items, and the validation items too
+    # when they were held out for early stopping
+    excl = early_stop.with_val(retained) if es_on else retained
     if eval_mode == 'sisa_mean':
         # the original SISA inference: average the scores of all K models
-        res = evaluate_sisa_mean_aggregation(shard_models, retained,
+        res = evaluate_sisa_mean_aggregation(shard_models, excl,
                                              test_retained, n_users, n_items,
                                              device, Ks=KS)
     else:
-        res = evaluate_hard_routing(shard_models, user_to_shard, retained,
+        res = evaluate_hard_routing(shard_models, user_to_shard, excl,
                                      test_retained, n_users, n_items, device,
                                      Ks=KS)
     return (res, train_time, unlearn_time, affected, shard_models,
@@ -704,7 +730,7 @@ def run_sharded_arm(train_items, test_data, n_users, n_items, n_shards,
 
 
 def _train_bprmf(train_items, n_users, n_items, emb_dim, epochs, lr,
-                 batch_size, device, seed):
+                 batch_size, device, seed, stopper=None):
     """Train one BPRMF on the given interactions.
 
     Returns (model, elapsed_seconds, n_samples, per_epoch_seconds).
@@ -718,10 +744,20 @@ def _train_bprmf(train_items, n_users, n_items, emb_dim, epochs, lr,
     """
     from method_4_ours import BPRMF
     set_all_seeds(seed)
+    # stopper(model) -> EarlyStopper: train up to its max epochs and stop on
+    # the validation split; model._es_best_epoch tells where it settled
+    es = [None]
+
+    def finish(model):
+        if es[0] is not None:
+            model._es_best_epoch = es[0].finish()
+        return model
     if wmf_backbone.use_wmf():
         model = wmf_backbone.WMF(n_users, n_items, emb_dim).to(device)
         if not any(train_items.values()):
             return model, 0.0, 0, []
+        if stopper is not None:
+            es[0], epochs = stopper(model), early_stop.CFG['max_epochs']
         per_epoch, t0 = [], time.time()
         last = [t0]
 
@@ -731,13 +767,16 @@ def _train_bprmf(train_items, n_users, n_items, emb_dim, epochs, lr,
             now = time.time()
             per_epoch.append(now - last[0])
             last[0] = now
+            return es[0](ep) if es[0] is not None else False
         _, n = wmf_backbone.train_wmf(lambda u: model.user_embedding(u),
                                       lambda: model.item_embedding.weight,
                                       model.parameters(), train_items, device, lr,
                                       epochs, epoch_end=epoch_end)
-        return model, time.time() - t0, n, per_epoch
+        return finish(model), time.time() - t0, n, per_epoch
     model = BPRMF(n_users, n_items, emb_dim).to(device)
     opt = torch.optim.Adagrad(model.parameters(), lr=lr, initial_accumulator_value=1e-8)
+    if stopper is not None:
+        es[0], epochs = stopper(model), early_stop.CFG['max_epochs']
 
     if fast_train.use_gpu_engine():
         samples = fast_train.draw_samples(train_items, n_items)
@@ -759,10 +798,11 @@ def _train_bprmf(train_items, n_users, n_items, emb_dim, epochs, lr,
             now = time.time()
             per_epoch.append(now - last[0])
             last[0] = now
+            return es[0](ep) if es[0] is not None else False
         fast_train.train_epochs(step, samples, device, batch_size, epochs,
                                 epoch_end=epoch_end)
         fast_train.sync(device)
-        return model, time.time() - t0, len(samples[0]), per_epoch
+        return finish(model), time.time() - t0, len(samples[0]), per_epoch
 
     samples = []
     for u, items in train_items.items():
@@ -792,7 +832,9 @@ def _train_bprmf(train_items, n_users, n_items, emb_dim, epochs, lr,
             loss.backward()
             opt.step()
         per_epoch.append(time.time() - ep_t0)
-    return model, time.time() - t0, len(samples), per_epoch
+        if es[0] is not None and es[0](ep):
+            break
+    return finish(model), time.time() - t0, len(samples), per_epoch
 
 
 def run_global_arm(train_items, test_data, n_users, n_items, del_users,
@@ -820,23 +862,38 @@ def run_global_arm(train_items, test_data, n_users, n_items, del_users,
     # ---- the original model, on the full dataset ----
     # (with one model for every deletion it is trained once and its time
     # reused: the retrain below does not start from it)
+    es_on = early_stop.on()
+    best_ep = epochs
     if cache and 'train_time' in cache:
         train_time, n_full, ep_full = cache['train_time'], cache['n_full'], cache['ep_full']
+        best_ep = cache.get('best_ep', epochs)
         cache['reused'] = True
         print("       model: the original model is reused (trained once), "
               f"train time {train_time:.1f}s from that training")
     else:
-        _, train_time, n_full, ep_full = _train_bprmf(train_items, n_users, n_items,
-                                                       emb_dim, epochs, lr,
-                                                       batch_size, device, seed)
+        stopper = ((lambda m: early_stop.model_stopper(m, list(train_items), train_items,
+                                                       n_items, device))
+                   if es_on else None)
+        orig, train_time, n_full, ep_full = _train_bprmf(
+            train_items, n_users, n_items, emb_dim, epochs, lr, batch_size, device,
+            seed, stopper=stopper)
+        if es_on:
+            best_ep = orig._es_best_epoch
+            print(f"       early stop: retrain model settled at epoch {best_ep}")
         if cache is not None:
-            cache.update(train_time=train_time, n_full=n_full, ep_full=ep_full)
+            cache.update(train_time=train_time, n_full=n_full, ep_full=ep_full,
+                         best_ep=best_ep)
     # ---- the retrained model, on the data with the deleted users removed ----
     rseed = cache['rng_seed'] if cache and 'reused' in cache else seed
+    # with early stopping the retrain runs the epochs the original settled on
     model, unlearn_time, n_ret, ep_ret = _train_bprmf(
-        retained, n_users, n_items, emb_dim, epochs, lr, batch_size, device, rseed)
+        retained, n_users, n_items, emb_dim, best_ep if es_on else epochs, lr,
+        batch_size, device, rseed)
+    early_stop.LAST = {'global': best_ep if es_on else epochs}
 
     test_retained = {u: it for u, it in test_data.items() if u not in del_users}
+    if es_on:
+        retained = early_stop.with_val(retained)     # ranking excludes the val items
     if fast_train.use_gpu_engine():
         res = fast_train.evaluate_topk(
             lambda ut: model.user_embedding.weight[ut] @ model.item_embedding.weight.T,
@@ -903,6 +960,17 @@ def main():
                     help='ARM:seed,ARM:seed,... already finished in an earlier, '
                          'interrupted run of this log; they are not run again. '
                          'run_blocks.sh passes them when it resumes a log.')
+    ap.add_argument('--val_ratio', type=float, default=0.0,
+                    help='> 0: hold out this share of each user\'s training items '
+                         'as a validation split and train with early stopping on '
+                         'it (the authors\' rule: up to --max_epochs, Recall@20 every '
+                         '--eval_every epochs, stop after --patience evaluations '
+                         'without improvement). 0: fixed --epochs.')
+    ap.add_argument('--val_seed', type=int, default=2024)
+    ap.add_argument('--max_epochs', type=int, default=1000)
+    ap.add_argument('--eval_every', type=int, default=5)
+    ap.add_argument('--patience', type=int, default=10)
+    ap.add_argument('--agg_patience', type=int, default=10)
     ap.add_argument('--out_dir', default=None)
     ap.add_argument('--tag', default='')
     ap.add_argument('--legacy_seed', type=int, default=42,
@@ -956,6 +1024,14 @@ def main():
     device = 'cuda' if torch.cuda.is_available() else 'cpu'
     train_items, test_data, n_users, n_items = load_data(args.dataset, data_root)
     print(f"  {args.dataset}: {n_users} users, {n_items} items, device={device}")
+    if args.val_ratio > 0:
+        # every partition, deletion set and model works on the training part
+        train_items, val = early_stop.split_validation(train_items, args.val_ratio,
+                                                       args.val_seed)
+        early_stop.configure(val, every=args.eval_every, patience=args.patience,
+                             max_epochs=args.max_epochs, agg_patience=args.agg_patience,
+                             agg_max_epochs=args.agg_epochs)
+    print(f"  early stopping: {early_stop.describe()}")
     # From here on data_root only locates the dataset's own files (the WMF
     # embeddings of the RECERASER partition), which live in data/<dataset>/,
     # not in the parent data/ that load_data takes.
@@ -1219,14 +1295,23 @@ def main():
         # pass for RecEraser, the whole retained set for the retrain).
         # Unlike the seconds above it does not depend on the hardware or
         # on what else runs on the GPU.
+        es_ep = early_stop.LAST if early_stop.on() else {}
         if arm == 'GLOBAL':
-            work = int(row.get('shard_interactions_unlearn') or 0) * args.epochs
+            work = (int(row.get('shard_interactions_unlearn') or 0)
+                    * es_ep.get('global', args.epochs))
         else:
-            work = sum(per_shard_inter.values()) * args.retrain_epochs
+            ep_of = es_ep.get('shards', {})
+            work = sum(n * ep_of.get(s, args.retrain_epochs)
+                       for s, n in per_shard_inter.items())
             if arm == 'RECERASER':
                 n_kept = sum(len(it) for u, it in train_items.items()
                              if u not in del_users)
-                work += n_kept * args.agg_epochs
+                work += n_kept * es_ep.get('agg', args.agg_epochs)
+        if es_ep:
+            print(f"       retrain epochs (early stop): "
+                  + (f"global={es_ep['global']}" if 'global' in es_ep else
+                     ", ".join(f"s{s}={e}" for s, e in sorted(es_ep.get('shards', {}).items()))
+                     + (f" agg={es_ep['agg']}" if 'agg' in es_ep else '')))
         bg1 = gpu_probe.background_load()
         row['unlearn_samples'] = work
         row['bg_load_before'], row['bg_load_after'] = bg0, bg1
@@ -1256,9 +1341,10 @@ def main():
             # the training loop is iterating over more than that shard's
             # data.
             rate = {}
+            ep_of = (early_stop.LAST.get('shards', {}) if early_stop.on() else {})
             for s in per_shard_time:
                 n_int = per_shard_inter.get(s, 0)
-                per_epoch = per_shard_time[s] / max(args.retrain_epochs, 1)
+                per_epoch = per_shard_time[s] / max(ep_of.get(s, args.retrain_epochs), 1)
                 rate[s] = (per_epoch / n_int) if n_int else float('nan')
             if rate:          # one shard (single request): nothing to compare
                 ok = [r for r in rate.values() if r == r]

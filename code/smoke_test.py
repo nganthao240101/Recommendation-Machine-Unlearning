@@ -68,6 +68,12 @@ def main():
     ok &= run('single_request',
               [py, os.path.join(HERE, 'exp_single_request.py'), *common,
                '--n_users', '2'], root)
+    # early stopping on a validation split (EARLY_STOP=1)
+    ok &= run('partition_quality_es',
+              [py, os.path.join(HERE, 'exp_partition_quality.py'), *common,
+               '--unlearn_mode', 'random', '--unlearn_ratio', '0.05',
+               '--val_ratio', '0.1', '--max_epochs', '6', '--eval_every', '2',
+               '--patience', '2', '--agg_patience', '2'], root)
     # the same two with the WMF backbone (run_blocks.sh fullwmf)
     ok &= run('partition_quality_wmf',
               [py, os.path.join(HERE, 'exp_partition_quality.py'), *common,

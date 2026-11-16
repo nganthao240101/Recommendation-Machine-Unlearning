@@ -402,7 +402,7 @@ class ShardModels:
 # ============================================================================
 
 def train_shard_model(model, shard_data, n_items, device,
-                     batch_size=512, lr=0.05, n_epochs=100):
+                     batch_size=512, lr=0.05, n_epochs=100, epoch_end=None):
     """Train model cho một shard.
 
     Returns (final_loss, elapsed_seconds, n_samples) so a caller can
@@ -412,7 +412,8 @@ def train_shard_model(model, shard_data, n_items, device,
     over the whole dataset).
     """
     if isinstance(model, wmf_backbone.WMF):
-        return wmf_backbone.train_wmf_model(model, shard_data, device, lr, n_epochs)
+        return wmf_backbone.train_wmf_model(model, shard_data, device, lr, n_epochs,
+                                            epoch_end=epoch_end)
 
     t0 = time.time()
     optimizer = torch.optim.Adagrad(model.parameters(), lr=lr, initial_accumulator_value=1e-8)
@@ -429,7 +430,7 @@ def train_shard_model(model, shard_data, n_items, device,
             optimizer.step()
             return loss
         total, _ = fast_train.train_epochs(step, samples, device, batch_size,
-                                           n_epochs, log_every=20)
+                                           n_epochs, log_every=20, epoch_end=epoch_end)
         fast_train.sync(device)
         return total, time.time() - t0, len(samples[0])
 
@@ -472,6 +473,8 @@ def train_shard_model(model, shard_data, n_items, device,
             avg_loss = total_loss / n_batches
             print(f"        Epoch {epoch+1}: loss={avg_loss:.4f}")
 
+        if epoch_end is not None and epoch_end(epoch):
+            break
     return total_loss, time.time() - t0, len(samples)
 
 

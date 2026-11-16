@@ -91,9 +91,19 @@ SINGLE_SEEDS="${SINGLE_SEEDS:-0}"
 # Số epoch train (và train lại khi unlearn) của mọi arm. Khác 50 thì log có
 # đuôi _e<số epoch> (main_yelp_e100, ...), không đè log 50 epoch.
 EPOCHS="${EPOCHS:-50}"
+# Early stopping (EARLY_STOP=1): 10% train của mỗi user làm validation, train
+# tối đa 1000 epoch, Recall@20 mỗi 5 epoch, dừng sau PATIENCE lần không tốt hơn
+# (tác giả: flag_step=10), lấy lại trọng số tốt nhất; unlearn train lại đúng số
+# epoch đó. Log có đuôi _es, không đè log epoch cố định.
+EARLY_STOP="${EARLY_STOP:-0}"
+PATIENCE="${PATIENCE:-10}"
+es_args () {
+  [ "$EARLY_STOP" = 1 ] && echo "--val_ratio ${VAL_RATIO:-0.1} --max_epochs ${MAX_EPOCHS:-1000} --eval_every ${EVAL_EVERY:-5} --patience $PATIENCE --agg_patience ${AGG_PATIENCE:-10}"
+}
 bsuffix () {
   [ "$BACKBONE" = wmf ] && printf _wmf
   [ "$EPOCHS" != 50 ] && printf "_e%s" "$EPOCHS"
+  [ "$EARLY_STOP" = 1 ] && printf _es
   echo
 }
 
@@ -191,7 +201,7 @@ pq () {   # pq <log> <ds> [k=..] [dim=..] [mode=..] [arms=..] [-- extra args]
     --unlearn_mode "$m" --n_shards "$k" --emb_dim "$d" --sig_dim $SIG \
     --epochs $EPOCHS --retrain_epochs $EPOCHS --lr 0.05 --batch_size 512 \
     --unlearn_ratio 0.01 --seeds $SEEDS --train_seed $TRAIN_SEED --arms "$a" \
-    --backbone "$BACKBONE" "$@"
+    --backbone "$BACKBONE" $(es_args) "$@"
 }
 
 # trạng thái GPU: tên, bộ nhớ đã dùng, % tải, số process đang dùng GPU
@@ -437,10 +447,11 @@ block_yseeds () {
   export RECUNLEARN_ENGINE="${RECUNLEARN_ENGINE:-gpu}"
   local m n step arms
   local modes="${YS_MODES:-random most fewest}"
+  local x; x="$(bsuffix)"
   for m in $modes; do
     n=$(yseeds_log "$m")
-    if [ ! -f "logs/${n}_ps.out" ] && [ -f "logs/${n}.out" ]; then
-      echo "[seeded] ${n}_ps: $(python code/clean_old_results.py --seed-from "logs/${n}.out" "logs/${n}_ps.out") run seed 0 lấy từ $n"
+    if [ ! -f "logs/${n}_ps${x}.out" ] && [ -f "logs/${n}${x}.out" ]; then
+      echo "[seeded] ${n}_ps${x}: $(python code/clean_old_results.py --seed-from "logs/${n}${x}.out" "logs/${n}_ps${x}.out") run seed 0 lấy từ ${n}${x}"
     fi
   done
   for step in ${YS_STEPS:-1 2}; do
@@ -477,6 +488,24 @@ block_paired () {
   done
 }
 
+# ------------------------------------------------------------------ patience
+# Chọn patience cho early stopping TRÊN VALIDATION (không dùng test): train
+# Retrain + 8 shard SAFER A + 8 shard Random với patience rất dài, ghi đường
+# cong val Recall@20, rồi mô phỏng patience 2..30 và đề xuất giá trị nhỏ nhất
+# giữ val loss <= 0.5%. Log: logs/patience_<ds>.out
+#   PAT_DATASETS="yelp2018 ml-1m"
+block_patience () {
+  export RECUNLEARN_ENGINE="${RECUNLEARN_ENGINE:-gpu}"
+  local ds
+  for ds in ${PAT_DATASETS:-yelp2018 ml-1m}; do
+    banner "PATIENCE: $ds"
+    python code/tune_patience.py --dataset "$ds" --backbone "$BACKBONE" \
+      --max_epochs ${MAX_EPOCHS:-1000} --eval_every ${EVAL_EVERY:-5} \
+      2>&1 | tee "logs/patience_$(short $ds)$(bsuffix).out" \
+      | grep -E "^\s+\[|PATIENCE|^\s+(GLOBAL|PROPOSED|RANDOM_PERM)|^\s+[0-9]|RECOMMENDED|smallest|total"
+  done
+}
+
 # ------------------------------------------------------------------ compare
 # So sánh yelp2018 với ml-1m trên cùng các thí nghiệm: yelp2018 trước, rồi
 # ml-1m (CMP_DATASETS="ml-1m yelp2018" để đảo): main (1% random), most, fewest, single. Không chạy shards/dims/
@@ -510,7 +539,7 @@ block_status () {
   python code/clean_old_results.py --status
   echo ""
   echo "  Job dang chay:"
-  ps -ww -eo pid,etime,args | grep -E "exp_partition_quality|exp_single_request|run_blocks\.sh (main|modes|single|shards|dims|recpart|all|full|fullwmf|compare|epochs|kyelp|yseeds)" \
+  ps -ww -eo pid,etime,args | grep -E "exp_partition_quality|exp_single_request|run_blocks\.sh (main|modes|single|shards|dims|recpart|all|full|fullwmf|compare|epochs|kyelp|yseeds|patience)" \
     | grep -v grep | sed 's/^/    /' || echo "    (khong co job nao)"
 }
 
@@ -611,8 +640,8 @@ block_smoke () {
 # tiếp. Lúc đó all bỏ qua log đã xong, chạy tiếp log dở từ run còn thiếu.
 block_start () {
   local blk="${1:-all}"
-  case "$blk" in all|full|fullwmf|compare|epochs|kyelp|yseeds|main|modes|single|shards|dims|recpart) ;;
-    *) echo "!! start chỉ nhận: all | full | fullwmf | compare | epochs | kyelp | yseeds | main | modes | single | shards | dims | recpart"; exit 1 ;;
+  case "$blk" in all|full|fullwmf|compare|epochs|kyelp|yseeds|patience|main|modes|single|shards|dims|recpart) ;;
+    *) echo "!! start chỉ nhận: all | full | fullwmf | compare | epochs | kyelp | yseeds | patience | main | modes | single | shards | dims | recpart"; exit 1 ;;
   esac
   if [ -f "$QUEUEFILE" ] && kill -0 "$(cat "$QUEUEFILE")" 2>/dev/null; then
     echo "!! Đã có một chuỗi đang xếp hàng (PID $(cat "$QUEUEFILE")). Không cần start thêm."; exit 1
@@ -751,7 +780,7 @@ block_results () {
 }
 
 case "${1:-}" in
-  main|modes|single|shards|dims|recpart|all|full|fullwmf|compare|epochs|kyelp|yseeds) take_lock ;;
+  main|modes|single|shards|dims|recpart|all|full|fullwmf|compare|epochs|kyelp|yseeds|patience) take_lock ;;
 esac
 
 case "${1:-}" in
@@ -770,6 +799,7 @@ case "${1:-}" in
   epochs)  block_epochs ;;
   kyelp)   block_kyelp ;;
   yseeds)  block_yseeds ;;
+  patience) block_patience ;;
   paired)  shift; block_paired "$@" ;;
   epcompare) python code/compare_epochs.py --dataset "$(short "${EP_DATASET:-yelp2018}")" ;;
   kcompare) python code/compare_epochs.py --dataset "$(short "${EP_DATASET:-yelp2018}")" --by k ;;
