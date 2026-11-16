@@ -500,12 +500,12 @@ block_paired () {
 # (seed 0-4 chọn user bị xóa), mean+-std qua 5 lần. Thứ tự mode: single trước,
 # rồi most, fewest. Model đã lưu dùng chung cho cả 3 mode (chỉ train 1 lần).
 #   YO_DATASET=yelp2018  YO_MODES="single most fewest"
-#   YO_ARMS=PROPOSED,RANDOM_PERM,PROPOSED_BAL,SISA,RANDOM_EMB (thêm RECERASER,GLOBAL khi cần)
+#   YO_ARMS=PROPOSED,RANDOM_EMB,RANDOM_PERM,SISA,PROPOSED_BAL (thêm RECERASER,GLOBAL khi cần)
 #   EARLY_STOP=1 PATIENCE=10 -> log _es (mode_single_yelp_es, ...)
 block_yone () {
   export RECUNLEARN_ENGINE="${RECUNLEARN_ENGINE:-gpu}"
   local ds="${YO_DATASET:-yelp2018}" m
-  local arms="${YO_ARMS:-PROPOSED,RANDOM_PERM,PROPOSED_BAL,SISA,RANDOM_EMB}"
+  local arms="${YO_ARMS:-PROPOSED,RANDOM_EMB,RANDOM_PERM,SISA,PROPOSED_BAL}"
   banner "YONE: $ds, 1 model/arm (lưu), unlearn 5 lần, mode ${YO_MODES:-single most fewest}, arms $arms"
   for m in ${YO_MODES:-single most fewest}; do
     TRAIN_SEED=0 pq "mode_${m}_$(short $ds)" "$ds" mode=$m arms="$arms"
