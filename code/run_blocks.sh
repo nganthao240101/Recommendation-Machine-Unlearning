@@ -531,6 +531,33 @@ block_patience () {
   done
 }
 
+# ------------------------------------------------------------------ esauto
+# Một lệnh cho cả quy trình early stopping trên YO_DATASET (mặc định yelp2018):
+#   1) chọn patience trên validation (tune_patience.py, log patience_<ds>.out);
+#   2) lấy giá trị RECOMMENDED (không có thì PATIENCE_FALLBACK, mặc định 10 =
+#      flag_step của tác giả);
+#   3) EARLY_STOP=1 PATIENCE=<giá trị đó> chạy yone: train tối đa 1000 epoch
+#      với early stopping, lưu model, unlearn 5 lần ở mode single, rồi most,
+#      fewest (train lại đúng số epoch tốt nhất của từng model).
+# Đã có logs/patience_<ds>.out với dòng RECOMMENDED thì bỏ qua bước 1.
+block_esauto () {
+  export RECUNLEARN_ENGINE="${RECUNLEARN_ENGINE:-gpu}"
+  local ds="${YO_DATASET:-yelp2018}" plog p
+  plog="logs/patience_$(short $ds).out"
+  if ! grep -q "RECOMMENDED patience" "$plog" 2>/dev/null; then
+    EARLY_STOP=0 PAT_DATASETS="$ds" block_patience
+  else
+    echo "[skip] chọn patience: đã có trong $plog"
+  fi
+  p=$(grep -o "RECOMMENDED patience = [0-9]*" "$plog" 2>/dev/null | grep -o "[0-9]*$" | tail -1)
+  if [ -z "$p" ]; then
+    p="${PATIENCE_FALLBACK:-10}"
+    echo "!! $plog không có giá trị RECOMMENDED -> dùng patience $p"
+  fi
+  banner "ESAUTO: $ds, patience = $p (chọn trên validation), train tối đa ${MAX_EPOCHS:-1000} epoch"
+  EARLY_STOP=1 PATIENCE="$p" block_yone
+}
+
 # ------------------------------------------------------------------ compare
 # So sánh yelp2018 với ml-1m trên cùng các thí nghiệm: yelp2018 trước, rồi
 # ml-1m (CMP_DATASETS="ml-1m yelp2018" để đảo): main (1% random), most, fewest, single. Không chạy shards/dims/
@@ -564,7 +591,7 @@ block_status () {
   python code/clean_old_results.py --status
   echo ""
   echo "  Job dang chay:"
-  ps -ww -eo pid,etime,args | grep -E "exp_partition_quality|exp_single_request|run_blocks\.sh (main|modes|single|shards|dims|recpart|all|full|fullwmf|compare|epochs|kyelp|yseeds|yone|patience)" \
+  ps -ww -eo pid,etime,args | grep -E "exp_partition_quality|exp_single_request|run_blocks\.sh (main|modes|single|shards|dims|recpart|all|full|fullwmf|compare|epochs|kyelp|yseeds|yone|patience|esauto)" \
     | grep -v grep | sed 's/^/    /' || echo "    (khong co job nao)"
 }
 
@@ -665,8 +692,8 @@ block_smoke () {
 # tiếp. Lúc đó all bỏ qua log đã xong, chạy tiếp log dở từ run còn thiếu.
 block_start () {
   local blk="${1:-all}"
-  case "$blk" in all|full|fullwmf|compare|epochs|kyelp|yseeds|yone|patience|main|modes|single|shards|dims|recpart) ;;
-    *) echo "!! start chỉ nhận: all | full | fullwmf | compare | epochs | kyelp | yseeds | yone | patience | main | modes | single | shards | dims | recpart"; exit 1 ;;
+  case "$blk" in all|full|fullwmf|compare|epochs|kyelp|yseeds|yone|patience|esauto|main|modes|single|shards|dims|recpart) ;;
+    *) echo "!! start chỉ nhận: all | full | fullwmf | compare | epochs | kyelp | yseeds | yone | patience | esauto | main | modes | single | shards | dims | recpart"; exit 1 ;;
   esac
   if [ -f "$QUEUEFILE" ] && kill -0 "$(cat "$QUEUEFILE")" 2>/dev/null; then
     echo "!! Đã có một chuỗi đang xếp hàng (PID $(cat "$QUEUEFILE")). Không cần start thêm."; exit 1
@@ -805,7 +832,7 @@ block_results () {
 }
 
 case "${1:-}" in
-  main|modes|single|shards|dims|recpart|all|full|fullwmf|compare|epochs|kyelp|yseeds|yone|patience) take_lock ;;
+  main|modes|single|shards|dims|recpart|all|full|fullwmf|compare|epochs|kyelp|yseeds|yone|patience|esauto) take_lock ;;
 esac
 
 case "${1:-}" in
@@ -825,6 +852,7 @@ case "${1:-}" in
   kyelp)   block_kyelp ;;
   yseeds)  block_yseeds ;;
   yone)    block_yone ;;
+  esauto)  block_esauto ;;
   patience) block_patience ;;
   paired)  shift; block_paired "$@" ;;
   epcompare) python code/compare_epochs.py --dataset "$(short "${EP_DATASET:-yelp2018}")" ;;
