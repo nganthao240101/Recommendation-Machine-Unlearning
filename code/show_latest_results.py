@@ -42,9 +42,10 @@ SINGLE_DONE = re.compile(r'^\s*\[([A-Z_]+)\]\s+single-request unlearn time', re.
 
 def describe(name):
     """log name -> (dataset, setting, number of arms)"""
-    es = name.endswith('_es')                 # early stopping on validation
+    esu = name.endswith('_esu')               # early stopping, also at unlearning
+    es = esu or name.endswith('_es')          # early stopping on validation
     if es:
-        name = name[:-3]
+        name = name[:-4] if esu else name[:-3]
     m = re.search(r'_e(\d+)$', name)
     epochs = int(m.group(1)) if m else 50
     if m:
@@ -73,7 +74,8 @@ def describe(name):
         base['partition'] = {'recinp': 'InP', 'recrand': 'random'}[stem]
         n_arms = 1
     base['model'] = 'WMF' if wmf else 'BPRMF'
-    base['epochs'] = 'early stop' if es else epochs
+    base['epochs'] = ('early stop (train + unlearn)' if esu
+                      else 'early stop' if es else epochs)
     if ps:
         base['models'] = 'one per seed'
     setting = '  '.join(f'{k}={v}' for k, v in base.items())

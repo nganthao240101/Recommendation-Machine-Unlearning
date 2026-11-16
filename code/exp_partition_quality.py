@@ -633,7 +633,7 @@ def _ckpt_meta(args, arm):
         'wmf': wmf_backbone.describe(), 'agg_epochs': args.agg_epochs,
         'receraser_partition': args.receraser_partition,
         'receraser_init': args.receraser_init, 'safer_b_map': SAFER_B_MAP,
-        'early_stop': early_stop.describe(), 'val_ratio': args.val_ratio,
+        'early_stop': early_stop.describe_train(), 'val_ratio': args.val_ratio,
         'val_seed': args.val_seed, 'engine': fast_train.engine_name(),
     }
 
@@ -754,22 +754,35 @@ def run_sharded_arm(train_items, test_data, n_users, n_items, n_shards,
     per_shard_time = {}
     per_shard_inter = {}
     per_shard_epochs = {}
+    unl_best = {}
     t0 = time.time()
     for sid in affected:
         model = shard_models.get_model(sid)
         if reset_on_retrain:
             model = shard_models.create_model(sid, device)
-        # with early stopping the retrain runs the epochs the shard settled
-        # on when it was trained (no evaluation inside the timed retrain)
-        n_ep = shard_epochs.get(sid, retrain_epochs) if es_on else retrain_epochs
-        _, elapsed, n_samples = train_shard_model(
-            model, retained_shard_data[sid], n_items, device,
-            batch_size=batch_size, lr=lr, n_epochs=n_ep)
+        if early_stop.unlearn_on():
+            # the retrain follows the training procedure: early stopping on
+            # the validation items of the shard's remaining users, best weights
+            es = early_stop.model_stopper(model, list(retained_shard_data[sid]),
+                                          retained_shard_data[sid], n_items, device)
+            _, elapsed, n_samples = train_shard_model(
+                model, retained_shard_data[sid], n_items, device,
+                batch_size=batch_size, lr=lr,
+                n_epochs=early_stop.CFG['max_epochs'], epoch_end=es)
+            unl_best[sid] = es.finish()
+            n_ep = es.last_epoch          # epochs actually trained (the work)
+        else:
+            # with early stopping the retrain runs the epochs the shard settled
+            # on when it was trained (no evaluation inside the timed retrain)
+            n_ep = shard_epochs.get(sid, retrain_epochs) if es_on else retrain_epochs
+            _, elapsed, n_samples = train_shard_model(
+                model, retained_shard_data[sid], n_items, device,
+                batch_size=batch_size, lr=lr, n_epochs=n_ep)
         per_shard_time[sid] = elapsed
         per_shard_inter[sid] = n_samples
         per_shard_epochs[sid] = n_ep
     unlearn_time = time.time() - t0
-    early_stop.LAST = {'shards': per_shard_epochs}
+    early_stop.LAST = {'shards': per_shard_epochs, 'best': unl_best}
     parallel_time = max(per_shard_time.values()) if per_shard_time else 0.0
 
     # ---- evaluate on retained test users only ----
@@ -946,11 +959,20 @@ def run_global_arm(train_items, test_data, n_users, n_items, del_users,
                          best_ep=best_ep)
     # ---- the retrained model, on the data with the deleted users removed ----
     rseed = cache['rng_seed'] if cache and 'reused' in cache else seed
-    # with early stopping the retrain runs the epochs the original settled on
-    model, unlearn_time, n_ret, ep_ret = _train_bprmf(
-        retained, n_users, n_items, emb_dim, best_ep if es_on else epochs, lr,
-        batch_size, device, rseed)
-    early_stop.LAST = {'global': best_ep if es_on else epochs}
+    if early_stop.unlearn_on():
+        # the retrain follows the training procedure: early stopping on the
+        # remaining users' validation items, best weights
+        model, unlearn_time, n_ret, ep_ret = _train_bprmf(
+            retained, n_users, n_items, emb_dim, epochs, lr, batch_size, device, rseed,
+            stopper=lambda m: early_stop.model_stopper(m, list(retained), retained,
+                                                       n_items, device))
+        early_stop.LAST = {'global': len(ep_ret), 'best': {'global': model._es_best_epoch}}
+    else:
+        # with early stopping the retrain runs the epochs the original settled on
+        model, unlearn_time, n_ret, ep_ret = _train_bprmf(
+            retained, n_users, n_items, emb_dim, best_ep if es_on else epochs, lr,
+            batch_size, device, rseed)
+        early_stop.LAST = {'global': best_ep if es_on else epochs}
 
     test_retained = {u: it for u, it in test_data.items() if u not in del_users}
     if es_on:
@@ -1038,6 +1060,11 @@ def main():
     ap.add_argument('--eval_every', type=int, default=5)
     ap.add_argument('--patience', type=int, default=10)
     ap.add_argument('--agg_patience', type=int, default=10)
+    ap.add_argument('--unlearn_es', type=int, default=0,
+                    help='1: the retrain of an unlearning request stops early on '
+                         'the validation split too and keeps its best weights, as '
+                         'the training does; 0: it trains for the epochs the '
+                         'trained model settled on')
     ap.add_argument('--out_dir', default=None)
     ap.add_argument('--tag', default='')
     ap.add_argument('--legacy_seed', type=int, default=42,
@@ -1097,7 +1124,7 @@ def main():
                                                        args.val_seed)
         early_stop.configure(val, every=args.eval_every, patience=args.patience,
                              max_epochs=args.max_epochs, agg_patience=args.agg_patience,
-                             agg_max_epochs=args.agg_epochs)
+                             agg_max_epochs=args.agg_epochs, unlearn=bool(args.unlearn_es))
     print(f"  early stopping: {early_stop.describe()}")
     # From here on data_root only locates the dataset's own files (the WMF
     # embeddings of the RECERASER partition), which live in data/<dataset>/,
@@ -1378,6 +1405,11 @@ def main():
                 n_kept = sum(len(it) for u, it in train_items.items()
                              if u not in del_users)
                 work += n_kept * es_ep.get('agg', args.agg_epochs)
+        if es_ep.get('best'):
+            b = es_ep['best']
+            print("       unlearn early stop: best epoch "
+                  + ", ".join(f"{'s' if isinstance(s, int) else ''}{s}={e}"
+                              for s, e in sorted(b.items(), key=lambda kv: str(kv[0]))))
         if es_ep:
             print(f"       retrain epochs (early stop): "
                   + (f"global={es_ep['global']}" if 'global' in es_ep else

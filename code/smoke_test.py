@@ -73,7 +73,7 @@ def main():
               [py, os.path.join(HERE, 'exp_partition_quality.py'), *common,
                '--unlearn_mode', 'random', '--unlearn_ratio', '0.05',
                '--val_ratio', '0.1', '--max_epochs', '6', '--eval_every', '2',
-               '--patience', '2', '--agg_patience', '2'], root)
+               '--patience', '2', '--agg_patience', '2', '--unlearn_es', '1'], root)
     # the same two with the WMF backbone (run_blocks.sh fullwmf)
     ok &= run('partition_quality_wmf',
               [py, os.path.join(HERE, 'exp_partition_quality.py'), *common,

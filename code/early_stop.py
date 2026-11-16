@@ -33,6 +33,7 @@ CFG = {
     'agg_max_epochs': 50,  # authors: --epoch_agg 50
     'k': 20,              # Recall@20 (authors: ret['recall'][0], Ks=[20, ...])
     'val': None,          # {user: [val items]}
+    'unlearn': False,     # the retrain of an unlearning request stops early too
 }
 
 # epochs chosen in the last training of a run: {'shards': {sid: ep},
@@ -45,13 +46,29 @@ def on():
 
 
 def configure(val, every=5, patience=10, max_epochs=1000, agg_patience=10,
-              agg_max_epochs=50, k=20):
+              agg_max_epochs=50, k=20, unlearn=False):
     CFG.update(on=True, val=val, every=every, patience=patience,
                max_epochs=max_epochs, agg_patience=agg_patience,
-               agg_max_epochs=agg_max_epochs, k=k)
+               agg_max_epochs=agg_max_epochs, k=k, unlearn=unlearn)
+
+
+def unlearn_on():
+    """Retrain after a deletion with the same early stopping as the
+    training (else: for the epochs the trained model settled on)."""
+    return CFG['on'] and CFG['unlearn']
 
 
 def describe():
+    d = describe_train()
+    if not CFG['on']:
+        return d
+    return d + "; unlearning retrain: " + ("early stopping too, best weights" if CFG['unlearn']
+                                          else "the epochs the trained model settled on")
+
+
+def describe_train():
+    """The training part only (it decides a saved model, the unlearning
+    retrain does not)."""
     if not CFG['on']:
         return 'off (fixed epochs)'
     n = sum(len(v) for v in CFG['val'].values())

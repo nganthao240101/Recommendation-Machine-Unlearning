@@ -97,8 +97,12 @@ EPOCHS="${EPOCHS:-50}"
 # epoch đó. Log có đuôi _es, không đè log epoch cố định.
 EARLY_STOP="${EARLY_STOP:-0}"
 PATIENCE="${PATIENCE:-10}"
+# UNLEARN_ES=1 (mặc định khi EARLY_STOP=1): train lại khi unlearn cũng early
+# stopping trên validation và lấy trọng số tốt nhất, đúng quy trình train ->
+# log đuôi _esu. UNLEARN_ES=0: train lại đúng số epoch tốt nhất -> log _es.
+UNLEARN_ES="${UNLEARN_ES:-1}"
 es_args () {
-  [ "$EARLY_STOP" = 1 ] && echo "--val_ratio ${VAL_RATIO:-0.1} --max_epochs ${MAX_EPOCHS:-1000} --eval_every ${EVAL_EVERY:-5} --patience $PATIENCE --agg_patience ${AGG_PATIENCE:-10}"
+  [ "$EARLY_STOP" = 1 ] && echo "--val_ratio ${VAL_RATIO:-0.1} --max_epochs ${MAX_EPOCHS:-1000} --eval_every ${EVAL_EVERY:-5} --patience $PATIENCE --agg_patience ${AGG_PATIENCE:-10} --unlearn_es $UNLEARN_ES"
 }
 # Lưu model đã train (1 model cho mọi lần xóa) vào checkpoints/ trước khi
 # unlearn; lần chạy sau cùng cấu hình (mode khác, log chạy tiếp) nạp lại thay
@@ -110,7 +114,9 @@ save_args () {
 bsuffix () {
   [ "$BACKBONE" = wmf ] && printf _wmf
   [ "$EPOCHS" != 50 ] && printf "_e%s" "$EPOCHS"
-  [ "$EARLY_STOP" = 1 ] && printf _es
+  if [ "$EARLY_STOP" = 1 ]; then
+    if [ "$UNLEARN_ES" = 1 ]; then printf _esu; else printf _es; fi
+  fi
   echo
 }
 
