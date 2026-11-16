@@ -152,6 +152,12 @@ def parse_log(path):
                 if mm:
                     pending[k] = float(mm.group(1))
             continue
+        if pending is not None and 'retrain epochs (early stop)' in ln:
+            # early stopping: the epochs each retrained model ran
+            pending['retrain_epochs_es'] = ln.split(':', 1)[1].strip()
+            continue
+        if pending is not None and '[model]' in ln:
+            continue
         if pending is not None and 'per-shard retrain' in ln:
             # the per-shard breakdown: keep it so the sum of the shard times
             # can be checked against the reported unlearn time
