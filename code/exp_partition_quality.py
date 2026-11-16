@@ -628,6 +628,7 @@ def _ckpt_meta(args, arm):
         'arm': arm, 'dataset': args.dataset, 'n_shards': args.n_shards,
         'emb_dim': args.emb_dim, 'sig_dim': args.sig_dim, 'epochs': args.epochs,
         'lr': args.lr, 'batch_size': args.batch_size, 'train_seed': args.train_seed,
+        **({'reg': args.reg} if args.reg != 0.01 else {}),
         'legacy_seed': args.legacy_seed, 'router': args.router,
         'sig_weighting': args.sig_weighting, 'backbone': args.backbone,
         'wmf': wmf_backbone.describe(), 'agg_epochs': args.agg_epochs,
@@ -1022,6 +1023,9 @@ def main():
     ap.add_argument('--epochs', type=int, default=50)
     ap.add_argument('--retrain_epochs', type=int, default=50)
     ap.add_argument('--lr', type=float, default=0.05)
+    ap.add_argument('--reg', type=float, default=0.01,
+                    help='L2 weight of the BPR loss for every BPR model '
+                         '(shards, retrain, RecEraser); the authors use 0.01')
     ap.add_argument('--batch_size', type=int, default=512)
     ap.add_argument('--unlearn_ratio', type=float, default=0.01)
     ap.add_argument('--unlearn_mode', default='most')
@@ -1111,6 +1115,9 @@ def main():
     args = ap.parse_args()
 
     data_root = args.data_root or os.path.join(os.path.dirname(PROJ), 'data')
+    import method_4_ours as _m4
+    import method_3_receraser_v2 as _m3
+    _m4.BPR_REG = _m3.BPR_REG = args.reg
     wmf_backbone.configure(args.backbone, args.wmf_c0, args.wmf_keep,
                            args.wmf_batch_users, dataset=args.dataset)
     tag = args.tag or f'{args.dataset}_K{args.n_shards}'
@@ -1133,6 +1140,7 @@ def main():
     emb = os.path.join(data_root, 'wmf_embeddings.npz')
     print(f"  WMF embeddings: {emb} ({'found' if os.path.exists(emb) else 'MISSING'})")
     print(f"  engine: {fast_train.engine_name()}")
+    print(f"  lr: {args.lr}  reg: {args.reg}")
     print(f"  epochs: {args.epochs} (retrain {args.retrain_epochs})")
     print(f"  backbone: {wmf_backbone.describe()}")
 

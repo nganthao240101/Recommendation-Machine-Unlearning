@@ -117,6 +117,8 @@ bsuffix () {
   if [ "$EARLY_STOP" = 1 ]; then
     if [ "$UNLEARN_ES" = 1 ]; then printf _esu; else printf _es; fi
   fi
+  [ "${REG:-0.01}" != 0.01 ] && printf "_reg%s" "$REG"
+  [ "${LR:-0.05}" != 0.05 ] && printf "_lr%s" "$LR"
   echo
 }
 
@@ -212,7 +214,7 @@ pq () {   # pq <log> <ds> [k=..] [dim=..] [mode=..] [arms=..] [-- extra args]
   [ "${1:-}" = "--" ] && shift
   run "${name}$(bsuffix)" python code/exp_partition_quality.py --dataset "$ds" \
     --unlearn_mode "$m" --n_shards "$k" --emb_dim "$d" --sig_dim $SIG \
-    --epochs $EPOCHS --retrain_epochs $EPOCHS --lr 0.05 --batch_size 512 \
+    --epochs $EPOCHS --retrain_epochs $EPOCHS --lr ${LR:-0.05} --reg ${REG:-0.01} --batch_size 512 \
     --unlearn_ratio 0.01 --seeds $SEEDS --train_seed $TRAIN_SEED --arms "$a" \
     --backbone "$BACKBONE" $(es_args) $(save_args) "$@"
 }
@@ -564,6 +566,33 @@ block_esauto () {
   EARLY_STOP=1 PATIENCE="$p" block_yone
 }
 
+# ------------------------------------------------------------------ regauto
+# Dò L2 reg x learning rate TRÊN VALIDATION (tune_reg.py: shard SAFER A +
+# Random, early stopping đánh giá mỗi epoch), chọn MỘT cấu hình chung (val
+# R@20 trung bình cao nhất), rồi chạy esauto với cấu hình đó cho mọi arm.
+# Đã có logs/tunereg_<ds>.out với dòng RECOMMENDED thì bỏ qua bước dò.
+#   REG_GRID="0.01 0.03 0.1 0.3"  LR_GRID="0.05 0.02"
+block_regauto () {
+  export RECUNLEARN_ENGINE="${RECUNLEARN_ENGINE:-gpu}"
+  local ds="${YO_DATASET:-yelp2018}" tlog r l
+  tlog="logs/tunereg_$(short $ds).out"
+  if ! grep -q "^RECOMMENDED" "$tlog" 2>/dev/null; then
+    banner "TUNE REG x LR: $ds (validation)"
+    python code/tune_reg.py --dataset "$ds" --regs "${REG_GRID:-0.01 0.03 0.1 0.3}" \
+      --lrs "${LR_GRID:-0.05 0.02}" --patience ${TR_PATIENCE:-15} 2>&1 | tee "$tlog" \
+      | grep -E "^\s+(reg|SAFER|Random|\[)|^RECOMMENDED|^  *[0-9]"
+  else
+    echo "[skip] dò reg/lr: đã có trong $tlog"
+  fi
+  r=$(grep -o "^RECOMMENDED reg=[0-9.e-]*" "$tlog" | tail -1 | cut -d= -f2)
+  l=$(grep -o "^RECOMMENDED reg=[0-9.e-]* lr=[0-9.e-]*" "$tlog" | tail -1 | sed 's/.*lr=//')
+  if [ -z "$r" ] || [ -z "$l" ]; then
+    echo "!! $tlog không có RECOMMENDED -> dừng (xem log)"; return 1
+  fi
+  banner "REGAUTO: $ds, reg=$r lr=$l (chọn trên validation)"
+  REG="$r" LR="$l" block_esauto
+}
+
 # ------------------------------------------------------------------ compare
 # So sánh yelp2018 với ml-1m trên cùng các thí nghiệm: yelp2018 trước, rồi
 # ml-1m (CMP_DATASETS="ml-1m yelp2018" để đảo): main (1% random), most, fewest, single. Không chạy shards/dims/
@@ -597,7 +626,7 @@ block_status () {
   python code/clean_old_results.py --status
   echo ""
   echo "  Job dang chay:"
-  ps -ww -eo pid,etime,args | grep -E "exp_partition_quality|exp_single_request|run_blocks\.sh (main|modes|single|shards|dims|recpart|all|full|fullwmf|compare|epochs|kyelp|yseeds|yone|patience|esauto)" \
+  ps -ww -eo pid,etime,args | grep -E "exp_partition_quality|exp_single_request|run_blocks\.sh (main|modes|single|shards|dims|recpart|all|full|fullwmf|compare|epochs|kyelp|yseeds|yone|patience|esauto|regauto)" \
     | grep -v grep | sed 's/^/    /' || echo "    (khong co job nao)"
 }
 
@@ -698,8 +727,8 @@ block_smoke () {
 # tiếp. Lúc đó all bỏ qua log đã xong, chạy tiếp log dở từ run còn thiếu.
 block_start () {
   local blk="${1:-all}"
-  case "$blk" in all|full|fullwmf|compare|epochs|kyelp|yseeds|yone|patience|esauto|main|modes|single|shards|dims|recpart) ;;
-    *) echo "!! start chỉ nhận: all | full | fullwmf | compare | epochs | kyelp | yseeds | yone | patience | esauto | main | modes | single | shards | dims | recpart"; exit 1 ;;
+  case "$blk" in all|full|fullwmf|compare|epochs|kyelp|yseeds|yone|patience|esauto|regauto|main|modes|single|shards|dims|recpart) ;;
+    *) echo "!! start chỉ nhận: all | full | fullwmf | compare | epochs | kyelp | yseeds | yone | patience | esauto | regauto | main | modes | single | shards | dims | recpart"; exit 1 ;;
   esac
   if [ -f "$QUEUEFILE" ] && kill -0 "$(cat "$QUEUEFILE")" 2>/dev/null; then
     echo "!! Đã có một chuỗi đang xếp hàng (PID $(cat "$QUEUEFILE")). Không cần start thêm."; exit 1
@@ -838,7 +867,7 @@ block_results () {
 }
 
 case "${1:-}" in
-  main|modes|single|shards|dims|recpart|all|full|fullwmf|compare|epochs|kyelp|yseeds|yone|patience|esauto) take_lock ;;
+  main|modes|single|shards|dims|recpart|all|full|fullwmf|compare|epochs|kyelp|yseeds|yone|patience|esauto|regauto) take_lock ;;
 esac
 
 case "${1:-}" in
@@ -859,6 +888,7 @@ case "${1:-}" in
   yseeds)  block_yseeds ;;
   yone)    block_yone ;;
   esauto)  block_esauto ;;
+  regauto) block_regauto ;;
   patience) block_patience ;;
   paired)  shift; block_paired "$@" ;;
   epcompare) python code/compare_epochs.py --dataset "$(short "${EP_DATASET:-yelp2018}")" ;;

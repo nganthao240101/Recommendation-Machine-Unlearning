@@ -314,6 +314,10 @@ class DeletionStableAssignment:
 # MODEL: BPRMF CHO MỖI SHARD
 # ============================================================================
 
+# L2 weight of the BPR loss (the authors' regs 0.01); set by --reg
+BPR_REG = 0.01
+
+
 class BPRMF(nn.Module):
     """Bayesian Personalized Ranking Matrix Factorization cho một shard"""
 
@@ -339,7 +343,7 @@ class BPRMF(nn.Module):
         diff = torch.clamp(pos_scores - neg_scores, -50.0, 50.0)
         loss = -torch.log(torch.sigmoid(diff) + 1e-10).mean()
         reg_loss = (u_emb.pow(2).sum() + pos_emb.pow(2).sum() +
-                    neg_emb.pow(2).sum()) / users.size(0) * 0.01
+                    neg_emb.pow(2).sum()) / users.size(0) * BPR_REG
 
         return loss + reg_loss
 

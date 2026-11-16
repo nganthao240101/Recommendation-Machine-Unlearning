@@ -42,6 +42,13 @@ SINGLE_DONE = re.compile(r'^\s*\[([A-Z_]+)\]\s+single-request unlearn time', re.
 
 def describe(name):
     """log name -> (dataset, setting, number of arms)"""
+    hp = {}
+    while True:                               # _reg0.1 / _lr0.02 (non-default)
+        m = re.search(r'_(reg|lr)([\d.e-]+)$', name)
+        if not m:
+            break
+        hp[m.group(1)] = m.group(2)
+        name = name[:m.start()]
     esu = name.endswith('_esu')               # early stopping, also at unlearning
     es = esu or name.endswith('_es')          # early stopping on validation
     if es:
@@ -78,6 +85,7 @@ def describe(name):
                       else 'early stop' if es else epochs)
     if ps:
         base['models'] = 'one per seed'
+    base.update(hp)
     setting = '  '.join(f'{k}={v}' for k, v in base.items())
     return ds, setting, n_arms
 

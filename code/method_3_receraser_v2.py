@@ -22,6 +22,8 @@ import argparse
 import numpy as np
 import torch
 import torch.nn as nn
+
+BPR_REG = 0.01      # L2 weight of the BPR loss, set by --reg
 import heapq
 
 PROJ = os.path.dirname(os.path.abspath(__file__))
@@ -600,7 +602,7 @@ class RecEraserModel(nn.Module):
 
         # Regularization (like original)
         reg = (u_emb.pow(2).sum() + pos_emb.pow(2).sum() + neg_emb.pow(2).sum()) / users.size(0)
-        reg_loss = 0.01 * reg  # L2 regularization
+        reg_loss = BPR_REG * reg  # L2 regularization (--reg, default 0.01)
         return loss + reg_loss
 
     @torch.no_grad()
