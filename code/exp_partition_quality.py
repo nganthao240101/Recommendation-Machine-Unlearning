@@ -617,6 +617,67 @@ def build_shard_data(train_items, user_to_shard, n_shards):
     return shard_data
 
 
+# ----------------------------------------------------------------------------
+# saved models (one model for every deletion)
+# ----------------------------------------------------------------------------
+def _ckpt_meta(args, arm):
+    """Everything that decides the trained model of an arm: two runs with
+    the same meta train the same model, whatever deletions follow (single,
+    most, fewest all start from it)."""
+    return {
+        'arm': arm, 'dataset': args.dataset, 'n_shards': args.n_shards,
+        'emb_dim': args.emb_dim, 'sig_dim': args.sig_dim, 'epochs': args.epochs,
+        'lr': args.lr, 'batch_size': args.batch_size, 'train_seed': args.train_seed,
+        'legacy_seed': args.legacy_seed, 'router': args.router,
+        'sig_weighting': args.sig_weighting, 'backbone': args.backbone,
+        'wmf': wmf_backbone.describe(), 'agg_epochs': args.agg_epochs,
+        'receraser_partition': args.receraser_partition,
+        'receraser_init': args.receraser_init, 'safer_b_map': SAFER_B_MAP,
+        'early_stop': early_stop.describe(), 'val_ratio': args.val_ratio,
+        'val_seed': args.val_seed, 'engine': fast_train.engine_name(),
+    }
+
+
+def _ckpt_path(args, arm):
+    import hashlib
+    meta = _ckpt_meta(args, arm)
+    h = hashlib.md5(json.dumps(meta, sort_keys=True).encode()).hexdigest()[:12]
+    return os.path.join(args.save_models, f'{args.dataset}_K{args.n_shards}_{arm}_{h}.pt'), meta
+
+
+def load_trained(args, arm, cache, device):
+    """Fill the one-model cache of an arm from its saved model, if any."""
+    path, meta = _ckpt_path(args, arm)
+    if not os.path.exists(path):
+        return False
+    try:
+        blob = torch.load(path, map_location=device, weights_only=False)
+    except Exception as exc:
+        print(f"       [model] could not read {path}: {exc} - training again")
+        return False
+    if blob.get('meta') != meta:
+        return False
+    cache.update(blob['cache'])
+    cache['_from_disk'] = True
+    print(f"       [model] loaded the trained model from {path} "
+          f"(trained once, train time {cache.get('train_time', 0):.1f}s from that training)")
+    return True
+
+
+def save_trained(args, arm, cache):
+    """Write the one-model cache of an arm (weights, train time, epochs)."""
+    if cache.get('_from_disk') or cache.get('_saved') or 'train_time' not in cache:
+        return
+    path, meta = _ckpt_path(args, arm)
+    os.makedirs(os.path.dirname(path) or '.', exist_ok=True)
+    keep = {k: v for k, v in cache.items()
+            if not k.startswith('_') and k not in ('rng_seed', 'reused')}
+    torch.save({'meta': meta, 'cache': keep}, path + '.tmp')
+    os.replace(path + '.tmp', path)
+    cache['_saved'] = True
+    print(f"       [model] saved the trained model to {path}")
+
+
 def run_sharded_arm(train_items, test_data, n_users, n_items, n_shards,
                     emb_dim, user_to_shard, del_users, epochs, lr, batch_size,
                     device, seed, retrain_epochs, reset_on_retrain=False,
@@ -966,6 +1027,12 @@ def main():
                          'it (the authors\' rule: up to --max_epochs, Recall@20 every '
                          '--eval_every epochs, stop after --patience evaluations '
                          'without improvement). 0: fixed --epochs.')
+    ap.add_argument('--save_models', default='',
+                    help='directory: with one model for every deletion '
+                         '(--train_seed >= 0) the trained model of each arm is '
+                         'saved there before the deletions, and loaded instead of '
+                         'trained again by a later run with the same settings '
+                         '(another deletion mode, or a resumed log)')
     ap.add_argument('--val_seed', type=int, default=2024)
     ap.add_argument('--max_epochs', type=int, default=1000)
     ap.add_argument('--eval_every', type=int, default=5)
@@ -1086,6 +1153,8 @@ def main():
                 caches.clear()            # the previous arm's model is done
             cache = caches.setdefault(arm, {})
             cache['rng_seed'] = seed      # the retrain of a reused model
+            if args.save_models and 'train_time' not in cache:
+                load_trained(args, arm, cache, device)
         if seed not in dels_by_seed:
             if args.legacy_mode:
                 # exactly reproduce the original method_4_ours.py deletion set
@@ -1283,6 +1352,8 @@ def main():
             row[f'ndcg_{k}'] = res['ndcg'][i]
 
         RESULTS.append(row)
+        if one_model and args.save_models and cache is not None:
+            save_trained(args, arm, cache)
         print(f"  [{arm}] R@10={row['recall_10']:.4f} NDCG@10={row['ndcg_10']:.4f} "
               f"| R@20={row['recall_20']:.4f} NDCG@20={row['ndcg_20']:.4f} "
               f"| R@50={row['recall_50']:.4f} NDCG@50={row['ndcg_50']:.4f}")

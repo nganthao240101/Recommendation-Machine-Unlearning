@@ -32,3 +32,4 @@ weights/
 
 # Claude Code local settings
 .claude/
+checkpoints/
