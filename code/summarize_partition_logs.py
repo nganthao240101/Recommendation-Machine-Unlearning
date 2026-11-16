@@ -172,6 +172,14 @@ def parse_log(path):
                     pending['work_derived'] = True
             pending = None
             continue
+        if pending is not None and ('retrain epochs' in ln or '[model]' in ln
+                                    or 'early stop:' in ln or '[idle-wait]' in ln):
+            # lines of the early-stopping / saved-model runs between the
+            # cost and the partition lines: keep reading this run
+            m = re.search(r'retrain epochs \(early stop\): (.*)$', ln)
+            if m:
+                pending['retrain_epochs'] = m.group(1).strip()
+            continue
         pending = None
 
     return recs
