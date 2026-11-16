@@ -527,14 +527,23 @@ block_yone () {
 # cong val Recall@20, rồi mô phỏng patience 2..30 và đề xuất giá trị nhỏ nhất
 # giữ val loss <= 0.5%. Log: logs/patience_<ds>.out
 #   PAT_DATASETS="yelp2018 ml-1m"
+# log chọn patience: patience_<ds>[_wmf][_reg..][_lr..].out (theo lr/reg dùng để dò)
+patience_log () {
+  local x=""
+  [ "$BACKBONE" = wmf ] && x="${x}_wmf"
+  [ "${REG:-0.01}" != 0.01 ] && x="${x}_reg${REG}"
+  [ "${LR:-0.05}" != 0.05 ] && x="${x}_lr${LR}"
+  echo "logs/patience_$(short $1)${x}.out"
+}
 block_patience () {
   export RECUNLEARN_ENGINE="${RECUNLEARN_ENGINE:-gpu}"
   local ds
   for ds in ${PAT_DATASETS:-yelp2018 ml-1m}; do
-    banner "PATIENCE: $ds"
+    banner "PATIENCE: $ds (lr=${LR:-0.05} reg=${REG:-0.01})"
     python code/tune_patience.py --dataset "$ds" --backbone "$BACKBONE" \
       --max_epochs ${MAX_EPOCHS:-1000} --eval_every ${EVAL_EVERY:-5} \
-      2>&1 | tee "logs/patience_$(short $ds)$(bsuffix).out" \
+      --lr ${LR:-0.05} --reg ${REG:-0.01} \
+      2>&1 | tee "$(patience_log "$ds")" \
       | grep -E "^\s+\[|PATIENCE|^\s+(GLOBAL|PROPOSED|RANDOM_PERM)|^\s+[0-9]|RECOMMENDED|smallest|total"
   done
 }
@@ -551,7 +560,7 @@ block_patience () {
 block_esauto () {
   export RECUNLEARN_ENGINE="${RECUNLEARN_ENGINE:-gpu}"
   local ds="${YO_DATASET:-yelp2018}" plog p
-  plog="logs/patience_$(short $ds).out"
+  plog="$(patience_log "$ds")"
   if ! grep -q "RECOMMENDED patience" "$plog" 2>/dev/null; then
     EARLY_STOP=0 PAT_DATASETS="$ds" block_patience
   else

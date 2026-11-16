@@ -56,6 +56,7 @@ def main():
     ap.add_argument('--emb_dim', type=int, default=64)
     ap.add_argument('--sig_dim', type=int, default=64)
     ap.add_argument('--lr', type=float, default=0.05)
+    ap.add_argument('--reg', type=float, default=0.01, help='BPR L2 weight')
     ap.add_argument('--batch_size', type=int, default=512)
     ap.add_argument('--val_ratio', type=float, default=0.1)
     ap.add_argument('--val_seed', type=int, default=2024)
@@ -72,6 +73,9 @@ def main():
     args = ap.parse_args()
 
     data_root = args.data_root or os.path.join(os.path.dirname(HERE), 'data')
+    import method_4_ours
+    import method_3_receraser_v2
+    method_4_ours.BPR_REG = method_3_receraser_v2.BPR_REG = args.reg
     wmf_backbone.configure(args.backbone, None, 0.7, 256, dataset=args.dataset)
     device = 'cuda' if torch.cuda.is_available() else 'cpu'
     train, test, n_users, n_items = load_data(args.dataset, data_root)
@@ -80,7 +84,7 @@ def main():
                          max_epochs=args.max_epochs)
     print(f"{args.dataset}: {n_users} users, {n_items} items, device={device}, "
           f"engine={fast_train.engine_name()}")
-    print(f"early stopping probe: {early_stop.describe()}")
+    print(f"early stopping probe: {early_stop.describe_train()}  lr={args.lr} reg={args.reg}")
     curves = {}                     # kind -> [history, ...]
     t_all = time.time()
 
