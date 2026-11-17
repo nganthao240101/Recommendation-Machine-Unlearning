@@ -180,6 +180,12 @@ def parse_log(path):
             if m:
                 pending['retrain_epochs'] = m.group(1).strip()
             continue
+        if pending is not None and 'unlearn split:' in ln:
+            m = re.search(r'train=([\d.]+)s eval=([\d.]+)s', ln)
+            if m:
+                pending['unlearn_train_time'] = float(m.group(1))
+                pending['unlearn_eval_time'] = float(m.group(2))
+            continue
         pending = None
 
     return recs

@@ -560,6 +560,7 @@ def run_receraser_arm(train_items, test_data, n_users, n_items, n_shards,
     per_shard_inter = {}
     per_shard_epochs = {}
     unl_best = {}
+    unl_eval = 0.0
     t0 = time.time()
     for sid in affected:
         # the shard is retrained FROM SCRATCH: its slice of the embedding
@@ -581,6 +582,7 @@ def run_receraser_arm(train_items, test_data, n_users, n_items, n_shards,
                 sid, retained_shard_data[sid], n_items, batch_size=batch_size,
                 lr=lr, n_epochs=early_stop.CFG['max_epochs'], epoch_end=es)
             unl_best[sid] = es.finish()
+            unl_eval += es.eval_time
             n_ep = es.last_epoch
         else:
             n_ep = shard_epochs.get(sid, retrain_epochs) if es_on else retrain_epochs
@@ -598,6 +600,7 @@ def run_receraser_arm(train_items, test_data, n_users, n_items, n_shards,
                                         n_epochs=early_stop.CFG['agg_max_epochs'],
                                         epoch_end=es)
         unl_best['agg'] = es.finish()
+        unl_eval += es.eval_time
         agg_run = es.last_epoch
     else:
         agg_run = agg_ep if es_on else agg_epochs
@@ -606,6 +609,8 @@ def run_receraser_arm(train_items, test_data, n_users, n_items, n_shards,
     unlearn_time = time.time() - t0
     parallel_time = max(per_shard_time.values()) if per_shard_time else 0.0
     early_stop.LAST = {'shards': per_shard_epochs, 'agg': agg_run, 'best': unl_best}
+    if early_stop.unlearn_on():
+        early_stop.LAST['eval_time'] = unl_eval
 
     test_retained = {u: it for u, it in test_data.items() if u not in del_users}
     excl = early_stop.with_val(retained) if es_on else retained

@@ -120,6 +120,7 @@ class EarlyStopper:
         self.name = name
         self.best, self.best_epoch, self.bad = -1.0, 0, 0
         self.best_state, self.history, self.last_epoch = None, [], 0
+        self.eval_time = 0.0               # seconds spent in the validation checks
 
     def __call__(self, ep):
         self.last_epoch = ep + 1
@@ -128,7 +129,10 @@ class EarlyStopper:
         if not self.users:                 # nothing to validate on: no stopping
             self.best_epoch = ep + 1
             return False
+        import time
         import fast_train
+        fast_train.sync(self.device)          # the training step queued before it is not
+        t0 = time.time()                      # counted as evaluation
         r = fast_train.evaluate_topk(self.score_fn, self.users, self.train_data,
                                      self.val, self.n_items, self.device,
                                      Ks=(CFG['k'],))['recall'][0]
@@ -138,12 +142,17 @@ class EarlyStopper:
             self.best_state = self.state_fn()
         else:
             self.bad += 1
+        fast_train.sync(self.device)
+        self.eval_time += time.time() - t0
         return self.bad >= self.patience
 
     def finish(self):
         """Back to the best weights; -> the epoch they come from."""
+        import time
+        t0 = time.time()
         if self.best_state is not None:
             self.load_fn(self.best_state)
+        self.eval_time += time.time() - t0    # restoring the best weights is ES overhead
         if not self.best_epoch:
             self.best_epoch = self.last_epoch
         return self.best_epoch

@@ -184,6 +184,21 @@ def print_pq(recs, brief):
               f'{ms([r.get("parallel_time") for r in tr], 1):>14}'
               f'{ms([r.get("affected_shards") for r in rs], 1):>11}'
               f'{ms(work, 2):>18}{flag:>9}')
+    if any(r.get('unlearn_eval_time') is not None for r in recs):
+        print(f'  -- unlearn time split (s, mean+-std): retraining vs the validation checks '
+              f'of early stopping')
+        print(f'  {"arm":<14}{"unlearn":>14}{"= train":>14}{"+ eval":>14}{"eval %":>9}')
+        for a in arms:
+            rs = [r for r in timed([r for r in recs if r['arm'] == a], eng)
+                  if r.get('unlearn_eval_time') is not None]
+            if not rs:
+                continue
+            ev = [r['unlearn_eval_time'] for r in rs]
+            ut = [r['unlearn_time'] for r in rs]
+            share = 100 * sum(ev) / max(sum(ut), 1e-12)
+            print(f'  {label(a):<14}{ms(ut, 1):>14}'
+                  f'{ms([r["unlearn_train_time"] for r in rs], 1):>14}'
+                  f'{ms(ev, 1):>14}{share:>8.1f}%')
     if shared_runs:
         print(f'  ! {shared_runs} run(s) measured while other work used the GPU '
               f'(>= {SHARED}%): their seconds may be inflated; the work column is not')
