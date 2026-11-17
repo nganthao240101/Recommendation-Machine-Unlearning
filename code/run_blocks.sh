@@ -456,7 +456,11 @@ block_kyelp () {
 #   YS_ARMS=PROPOSED,RANDOM_PERM,PROPOSED_BAL,SISA,RANDOM_EMB,RECERASER,GLOBAL ... start yseeds
 # Log 1 model (main_yelp, mode_*_yelp) giữ nguyên cho thời gian / work.
 #   YS_MODES="random most fewest"     so sánh: bash code/run_blocks.sh paired
-yseeds_log () { case "$1" in random) echo main_yelp ;; *) echo "mode_${1}_yelp" ;; esac; }
+#   YS_DATASET=ml-1m cho ml-1m (mặc định yelp2018)
+yseeds_log () {
+  local d; d=$(short "${YS_DATASET:-yelp2018}")
+  case "$1" in random) echo "main_$d" ;; *) echo "mode_${1}_$d" ;; esac
+}
 
 block_yseeds () {
   export RECUNLEARN_ENGINE="${RECUNLEARN_ENGINE:-gpu}"
@@ -465,7 +469,9 @@ block_yseeds () {
   local x; x="$(bsuffix)"
   for m in $modes; do
     n=$(yseeds_log "$m")
-    if [ ! -f "logs/${n}_ps${x}.out" ] && [ -f "logs/${n}${x}.out" ]; then
+    # seed 0 của log 1 model chỉ trùng với run mỗi-seed-một-model khi model
+    # được train ngay trong run đó (không early stopping / không nạp model đã lưu)
+    if [ "$EARLY_STOP" != 1 ] && [ ! -f "logs/${n}_ps${x}.out" ] && [ -f "logs/${n}${x}.out" ]; then
       echo "[seeded] ${n}_ps${x}: $(python code/clean_old_results.py --seed-from "logs/${n}${x}.out" "logs/${n}_ps${x}.out") run seed 0 lấy từ ${n}${x}"
     fi
   done
@@ -479,9 +485,9 @@ block_yseeds () {
       n=$(yseeds_log "$m")
       if [ $step = retime ]; then
         RETIME_ARMS="${RETIME_ARMS:-$arms}" WAIT_IDLE_MIN="${WAIT_IDLE_MIN:-15}" \
-          TRAIN_SEED=-1 pq "${n}_ps" yelp2018 mode=$m arms="$arms"
+          TRAIN_SEED=-1 pq "${n}_ps" "${YS_DATASET:-yelp2018}" mode=$m arms="$arms"
       else
-        TRAIN_SEED=-1 pq "${n}_ps" yelp2018 mode=$m arms="$arms"
+        TRAIN_SEED=-1 pq "${n}_ps" "${YS_DATASET:-yelp2018}" mode=$m arms="$arms"
       fi
     done
     block_paired
@@ -493,7 +499,10 @@ block_yseeds () {
 # Không đối số: cả 3 log mỗi seed một model của yelp (yseeds).
 block_paired () {
   local f files="$*"
-  [ -n "$files" ] || files="logs/main_yelp_ps.out logs/mode_most_yelp_ps.out logs/mode_fewest_yelp_ps.out"
+  if [ -z "$files" ]; then
+    local m x; x="$(bsuffix)"
+    for m in ${YS_MODES:-random most fewest}; do files="$files logs/$(yseeds_log "$m")_ps${x}.out"; done
+  fi
   for f in $files; do
     [ -f "$f" ] || { echo "không có $f"; continue; }
     echo ""; echo "=== $f"
