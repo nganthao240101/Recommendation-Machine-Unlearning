@@ -224,7 +224,7 @@ SAFER_B_MAP = os.environ.get('SAFER_B_MAP', 'gray')     # 'greedy' = the earlier
 
 
 def partition_proposed_balanced(train_items, n_users, n_items, n_shards, sig_dim, seed,
-                                cell_map=None):
+                                cell_map=None, sigs=None):
     """SAFER B: the signature and hyperplane LSH of SAFER A, with more cells
     and a LOAD-BALANCED cell->shard map that is also DELETION-STABLE.
 
@@ -250,8 +250,9 @@ def partition_proposed_balanced(train_items, n_users, n_items, n_shards, sig_dim
     cells and reshuffles the map (instability 27-66%).
     """
     cell_map = cell_map or SAFER_B_MAP
-    builder = UserSignatureBuilder(n_users, n_items, d=sig_dim, seed=seed)
-    sigs = builder.build_signature(train_items)
+    if sigs is None:
+        builder = UserSignatureBuilder(n_users, n_items, d=sig_dim, seed=seed)
+        sigs = builder.build_signature(train_items)
     assigner = DeletionStableAssignment(n_shards=n_shards, d=sig_dim, seed=seed)
 
     # more hash cells than shards, so the map has freedom to balance the load
@@ -374,10 +375,17 @@ def _rebuild_partition(arm, retained, n_users, n_items, args, seed, data_root):
                                   args.sig_dim, args.legacy_seed,
                                   router='minhash',
                                   sig_weighting=args.sig_weighting)
-    if arm == 'PROPOSED_BAL':
+    if arm in ('PROPOSED_BAL', 'SAFER_BE'):
         return partition_proposed_balanced(retained, n_users, n_items,
                                            args.n_shards, args.sig_dim,
                                            args.legacy_seed)
+    if arm == 'SAFER_E':
+        sig = pv_build_signature(retained, n_users, n_items, d=args.sig_dim,
+                                 seed=args.legacy_seed, weighting='idf', verbose=False)
+        return partition_proposed_balanced(retained, n_users, n_items, args.n_shards,
+                                           args.sig_dim, args.legacy_seed, sigs=sig)
+    if arm in ('RANDOM_E', 'RANDOM_EU'):
+        return pv_random_perm(n_users, args.n_shards, seed)
     if arm == 'RANDOM_EMB':
         return partition_random_embedding(retained, n_users, n_items,
                                           args.n_shards, args.sig_dim, seed,
@@ -624,6 +632,7 @@ def _ckpt_meta(args, arm):
     """Everything that decides the trained model of an arm: two runs with
     the same meta train the same model, whatever deletions follow (single,
     most, fewest all start from it)."""
+    arm = ENS_TRAINS_AS.get(arm, arm)        # same partition -> same trained models
     return {
         'arm': arm, 'dataset': args.dataset, 'n_shards': args.n_shards,
         'emb_dim': args.emb_dim, 'sig_dim': args.sig_dim, 'epochs': args.epochs,
@@ -639,10 +648,16 @@ def _ckpt_meta(args, arm):
     }
 
 
+# ensemble arms whose partition and training are those of another arm
+ENS_TRAINS_AS = {'SAFER_BE': 'PROPOSED_BAL', 'RANDOM_E': 'RANDOM_PERM',
+                 'RANDOM_EU': 'RANDOM_PERM'}
+
+
 def _ckpt_path(args, arm):
     import hashlib
     meta = _ckpt_meta(args, arm)
     h = hashlib.md5(json.dumps(meta, sort_keys=True).encode()).hexdigest()[:12]
+    arm = ENS_TRAINS_AS.get(arm, arm)
     return os.path.join(args.save_models, f'{args.dataset}_K{args.n_shards}_{arm}_{h}.pt'), meta
 
 
@@ -672,17 +687,21 @@ def save_trained(args, arm, cache):
     path, meta = _ckpt_path(args, arm)
     os.makedirs(os.path.dirname(path) or '.', exist_ok=True)
     keep = {k: v for k, v in cache.items()
-            if not k.startswith('_') and k not in ('rng_seed', 'reused')}
+            if not k.startswith('_') and k not in ('rng_seed', 'reused', 'ens_tau')}
     torch.save({'meta': meta, 'cache': keep}, path + '.tmp')
     os.replace(path + '.tmp', path)
     cache['_saved'] = True
     print(f"       [model] saved the trained model to {path}")
 
 
+# arms answered by the signature-weighted ensemble of their shard models
+ENS_ARMS = ('SAFER_E', 'SAFER_BE', 'RANDOM_E', 'RANDOM_EU')
+
+
 def run_sharded_arm(train_items, test_data, n_users, n_items, n_shards,
                     emb_dim, user_to_shard, del_users, epochs, lr, batch_size,
                     device, seed, retrain_epochs, reset_on_retrain=False,
-                    eval_mode='hard', cache=None):
+                    eval_mode='hard', cache=None, ens=None):
     """Train K shard models, delete users, retrain affected shards, evaluate.
 
     The per-shard retrain times and interaction counts are returned so the
@@ -748,6 +767,26 @@ def run_sharded_arm(train_items, test_data, n_users, n_items, n_shards,
     # The old behaviour (keep the weights) is kept behind the flag because
     # the earlier logs were produced with it, and those logs are the baseline
     # the new numbers are compared against.
+    if eval_mode == 'ens':
+        # the ensemble's tau is chosen on the validation split with the trained
+        # models, before any deletion (kept for every deletion of a saved model)
+        import signature_ensemble as SE
+        if cache and 'ens_tau' in cache:
+            tau = cache['ens_tau']
+        elif ens['kind'] == 'uniform':
+            tau = 0.0
+        elif early_stop.on():
+            tau, sc = SE.choose_tau(shard_models, user_to_shard, train_items,
+                                    early_stop.CFG['val'], ens['sigs'], n_shards,
+                                    n_users, n_items, device, ens['kind'])
+            print("       ensemble tau on validation: "
+                  + ", ".join(f"{t:g}->{r:.4f}" for t, r in sc.items()) + f"  => tau={tau:g}")
+        else:
+            tau = ens['tau']
+        if cache is not None:
+            cache['ens_tau'] = tau
+        print(f"       ensemble: weights={ens['kind']} tau={tau:g}")
+
     affected = sorted({int(user_to_shard[u]) for u in del_users if u < len(user_to_shard)})
     retained = {u: it for u, it in train_items.items() if u not in del_users}
     retained_shard_data = build_shard_data(retained, user_to_shard, n_shards)
@@ -795,7 +834,12 @@ def run_sharded_arm(train_items, test_data, n_users, n_items, n_shards,
     # the ranking excludes the training items, and the validation items too
     # when they were held out for early stopping
     excl = early_stop.with_val(retained) if es_on else retained
-    if eval_mode == 'sisa_mean':
+    if eval_mode == 'ens':
+        r = SE.evaluate(shard_models, user_to_shard, excl, test_retained, retained,
+                        ens['sigs'], n_shards, n_users, n_items, device,
+                        ens['kind'], tau, Ks=KS)
+        res = {'recall': r['recall'], 'ndcg': r['ndcg']}
+    elif eval_mode == 'sisa_mean':
         # the original SISA inference: average the scores of all K models
         res = evaluate_sisa_mean_aggregation(shard_models, excl,
                                              test_retained, n_users, n_items,
@@ -1095,6 +1139,10 @@ def main():
                     choices=['hyperplane', 'minhash'],
                     help='LSH router for the PROPOSED partition (spec ablation 8). '
                          'hyperplane = shipped cosine LSH; minhash = Jaccard-style.')
+    ap.add_argument('--ens_tau', type=float, default=10.0,
+                    help='softmax sharpness of the signature-weighted ensemble '
+                         '(SAFER_E, SAFER_BE, RANDOM_E) when there is no validation '
+                         'split to choose it on')
     ap.add_argument('--sig_weighting', default='binary',
                     choices=['binary', 'log_count'],
                     help='User profile weighting for the signature (spec ablation 8).')
@@ -1179,6 +1227,15 @@ def main():
     sigs_for_metrics = pv_build_signature(
         train_items, n_users, n_items, d=args.sig_dim,
         seed=args.legacy_seed, weighting=args.sig_weighting, verbose=False)
+    _idf = []
+
+    def sig_idf():
+        """IDF-weighted signature of the training data, built once."""
+        if not _idf:
+            _idf.append(pv_build_signature(train_items, n_users, n_items, d=args.sig_dim,
+                                           seed=args.legacy_seed, weighting='idf',
+                                           verbose=False))
+        return _idf[0]
     if one_model:
         print(f"  one model: every arm trained once (seed {args.train_seed}), then "
               f"unlearned {len(seeds)} times from that model "
@@ -1272,11 +1329,19 @@ def main():
                                           router='minhash',
                                           sig_weighting=args.sig_weighting)
                 pname = f'signature_minhash_{args.sig_weighting}'
-            elif arm == 'PROPOSED_BAL':
+            elif arm in ('PROPOSED_BAL', 'SAFER_BE'):
                 umap = partition_proposed_balanced(
                     train_items, n_users, n_items, args.n_shards,
                     args.sig_dim, args.legacy_seed)
                 pname = 'signature_lsh_balanced'
+            elif arm == 'SAFER_E':
+                umap = partition_proposed_balanced(
+                    train_items, n_users, n_items, args.n_shards,
+                    args.sig_dim, args.legacy_seed, sigs=sig_idf())
+                pname = 'signature_idf_lsh_balanced'
+            elif arm in ('RANDOM_E', 'RANDOM_EU'):
+                umap = pv_random_perm(n_users, args.n_shards, tseed)
+                pname = 'random_perm'
             elif arm == 'RANDOM_EMB':
                 # control for the signature: random user embedding routed
                 # through the SAME LSH router as Ours-signature
@@ -1337,14 +1402,22 @@ def main():
                 # SISA is evaluated with its own mean aggregation, which
                 # is what makes it SISA. Every other arm keeps the hard
                 # routing the spec fixes for the experiment.
-                eval_mode = ('sisa_mean' if arm == 'SISA' else 'hard')
+                eval_mode = ('sisa_mean' if arm == 'SISA' else
+                             'ens' if arm in ENS_ARMS else 'hard')
+                ens = None
+                if arm in ENS_ARMS:
+                    # SAFER_BE weighs with the plain signature of its partition,
+                    # SAFER_E / RANDOM_E with the IDF one, RANDOM_EU uniformly
+                    ens = {'kind': 'uniform' if arm == 'RANDOM_EU' else 'sig',
+                           'sigs': sigs_for_metrics if arm == 'SAFER_BE' else sig_idf(),
+                           'tau': args.ens_tau}
                 (res, tt, ut, affected, _sm, ptime,
                  per_shard_time, per_shard_inter) = run_sharded_arm(
                     train_items, test_data, n_users, n_items, args.n_shards,
                     args.emb_dim, umap, del_users, args.epochs, args.lr,
                     args.batch_size, device, tseed, args.retrain_epochs,
                     reset_on_retrain=not args.keep_weights_on_retrain,
-                    eval_mode=eval_mode, cache=cache)
+                    eval_mode=eval_mode, cache=cache, ens=ens)
 
             # Partition-quality metrics are measured on the ORIGINAL
             # signature (built once per seed above), not on post-train

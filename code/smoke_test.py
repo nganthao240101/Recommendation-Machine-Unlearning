@@ -53,6 +53,16 @@ def run(name, cmd, log_dir):
     return ok
 
 
+def run_arms(name, arms, cmd, log_dir):
+    """run() for a run whose arms are not the seven of ARMS."""
+    global ARMS
+    keep, ARMS = ARMS, arms
+    try:
+        return run(name, cmd, log_dir)
+    finally:
+        ARMS = keep
+
+
 def main():
     root = tempfile.mkdtemp(prefix='smoke_')
     make_data(root)
@@ -74,6 +84,12 @@ def main():
                '--unlearn_mode', 'random', '--unlearn_ratio', '0.05',
                '--val_ratio', '0.1', '--max_epochs', '6', '--eval_every', '2',
                '--patience', '2', '--agg_patience', '2', '--unlearn_es', '1'], root)
+    # the signature-weighted ensemble arms (SAFER-E and its controls)
+    ens_common = [a if a != ARMS else 'SAFER_E,SAFER_BE,RANDOM_E,RANDOM_EU' for a in common]
+    ok &= run_arms('partition_quality_ens', 'SAFER_E,SAFER_BE,RANDOM_E,RANDOM_EU',
+                   [py, os.path.join(HERE, 'exp_partition_quality.py'), *ens_common,
+                    '--unlearn_mode', 'single', '--val_ratio', '0.1', '--max_epochs', '6',
+                    '--eval_every', '2', '--patience', '2', '--unlearn_es', '1'], root)
     # the same two with the WMF backbone (run_blocks.sh fullwmf)
     ok &= run('partition_quality_wmf',
               [py, os.path.join(HERE, 'exp_partition_quality.py'), *common,

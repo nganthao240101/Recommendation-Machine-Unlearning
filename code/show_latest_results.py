@@ -28,14 +28,16 @@ SHARED = 10          # % background GPU load above which a run counts as shared
 # the names of Table 2 in the paper; the logs keep the internal arm names
 LABEL = {'PROPOSED': 'SAFER A', 'PROPOSED_BAL': 'SAFER B', 'SISA': 'SISA',
          'RANDOM_PERM': 'Random', 'RANDOM_EMB': 'RandomEmb',
-         'RECERASER': 'RecEraser', 'GLOBAL': 'Retrain'}
+         'RECERASER': 'RecEraser', 'GLOBAL': 'Retrain',
+         'SAFER_E': 'SAFER-E', 'SAFER_BE': 'SAFER B+E', 'RANDOM_E': 'Random+E',
+         'RANDOM_EU': 'Random+EU'}
 
 
 def label(arm):
     return LABEL.get(arm, arm)
 UTIL = (('recall_10', 'R@10'), ('ndcg_10', 'N@10'), ('recall_20', 'R@20'), ('ndcg_20', 'N@20'), ('recall_50', 'R@50'), ('ndcg_50', 'N@50'))
 ARM_ORDER = ['PROPOSED', 'PROPOSED_BAL', 'SISA', 'RANDOM_PERM', 'RANDOM_EMB',
-             'RECERASER', 'GLOBAL']
+             'SAFER_E', 'SAFER_BE', 'RANDOM_E', 'RANDOM_EU', 'RECERASER', 'GLOBAL']
 N_SEEDS = 5
 SINGLE_DONE = re.compile(r'^\s*\[([A-Z_]+)\]\s+single-request unlearn time', re.M)
 

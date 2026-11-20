@@ -34,18 +34,36 @@ def build_signature(train_data, n_users, n_items, d=64, seed=42,
     weighting:
       'binary'    phi(y) = 1
       'log_count' phi(y) = 1 + log(count)   -> encodes preference strength
+      'idf'       phi(i) = log((1 + N) / (1 + n_i)), N users, n_i users of item i:
+                  popular items, which almost everyone shares, weigh little
     """
-    if weighting not in ('binary', 'log_count'):
+    if weighting not in ('binary', 'log_count', 'idf'):
         raise ValueError(f'unknown weighting {weighting}')
 
     rng = np.random.RandomState(seed)
     R = rng.choice([-1, 1], size=(d, n_items)) / math.sqrt(d)
 
     rows, cols, data = [], [], []
+    if weighting == 'idf':
+        n_i = np.zeros(n_items)
+        n_u = 0
+        for user_id, items in train_data.items():
+            if user_id < n_users and items:
+                n_u += 1
+                for item in set(items):
+                    if item < n_items:
+                        n_i[item] += 1
+        idf = np.log((1.0 + n_u) / (1.0 + n_i))
     for user_id, items in train_data.items():
         if user_id >= n_users:
             continue
-        if weighting == 'binary':
+        if weighting == 'idf':
+            for item in set(items):
+                if item < n_items:
+                    rows.append(user_id)
+                    cols.append(item)
+                    data.append(float(idf[item]))
+        elif weighting == 'binary':
             for item in items:
                 if item < n_items:
                     rows.append(user_id)
