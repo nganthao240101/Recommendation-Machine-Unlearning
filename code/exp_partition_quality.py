@@ -223,6 +223,60 @@ def partition_random_embedding(train_items, n_users, n_items, n_shards,
 SAFER_B_MAP = os.environ.get('SAFER_B_MAP', 'gray')     # 'greedy' = the earlier logs
 
 
+def partition_pca_tree(train_items, n_users, n_items, n_shards, sigs):
+    """SAFER-P router: split the signature space along its directions of
+    largest spread instead of random hyperplanes.
+
+    A binary tree of depth log2 K: at every node the users of the node are
+    projected on the node's first principal direction (of their signatures)
+    and cut at the interaction-weighted median, so both halves carry the same
+    load. The leaves are the K shards. Random hyperplanes often cut where
+    users hardly differ; the principal directions cut where they differ most,
+    so a shard gathers more similar users, and the weighted median keeps the
+    load balanced. The tree (directions and cut points) is fitted once; a
+    user's shard then depends only on his own signature, so a deletion never
+    moves anyone, and a re-fit on the retained data moves only users close to
+    a cut.
+    """
+    depth = int(round(np.log2(n_shards)))
+    if 2 ** depth != n_shards:
+        raise ValueError(f'the PCA tree needs a power of two shards, got {n_shards}')
+    Z = np.asarray(sigs, dtype=np.float64)
+    load = np.zeros(n_users)
+    for u, it in train_items.items():
+        if u < n_users:
+            load[u] = len(it)
+    umap = np.zeros(n_users, dtype=np.int32)
+
+    def split(idx, level, base):
+        if level == depth or len(idx) == 0:
+            umap[idx] = base
+            return
+        X = Z[idx]
+        w = load[idx]
+        fit = w > 0
+        Xc = X[fit] - X[fit].mean(axis=0) if fit.any() else X - X.mean(axis=0)
+        # first principal direction (eigenvector of the covariance)
+        _, vecs = np.linalg.eigh(Xc.T @ Xc)
+        v = vecs[:, -1]
+        v = v if v[np.argmax(np.abs(v))] >= 0 else -v      # deterministic sign
+        proj = X @ v
+        order = np.argsort(proj, kind='stable')
+        cum = np.cumsum(w[order])
+        cut = np.searchsorted(cum, cum[-1] / 2.0) if cum[-1] > 0 else len(idx) // 2
+        cut = min(max(int(cut) + 1, 1), len(idx) - 1) if len(idx) > 1 else len(idx)
+        left, right = idx[order[:cut]], idx[order[cut:]]
+        half = n_shards >> (level + 1)
+        split(left, level + 1, base)
+        split(right, level + 1, base + half)
+
+    split(np.arange(n_users), 0, 0)
+    counts = np.bincount(umap, minlength=n_shards)
+    print(f"    [PCA-tree] depth={depth} -> {n_shards} shards, "
+          f"users min={counts.min()} max={counts.max()} mean={counts.mean():.1f}")
+    return umap
+
+
 def partition_proposed_balanced(train_items, n_users, n_items, n_shards, sig_dim, seed,
                                 cell_map=None, sigs=None):
     """SAFER B: the signature and hyperplane LSH of SAFER A, with more cells
@@ -379,11 +433,17 @@ def _rebuild_partition(arm, retained, n_users, n_items, args, seed, data_root):
         return partition_proposed_balanced(retained, n_users, n_items,
                                            args.n_shards, args.sig_dim,
                                            args.legacy_seed)
-    if arm == 'SAFER_E':
+    if arm in ('SAFER_E', 'SAFER_I'):
         sig = pv_build_signature(retained, n_users, n_items, d=args.sig_dim,
                                  seed=args.legacy_seed, weighting='idf', verbose=False)
         return partition_proposed_balanced(retained, n_users, n_items, args.n_shards,
                                            args.sig_dim, args.legacy_seed, sigs=sig)
+    if arm in ('SAFER_P', 'SAFER_PI', 'SAFER_PIE'):
+        sig = pv_build_signature(retained, n_users, n_items, d=args.sig_dim,
+                                 seed=args.legacy_seed,
+                                 weighting='binary' if arm == 'SAFER_P' else 'idf',
+                                 verbose=False)
+        return partition_pca_tree(retained, n_users, n_items, args.n_shards, sig)
     if arm in ('RANDOM_E', 'RANDOM_EU'):
         return pv_random_perm(n_users, args.n_shards, seed)
     if arm == 'RANDOM_EMB':
@@ -650,7 +710,8 @@ def _ckpt_meta(args, arm):
 
 # ensemble arms whose partition and training are those of another arm
 ENS_TRAINS_AS = {'SAFER_BE': 'PROPOSED_BAL', 'RANDOM_E': 'RANDOM_PERM',
-                 'RANDOM_EU': 'RANDOM_PERM'}
+                 'RANDOM_EU': 'RANDOM_PERM', 'SAFER_E': 'SAFER_I',
+                 'SAFER_PIE': 'SAFER_PI'}
 
 
 def _ckpt_path(args, arm):
@@ -695,7 +756,7 @@ def save_trained(args, arm, cache):
 
 
 # arms answered by the signature-weighted ensemble of their shard models
-ENS_ARMS = ('SAFER_E', 'SAFER_BE', 'RANDOM_E', 'RANDOM_EU')
+ENS_ARMS = ('SAFER_E', 'SAFER_BE', 'SAFER_PIE', 'RANDOM_E', 'RANDOM_EU')
 
 
 def run_sharded_arm(train_items, test_data, n_users, n_items, n_shards,
@@ -1334,11 +1395,19 @@ def main():
                     train_items, n_users, n_items, args.n_shards,
                     args.sig_dim, args.legacy_seed)
                 pname = 'signature_lsh_balanced'
-            elif arm == 'SAFER_E':
+            elif arm in ('SAFER_E', 'SAFER_I'):
                 umap = partition_proposed_balanced(
                     train_items, n_users, n_items, args.n_shards,
                     args.sig_dim, args.legacy_seed, sigs=sig_idf())
                 pname = 'signature_idf_lsh_balanced'
+            elif arm == 'SAFER_P':
+                umap = partition_pca_tree(train_items, n_users, n_items,
+                                          args.n_shards, sigs_for_metrics)
+                pname = 'signature_pca_tree'
+            elif arm in ('SAFER_PI', 'SAFER_PIE'):
+                umap = partition_pca_tree(train_items, n_users, n_items,
+                                          args.n_shards, sig_idf())
+                pname = 'signature_idf_pca_tree'
             elif arm in ('RANDOM_E', 'RANDOM_EU'):
                 umap = pv_random_perm(n_users, args.n_shards, tseed)
                 pname = 'random_perm'
