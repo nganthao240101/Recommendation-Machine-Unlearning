@@ -26,7 +26,8 @@ ROOT = cor.ROOT
 LOGS = cor.LOGS
 SHARED = 10          # % background GPU load above which a run counts as shared
 # the names of Table 2 in the paper; the logs keep the internal arm names
-LABEL = {'PROPOSED': 'SAFER A', 'PROPOSED_BAL': 'SAFER B', 'SISA': 'SISA',
+LABEL = {'PROPOSED': 'SAFER A', 'PROPOSED_BAL': 'SAFER B', 'SISA': 'SISA (R=1)',
+         'SISA_FULL': 'SISA',
          'RANDOM_PERM': 'Random', 'RANDOM_EMB': 'RandomEmb',
          'RECERASER': 'RecEraser', 'GLOBAL': 'Retrain',
          'SAFER_E': 'SAFER-E', 'SAFER_BE': 'SAFER B+E', 'RANDOM_E': 'Random+E',
@@ -37,7 +38,7 @@ LABEL = {'PROPOSED': 'SAFER A', 'PROPOSED_BAL': 'SAFER B', 'SISA': 'SISA',
 def label(arm):
     return LABEL.get(arm, arm)
 UTIL = (('recall_10', 'R@10'), ('ndcg_10', 'N@10'), ('recall_20', 'R@20'), ('ndcg_20', 'N@20'), ('recall_50', 'R@50'), ('ndcg_50', 'N@50'))
-ARM_ORDER = ['PROPOSED', 'PROPOSED_BAL', 'SISA', 'RANDOM_PERM', 'RANDOM_EMB',
+ARM_ORDER = ['PROPOSED', 'PROPOSED_BAL', 'SISA_FULL', 'SISA', 'RANDOM_PERM', 'RANDOM_EMB',
              'SAFER_I', 'SAFER_P', 'SAFER_BE', 'SAFER_PI', 'SAFER_E', 'SAFER_PIE',
              'RANDOM_E', 'RANDOM_EU', 'RECERASER', 'GLOBAL']
 N_SEEDS = 5

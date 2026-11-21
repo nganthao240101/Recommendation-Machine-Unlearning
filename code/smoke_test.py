@@ -86,6 +86,10 @@ def main():
                '--patience', '2', '--agg_patience', '2', '--unlearn_es', '1'], root)
     # the signature-weighted ensemble arms (SAFER-E and its controls)
     ens_common = [a if a != ARMS else 'SAFER_E,SAFER_BE,RANDOM_E,RANDOM_EU' for a in common]
+    ok &= run_arms('partition_quality_sisa', 'SISA_FULL',
+                   [py, os.path.join(HERE, 'exp_partition_quality.py'),
+                    *[a if a != ARMS else 'SISA_FULL' for a in common],
+                    '--unlearn_mode', 'most', '--unlearn_ratio', '0.05', '--sisa_slices', '3'], root)
     ok &= run_arms('partition_quality_ens', 'SAFER_E,SAFER_BE,RANDOM_E,RANDOM_EU',
                    [py, os.path.join(HERE, 'exp_partition_quality.py'), *ens_common,
                     '--unlearn_mode', 'single', '--val_ratio', '0.1', '--max_epochs', '6',

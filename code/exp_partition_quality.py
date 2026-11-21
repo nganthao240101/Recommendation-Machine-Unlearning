@@ -444,7 +444,7 @@ def _rebuild_partition(arm, retained, n_users, n_items, args, seed, data_root):
                                  weighting='binary' if arm == 'SAFER_P' else 'idf',
                                  verbose=False)
         return partition_pca_tree(retained, n_users, n_items, args.n_shards, sig)
-    if arm in ('RANDOM_E', 'RANDOM_EU'):
+    if arm in ('RANDOM_E', 'RANDOM_EU', 'SISA_FULL'):
         return pv_random_perm(n_users, args.n_shards, seed)
     if arm == 'RANDOM_EMB':
         return partition_random_embedding(retained, n_users, n_items,
@@ -698,6 +698,7 @@ def _ckpt_meta(args, arm):
         'emb_dim': args.emb_dim, 'sig_dim': args.sig_dim, 'epochs': args.epochs,
         'lr': args.lr, 'batch_size': args.batch_size, 'train_seed': args.train_seed,
         **({'reg': args.reg} if args.reg != 0.01 else {}),
+        **({'sisa_slices': args.sisa_slices} if arm == 'SISA_FULL' else {}),
         'legacy_seed': args.legacy_seed, 'router': args.router,
         'sig_weighting': args.sig_weighting, 'backbone': args.backbone,
         'wmf': wmf_backbone.describe(), 'agg_epochs': args.agg_epochs,
@@ -1200,6 +1201,8 @@ def main():
                     choices=['hyperplane', 'minhash'],
                     help='LSH router for the PROPOSED partition (spec ablation 8). '
                          'hyperplane = shipped cosine LSH; minhash = Jaccard-style.')
+    ap.add_argument('--sisa_slices', type=int, default=5,
+                    help='R, the slices per shard of the SISA_FULL arm')
     ap.add_argument('--ens_tau', type=float, default=10.0,
                     help='softmax sharpness of the signature-weighted ensemble '
                          '(SAFER_E, SAFER_BE, RANDOM_E) when there is no validation '
@@ -1411,6 +1414,11 @@ def main():
             elif arm in ('RANDOM_E', 'RANDOM_EU'):
                 umap = pv_random_perm(n_users, args.n_shards, tseed)
                 pname = 'random_perm'
+            elif arm == 'SISA_FULL':
+                # SISA as defined: random shards, isolated models, R slices
+                # with incremental training and checkpoints, averaged scores
+                umap = pv_random_perm(n_users, args.n_shards, tseed)
+                pname = f'sisa_random_perm_{args.sisa_slices}_slices'
             elif arm == 'RANDOM_EMB':
                 # control for the signature: random user embedding routed
                 # through the SAME LSH router as Ours-signature
@@ -1458,7 +1466,17 @@ def main():
             else:
                 raise ValueError(f'unknown arm {arm}')
 
-            if arm == 'RECERASER':
+            if arm == 'SISA_FULL':
+                import sisa_full
+                (res, tt, ut, affected, _sm, ptime,
+                 per_shard_time, per_shard_inter) = sisa_full.run_sisa_arm(
+                    train_items, test_data, n_users, n_items, args.n_shards,
+                    args.emb_dim, umap, del_users, args.epochs, args.lr,
+                    args.batch_size, device, tseed, n_slices=args.sisa_slices,
+                    cache=cache,
+                    eval_fn=lambda sm, excl, test: evaluate_sisa_mean_aggregation(
+                        sm, excl, test, n_users, n_items, device, Ks=KS))
+            elif arm == 'RECERASER':
                 from exp_receraser_arm import run_receraser_arm
                 (res, tt, ut, affected, _sm, ptime,
                  per_shard_time, per_shard_inter) = run_receraser_arm(
@@ -1553,7 +1571,7 @@ def main():
         # pass for RecEraser, the whole retained set for the retrain).
         # Unlike the seconds above it does not depend on the hardware or
         # on what else runs on the GPU.
-        es_ep = early_stop.LAST if early_stop.on() else {}
+        es_ep = early_stop.LAST if early_stop.on() and 'work_samples' not in early_stop.LAST else {}
         if arm == 'GLOBAL':
             work = (int(row.get('shard_interactions_unlearn') or 0)
                     * es_ep.get('global', args.epochs))
@@ -1565,8 +1583,8 @@ def main():
                 n_kept = sum(len(it) for u, it in train_items.items()
                              if u not in del_users)
                 work += n_kept * es_ep.get('agg', args.agg_epochs)
-        if es_ep.get('eval_time') is not None:
-            ev = es_ep['eval_time']
+        if early_stop.LAST.get('eval_time') is not None:
+            ev = early_stop.LAST['eval_time']
             print(f"       unlearn split: train={row['unlearn_time'] - ev:.2f}s "
                   f"eval={ev:.2f}s (validation checks of early stopping)")
         if es_ep.get('best'):
@@ -1579,6 +1597,8 @@ def main():
                   + (f"global={es_ep['global']}" if 'global' in es_ep else
                      ", ".join(f"s{s}={e}" for s, e in sorted(es_ep.get('shards', {}).items()))
                      + (f" agg={es_ep['agg']}" if 'agg' in es_ep else '')))
+        if early_stop.LAST.get('work_samples') is not None:
+            work = early_stop.LAST['work_samples']      # sliced retrain (SISA_FULL)
         bg1 = gpu_probe.background_load()
         row['unlearn_samples'] = work
         row['bg_load_before'], row['bg_load_after'] = bg0, bg1
