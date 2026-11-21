@@ -506,9 +506,12 @@ block_paired () {
   for f in $files; do
     [ -f "$f" ] || { echo "không có $f"; continue; }
     echo ""; echo "=== $f"
-    python code/summarize_partition_logs.py "$f" 2>/dev/null | sed -n '/^PAIRED:/,/^  ndcg_50/p'
-    python code/summarize_partition_logs.py "$f" --proposed PROPOSED_BAL 2>/dev/null \
-      | sed -n '/^PAIRED:/,/^  ndcg_50/p'
+    # PAIRS="A:B ..." : A - B per seed (default SAFER A and SAFER B vs Random)
+    local pr
+    for pr in ${PAIRS:-PROPOSED:RANDOM_PERM PROPOSED_BAL:RANDOM_PERM}; do
+      python code/summarize_partition_logs.py "$f" --proposed "${pr%%:*}" --baseline "${pr##*:}" \
+        2>/dev/null | sed -n '/^PAIRED:/,/^  ndcg_50/p'
+    done
   done
 }
 
