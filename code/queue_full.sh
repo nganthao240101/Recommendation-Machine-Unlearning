@@ -3,6 +3,7 @@
 # is done. Runs that are already finished are kept and skipped (every step
 # resumes its logs), so the script can be started again at any time.
 #
+#   0) ml-1m   SISA as defined (5 slices) in the single / most / fewest logs
 #   1) ml-1m   per-seed test (5 seeds, mode most): SAFER-PI vs Random,
 #              SAFER-PIE vs Random+E  -> paired t-test
 #   2) yelp    the new arms in the single / most / fewest logs (one model),
@@ -31,6 +32,10 @@ NEW_ARMS=SAFER_P,SAFER_PI,SAFER_PIE,SAFER_BE,RANDOM_E,RANDOM_EU,SISA_FULL
 TEST_ARMS=SAFER_PI,RANDOM_PERM,SAFER_PIE,RANDOM_E
 PAIRS_ALL="SAFER_PI:RANDOM_PERM SAFER_PIE:RANDOM_E SAFER_P:RANDOM_PERM"
 
+
+run_step "step 0 ml-1m SISA as defined (5 slices), single/most/fewest (patience $P_ML)" \
+  env YO_DATASET=ml-1m EARLY_STOP=1 PATIENCE="$P_ML" REG=0.03 YO_ARMS=SISA_FULL \
+      bash code/run_blocks.sh start yone
 
 run_step "step 1 ml-1m per-seed test, mode most (patience $P_ML)" \
   env YS_DATASET=ml-1m EARLY_STOP=1 PATIENCE="$P_ML" REG=0.03 YS_MODES=most \
