@@ -749,7 +749,8 @@ def save_trained(args, arm, cache):
     path, meta = _ckpt_path(args, arm)
     os.makedirs(os.path.dirname(path) or '.', exist_ok=True)
     keep = {k: v for k, v in cache.items()
-            if not k.startswith('_') and k not in ('rng_seed', 'reused', 'ens_tau')}
+            if not k.startswith('_') and not k.startswith('ens_tau')
+            and k not in ('rng_seed', 'reused')}
     torch.save({'meta': meta, 'cache': keep}, path + '.tmp')
     os.replace(path + '.tmp', path)
     cache['_saved'] = True
@@ -833,8 +834,9 @@ def run_sharded_arm(train_items, test_data, n_users, n_items, n_shards,
         # the ensemble's tau is chosen on the validation split with the trained
         # models, before any deletion (kept for every deletion of a saved model)
         import signature_ensemble as SE
-        if cache and 'ens_tau' in cache:
-            tau = cache['ens_tau']
+        tkey = 'ens_tau:' + ens.get('arm', '')
+        if cache and tkey in cache:
+            tau = cache[tkey]
         elif ens['kind'] == 'uniform':
             tau = 0.0
         elif early_stop.on():
@@ -846,7 +848,7 @@ def run_sharded_arm(train_items, test_data, n_users, n_items, n_shards,
         else:
             tau = ens['tau']
         if cache is not None:
-            cache['ens_tau'] = tau
+            cache[tkey] = tau
         print(f"       ensemble: weights={ens['kind']} tau={tau:g}")
 
     affected = sorted({int(user_to_shard[u]) for u in del_users if u < len(user_to_shard)})
@@ -1309,6 +1311,7 @@ def main():
         pairs = [(a, s) for s in seeds for a in arms]
 
     dels_by_seed, caches, shown = {}, {}, None
+    seed_caches = {}
     for arm, seed in pairs:
         if (arm, seed) in skip:
             continue
@@ -1321,6 +1324,16 @@ def main():
             cache['rng_seed'] = seed      # the retrain of a reused model
             if args.save_models and 'train_time' not in cache:
                 load_trained(args, arm, cache, device)
+        else:
+            # one model per seed: arms that train the same models (SAFER_PIE as
+            # SAFER_PI, RANDOM_E as RANDOM_PERM, ...) share them within the seed
+            key = ENS_TRAINS_AS.get(arm, arm)
+            if sum(ENS_TRAINS_AS.get(a, a) == key for a in arms) > 1:
+                if seed_caches.get('_seed') != seed:
+                    seed_caches.clear()
+                    seed_caches['_seed'] = seed
+                cache = seed_caches.setdefault(key, {})
+                cache['rng_seed'] = seed
         if seed not in dels_by_seed:
             if args.legacy_mode:
                 # exactly reproduce the original method_4_ours.py deletion set
@@ -1497,7 +1510,7 @@ def main():
                     # SAFER_E / RANDOM_E with the IDF one, RANDOM_EU uniformly
                     ens = {'kind': 'uniform' if arm == 'RANDOM_EU' else 'sig',
                            'sigs': sigs_for_metrics if arm == 'SAFER_BE' else sig_idf(),
-                           'tau': args.ens_tau}
+                           'tau': args.ens_tau, 'arm': arm}
                 (res, tt, ut, affected, _sm, ptime,
                  per_shard_time, per_shard_inter) = run_sharded_arm(
                     train_items, test_data, n_users, n_items, args.n_shards,
