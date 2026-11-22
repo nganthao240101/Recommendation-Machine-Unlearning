@@ -30,8 +30,10 @@ P_ML=$(grep -o "RECOMMENDED patience = [0-9]*" logs/patience_ml1m_reg0.03.out 2>
 P_ML=${P_ML:-30}
 P_YE=15                                  # the patience of the yelp lr 0.02 logs
 NEW_ARMS=SAFER_P,SAFER_PI,SAFER_PIE,SAFER_BE,RANDOM_E,RANDOM_EU,SISA_FULL
-TEST_ARMS=SAFER_PI,RANDOM_PERM,SAFER_PIE,RANDOM_E
-PAIRS_ALL="SAFER_PI:RANDOM_PERM SAFER_PIE:RANDOM_E SAFER_P:RANDOM_PERM"
+# the per-seed test: SAFER against every baseline it can be run against on 5
+# seeds, and the ablations (Retrain and RecEraser: one-model logs, steps 4-5)
+TEST_ARMS=SAFER_P,RANDOM_PERM,SAFER_PI,SAFER_PIE,RANDOM_E,SISA,SISA_FULL,RANDOM_EMB,PROPOSED_BAL
+PAIRS_ALL="SAFER_P:RANDOM_PERM SAFER_P:SISA SAFER_P:SISA_FULL SAFER_P:RANDOM_EMB SAFER_P:PROPOSED_BAL SAFER_PI:SAFER_P SAFER_PIE:RANDOM_E SAFER_PIE:SISA_FULL"
 
 
 run_step "step 0 ml-1m SISA as defined (5 slices), single/most/fewest (patience $P_ML)" \
@@ -40,7 +42,7 @@ run_step "step 0 ml-1m SISA as defined (5 slices), single/most/fewest (patience 
 
 run_step "step 1 ml-1m per-seed test, all modes (patience $P_ML)" \
   env YS_DATASET=ml-1m EARLY_STOP=1 PATIENCE="$P_ML" REG=0.03 YS_MODES="single most fewest" \
-      YS_FIRST="$TEST_ARMS" YS_STEPS=1 PAIRS="SAFER_PI:RANDOM_PERM SAFER_PIE:RANDOM_E" \
+      YS_FIRST="$TEST_ARMS" YS_STEPS=1 PAIRS="$PAIRS_ALL" \
       bash code/run_blocks.sh start yseeds
 
 run_step "step 2 yelp new arms, single/most/fewest (lr 0.02, patience $P_YE)" \
@@ -49,7 +51,7 @@ run_step "step 2 yelp new arms, single/most/fewest (lr 0.02, patience $P_YE)" \
 
 run_step "step 3 yelp per-seed test, all modes" \
   env YS_DATASET=yelp2018 EARLY_STOP=1 PATIENCE="$P_YE" LR=0.02 YS_MODES="single most fewest" \
-      YS_FIRST="$TEST_ARMS" YS_STEPS=1 PAIRS="SAFER_PI:RANDOM_PERM SAFER_PIE:RANDOM_E" \
+      YS_FIRST="$TEST_ARMS" YS_STEPS=1 PAIRS="$PAIRS_ALL" \
       bash code/run_blocks.sh start yseeds
 
 run_step "step 4 ml-1m Retrain and RecEraser" \
