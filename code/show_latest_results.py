@@ -119,6 +119,10 @@ def ago(t):
 
 def arms_of(recs):
     present = {r['arm'] for r in recs}
+    # SHOW_ARMS=A,B,...: only these arms, in this order (the others stay in the log)
+    show = [a for a in os.environ.get('SHOW_ARMS', '').split(',') if a]
+    if show:
+        return [a for a in show if a in present]
     return [a for a in ARM_ORDER if a in present] + sorted(present - set(ARM_ORDER))
 
 
