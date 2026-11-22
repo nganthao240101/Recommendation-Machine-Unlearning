@@ -66,8 +66,12 @@ EXPERIMENT_LOGS = EXPERIMENT_LOGS + [n + '_wmf' for n in EXPERIMENT_LOGS]
 try:
     EXPERIMENT_LOGS = EXPERIMENT_LOGS + sorted(
         f[:-4] for f in os.listdir(LOGS)
-        if f.endswith('.out') and re.fullmatch(r'.+?(_(e\d+|ps|esu|es|reg[\d.e-]+|lr[\d.e-]+))+', f[:-4])
-        and re.sub(r'(_(e\d+|ps|esu|es|reg[\d.e-]+|lr[\d.e-]+))+$', '', f[:-4]) in EXPERIMENT_LOGS)
+        if f.endswith('.out') and (
+            (re.fullmatch(r'.+?(_(e\d+|ps|esu|es|reg[\d.e-]+|lr[\d.e-]+))+', f[:-4])
+             and re.sub(r'(_(e\d+|ps|esu|es|reg[\d.e-]+|lr[\d.e-]+))+$', '', f[:-4])
+             in EXPERIMENT_LOGS)
+            # K / dim ablations of a deletion mode (run_blocks.sh ablate)
+            or re.fullmatch(r'mode_[a-z]+_(k|dim)\d+_(ml1m|yelp)(_.+)?', f[:-4])))
 except OSError:
     pass
 # the RECERASER arm prints this since it starts from a random model, as the

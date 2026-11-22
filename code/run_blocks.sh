@@ -534,6 +534,28 @@ block_yone () {
   banner "YONE XONG - xem: bash code/run_blocks.sh results"
 }
 
+# ------------------------------------------------------------------ ablate
+# Số shard K và dim khác, cùng cấu hình hiện tại (EARLY_STOP / PATIENCE / REG /
+# LR như lần chạy chính), 1 model mỗi arm (lưu), unlearn 5 lần.
+# Log: mode_<mode>_k<K>_<ds>... và mode_<mode>_dim<D>_<ds>...
+#   AB_DATASET=ml-1m  AB_MODES="single"  AB_K="4 16"  AB_DIMS="32 128"
+#   AB_ARMS=SAFER_P,SAFER_PI,PROPOSED,PROPOSED_BAL,RANDOM_PERM,SISA,SISA_FULL,RANDOM_EMB
+block_ablate () {
+  export RECUNLEARN_ENGINE="${RECUNLEARN_ENGINE:-gpu}"
+  local ds="${AB_DATASET:-ml-1m}" m k d
+  local arms="${AB_ARMS:-SAFER_P,SAFER_PI,PROPOSED,PROPOSED_BAL,RANDOM_PERM,SISA,SISA_FULL,RANDOM_EMB}"
+  banner "ABLATE: $ds, mode ${AB_MODES:-single}, K ${AB_K:-4 16}, dim ${AB_DIMS:-}, arms $arms"
+  for m in ${AB_MODES:-single}; do
+    for k in ${AB_K:-4 16}; do
+      TRAIN_SEED=0 pq "mode_${m}_k${k}_$(short $ds)" "$ds" mode=$m k=$k arms="$arms"
+    done
+    for d in ${AB_DIMS:-}; do
+      TRAIN_SEED=0 pq "mode_${m}_dim${d}_$(short $ds)" "$ds" mode=$m dim=$d arms="$arms"
+    done
+  done
+  banner "ABLATE XONG - xem: bash code/run_blocks.sh results"
+}
+
 # ------------------------------------------------------------------ patience
 # Chọn patience cho early stopping TRÊN VALIDATION (không dùng test): train
 # Retrain + 8 shard SAFER A + 8 shard Random với patience rất dài, ghi đường
@@ -648,7 +670,7 @@ block_status () {
   python code/clean_old_results.py --status
   echo ""
   echo "  Job dang chay:"
-  ps -ww -eo pid,etime,args | grep -E "exp_partition_quality|exp_single_request|run_blocks\.sh (main|modes|single|shards|dims|recpart|all|full|fullwmf|compare|epochs|kyelp|yseeds|yone|patience|esauto|regauto)" \
+  ps -ww -eo pid,etime,args | grep -E "exp_partition_quality|exp_single_request|run_blocks\.sh (main|modes|single|shards|dims|recpart|all|full|fullwmf|compare|epochs|kyelp|yseeds|yone|ablate|patience|esauto|regauto)" \
     | grep -v grep | sed 's/^/    /' || echo "    (khong co job nao)"
 }
 
@@ -749,8 +771,8 @@ block_smoke () {
 # tiếp. Lúc đó all bỏ qua log đã xong, chạy tiếp log dở từ run còn thiếu.
 block_start () {
   local blk="${1:-all}"
-  case "$blk" in all|full|fullwmf|compare|epochs|kyelp|yseeds|yone|patience|esauto|regauto|main|modes|single|shards|dims|recpart) ;;
-    *) echo "!! start chỉ nhận: all | full | fullwmf | compare | epochs | kyelp | yseeds | yone | patience | esauto | regauto | main | modes | single | shards | dims | recpart"; exit 1 ;;
+  case "$blk" in all|full|fullwmf|compare|epochs|kyelp|yseeds|yone|ablate|patience|esauto|regauto|main|modes|single|shards|dims|recpart) ;;
+    *) echo "!! start chỉ nhận: all | full | fullwmf | compare | epochs | kyelp | yseeds | yone | ablate | patience | esauto | regauto | main | modes | single | shards | dims | recpart"; exit 1 ;;
   esac
   if [ -f "$QUEUEFILE" ] && kill -0 "$(cat "$QUEUEFILE")" 2>/dev/null; then
     echo "!! Đã có một chuỗi đang xếp hàng (PID $(cat "$QUEUEFILE")). Không cần start thêm."; exit 1
@@ -889,7 +911,7 @@ block_results () {
 }
 
 case "${1:-}" in
-  main|modes|single|shards|dims|recpart|all|full|fullwmf|compare|epochs|kyelp|yseeds|yone|patience|esauto|regauto) take_lock ;;
+  main|modes|single|shards|dims|recpart|all|full|fullwmf|compare|epochs|kyelp|yseeds|yone|ablate|patience|esauto|regauto) take_lock ;;
 esac
 
 case "${1:-}" in
@@ -909,6 +931,7 @@ case "${1:-}" in
   kyelp)   block_kyelp ;;
   yseeds)  block_yseeds ;;
   yone)    block_yone ;;
+  ablate)  block_ablate ;;
   esauto)  block_esauto ;;
   regauto) block_regauto ;;
   patience) block_patience ;;

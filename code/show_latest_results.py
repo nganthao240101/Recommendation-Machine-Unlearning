@@ -75,7 +75,15 @@ def describe(name):
     if stem == 'main':
         pass
     elif stem.startswith('mode_'):
-        base['mode'] = stem[5:]
+        mm = re.fullmatch(r'mode_([a-z]+)(?:_k(\d+))?(?:_dim(\d+))?', stem)
+        if mm:
+            base['mode'] = mm.group(1)
+            if mm.group(2):
+                base['k'] = int(mm.group(2))
+            if mm.group(3):
+                base['dim'] = int(mm.group(3))
+        else:
+            base['mode'] = stem[5:]
     elif stem == 'single':
         base['mode'] = 'single request'
     elif stem.startswith('k'):
