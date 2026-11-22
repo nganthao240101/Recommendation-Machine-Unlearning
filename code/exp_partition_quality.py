@@ -688,7 +688,7 @@ def build_shard_data(train_items, user_to_shard, n_shards):
 # ----------------------------------------------------------------------------
 # saved models (one model for every deletion)
 # ----------------------------------------------------------------------------
-def _ckpt_meta(args, arm):
+def _ckpt_meta(args, arm, seed=None):
     """Everything that decides the trained model of an arm: two runs with
     the same meta train the same model, whatever deletions follow (single,
     most, fewest all start from it)."""
@@ -696,7 +696,11 @@ def _ckpt_meta(args, arm):
     return {
         'arm': arm, 'dataset': args.dataset, 'n_shards': args.n_shards,
         'emb_dim': args.emb_dim, 'sig_dim': args.sig_dim, 'epochs': args.epochs,
-        'lr': args.lr, 'batch_size': args.batch_size, 'train_seed': args.train_seed,
+        'lr': args.lr, 'batch_size': args.batch_size,
+        # the seed the model is trained with: the run's --train_seed, or with
+        # one model per seed the seed itself (so seed 0 of a per-seed run is
+        # the one-model run's model)
+        'train_seed': args.train_seed if seed is None else seed,
         **({'reg': args.reg} if args.reg != 0.01 else {}),
         **({'sisa_slices': args.sisa_slices} if arm == 'SISA_FULL' else {}),
         'legacy_seed': args.legacy_seed, 'router': args.router,
@@ -715,17 +719,17 @@ ENS_TRAINS_AS = {'SAFER_BE': 'PROPOSED_BAL', 'RANDOM_E': 'RANDOM_PERM',
                  'SAFER_PIE': 'SAFER_PI'}
 
 
-def _ckpt_path(args, arm):
+def _ckpt_path(args, arm, seed=None):
     import hashlib
-    meta = _ckpt_meta(args, arm)
+    meta = _ckpt_meta(args, arm, seed)
     h = hashlib.md5(json.dumps(meta, sort_keys=True).encode()).hexdigest()[:12]
     arm = ENS_TRAINS_AS.get(arm, arm)
     return os.path.join(args.save_models, f'{args.dataset}_K{args.n_shards}_{arm}_{h}.pt'), meta
 
 
-def load_trained(args, arm, cache, device):
-    """Fill the one-model cache of an arm from its saved model, if any."""
-    path, meta = _ckpt_path(args, arm)
+def load_trained(args, arm, cache, device, seed=None):
+    """Fill the cache of an arm from its saved model, if any."""
+    path, meta = _ckpt_path(args, arm, seed)
     if not os.path.exists(path):
         return False
     try:
@@ -742,11 +746,11 @@ def load_trained(args, arm, cache, device):
     return True
 
 
-def save_trained(args, arm, cache):
-    """Write the one-model cache of an arm (weights, train time, epochs)."""
+def save_trained(args, arm, cache, seed=None):
+    """Write the cache of an arm (weights, train time, epochs)."""
     if cache.get('_from_disk') or cache.get('_saved') or 'train_time' not in cache:
         return
-    path, meta = _ckpt_path(args, arm)
+    path, meta = _ckpt_path(args, arm, seed)
     os.makedirs(os.path.dirname(path) or '.', exist_ok=True)
     keep = {k: v for k, v in cache.items()
             if not k.startswith('_') and not k.startswith('ens_tau')
@@ -1328,12 +1332,16 @@ def main():
             # one model per seed: arms that train the same models (SAFER_PIE as
             # SAFER_PI, RANDOM_E as RANDOM_PERM, ...) share them within the seed
             key = ENS_TRAINS_AS.get(arm, arm)
-            if sum(ENS_TRAINS_AS.get(a, a) == key for a in arms) > 1:
+            if args.save_models or sum(ENS_TRAINS_AS.get(a, a) == key for a in arms) > 1:
                 if seed_caches.get('_seed') != seed:
                     seed_caches.clear()
                     seed_caches['_seed'] = seed
                 cache = seed_caches.setdefault(key, {})
                 cache['rng_seed'] = seed
+                # the seed's model saved by another mode (single / most /
+                # fewest train the same model for a seed)
+                if args.save_models and 'train_time' not in cache:
+                    load_trained(args, arm, cache, device, seed=seed)
         if seed not in dels_by_seed:
             if args.legacy_mode:
                 # exactly reproduce the original method_4_ours.py deletion set
@@ -1570,8 +1578,8 @@ def main():
             row[f'ndcg_{k}'] = res['ndcg'][i]
 
         RESULTS.append(row)
-        if one_model and args.save_models and cache is not None:
-            save_trained(args, arm, cache)
+        if args.save_models and cache is not None:
+            save_trained(args, arm, cache, seed=None if one_model else seed)
         print(f"  [{arm}] R@10={row['recall_10']:.4f} NDCG@10={row['ndcg_10']:.4f} "
               f"| R@20={row['recall_20']:.4f} NDCG@20={row['ndcg_20']:.4f} "
               f"| R@50={row['recall_50']:.4f} NDCG@50={row['ndcg_50']:.4f}")

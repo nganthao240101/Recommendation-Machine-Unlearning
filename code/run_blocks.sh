@@ -107,9 +107,10 @@ es_args () {
 # Lưu model đã train (1 model cho mọi lần xóa) vào checkpoints/ trước khi
 # unlearn; lần chạy sau cùng cấu hình (mode khác, log chạy tiếp) nạp lại thay
 # vì train lại. SAVE_MODELS=0 để tắt.
+# (một model mỗi seed cũng lưu: model của một seed dùng chung cho single /
+#  most / fewest)
 save_args () {
-  [ "${SAVE_MODELS:-1}" = 1 ] && [ "$TRAIN_SEED" -ge 0 ] 2>/dev/null \
-    && echo "--save_models ${MODEL_DIR:-checkpoints}"
+  [ "${SAVE_MODELS:-1}" = 1 ] && echo "--save_models ${MODEL_DIR:-checkpoints}"
 }
 bsuffix () {
   [ "$BACKBONE" = wmf ] && printf _wmf
