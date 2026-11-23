@@ -125,12 +125,18 @@ def ago(t):
     return f'{s // 3600}h{(s % 3600) // 60:02d}m'
 
 
+ENS_ARMS = {'SAFER_E', 'SAFER_BE', 'SAFER_PIE', 'RANDOM_E', 'RANDOM_EU'}
+
+
 def arms_of(recs):
     present = {r['arm'] for r in recs}
     # SHOW_ARMS=A,B,...: only these arms, in this order (the others stay in the log)
     show = [a for a in os.environ.get('SHOW_ARMS', '').split(',') if a]
     if show:
         return [a for a in show if a in present]
+    # the ensemble arms are left out unless SHOW_ENS=1 (they stay in the logs)
+    if os.environ.get('SHOW_ENS', '0') != '1':
+        present -= ENS_ARMS
     return [a for a in ARM_ORDER if a in present] + sorted(present - set(ARM_ORDER))
 
 

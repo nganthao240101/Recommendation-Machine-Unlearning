@@ -6,7 +6,7 @@
 #   0) ml-1m   SISA as defined (5 slices) in the single / most / fewest logs
 #   1) ml-1m   per-seed test (5 seeds, single/most/fewest; a seed's model is
 #              trained once and shared by the 3 modes): SAFER-PI vs Random,
-#              SAFER-PIE vs Random+E  -> paired t-test
+#              and the other baselines  -> paired t-test
 #   2) yelp    the new arms in the single / most / fewest logs (one model),
 #              yelp's own setting (lr 0.02, patience 15), nothing changed
 #   3) yelp    per-seed test (5 seeds, single/most/fewest), same pairs
@@ -29,11 +29,11 @@ run_step () { wait_free; step "$1"; shift; "$@"; sleep 60; }
 P_ML=$(grep -o "RECOMMENDED patience = [0-9]*" logs/patience_ml1m_reg0.03.out 2>/dev/null | grep -o "[0-9]*$" | tail -1)
 P_ML=${P_ML:-30}
 P_YE=15                                  # the patience of the yelp lr 0.02 logs
-NEW_ARMS=SAFER_P,SAFER_PI,SAFER_PIE,SAFER_BE,RANDOM_E,RANDOM_EU,SISA_FULL
+NEW_ARMS=SAFER_P,SAFER_PI,SISA_FULL
 # the per-seed test: SAFER against every baseline it can be run against on 5
 # seeds, and the ablations (Retrain and RecEraser: one-model logs, steps 4-5)
-TEST_ARMS=SAFER_P,RANDOM_PERM,SAFER_PI,SAFER_PIE,RANDOM_E,SISA,SISA_FULL,RANDOM_EMB,PROPOSED_BAL
-PAIRS_ALL="SAFER_P:RANDOM_PERM SAFER_P:SISA SAFER_P:SISA_FULL SAFER_P:RANDOM_EMB SAFER_P:PROPOSED_BAL SAFER_PI:SAFER_P SAFER_PIE:RANDOM_E SAFER_PIE:SISA_FULL"
+TEST_ARMS=SAFER_P,RANDOM_PERM,SAFER_PI,SISA,SISA_FULL,RANDOM_EMB,PROPOSED_BAL
+PAIRS_ALL="SAFER_P:RANDOM_PERM SAFER_P:SISA SAFER_P:SISA_FULL SAFER_P:RANDOM_EMB SAFER_P:PROPOSED_BAL SAFER_PI:SAFER_P"
 
 
 run_step "step 0 ml-1m SISA as defined (5 slices), single/most/fewest (patience $P_ML)" \
