@@ -84,6 +84,10 @@ UBP_MARK = 'empty-shard restart'
 # initialised, items aggregated on WB); before that WA/WB were uninitialised
 # memory and its R@10 collapsed (0.0035 on ml-1m against ~0.07 for the others)
 ATTN_MARK = 'attention=authors'
+# printed since the aggregator uses the authors' optimiser (Adagrad, model lr,
+# accumulator 1e-8); before that its steps were so small the attention stayed
+# uniform
+AGG_MARK = 'aggregator=authors-adagrad'
 # printed by SAFER B since its cell->shard map is the deletion-stable Gray cut;
 # before that a greedy map reshuffled on any load change (instability 27-66%)
 SAFERB_MARK = 'map=gray-cut'
@@ -134,6 +138,7 @@ def first_line(text):
 
 
 SAFERB_OLD = 'SAFER B with the earlier greedy cell map (only its runs run again)'
+REC_AGG_OLD = 'RecEraser with the earlier aggregator optimiser (only its runs run again)'
 
 
 def classify_log(path):
@@ -168,6 +173,8 @@ def classify_log(path):
         return 'OLD', 'RECERASER seeded with the scrambled WMF vector (old code)'
     if rec and ATTN_MARK not in text:
         return 'OLD', 'RECERASER with the uninitialised attention (its runs run again)'
+    if rec and AGG_MARK not in text:
+        return 'OLD', REC_AGG_OLD
     if 'PROPOSED_BAL' in arms and SAFERB_MARK not in text:
         return 'OLD', SAFERB_OLD
     if rec and not name.startswith('recrand') and UBP_MARK not in text:
@@ -246,6 +253,8 @@ def prepare_resume(path):
         if arm == 'RECERASER':
             if REC_MARK not in body or ATTN_MARK not in body:
                 return False                  # broken attention / old init
+            if AGG_MARK not in body:
+                return False                  # aggregator that never trained
             if not name.startswith('recrand') and UBP_MARK not in body:
                 return False                  # earlier UBP port
         return True

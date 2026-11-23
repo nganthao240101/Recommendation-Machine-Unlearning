@@ -386,12 +386,12 @@ def main():
         ds, setting, n_arms = describe(name)
         if v == 'NEW' and finished:
             done.append((os.path.getmtime(p), name, p))
-        elif v == 'OLD' and why == cor.SAFERB_OLD:
+        elif v == 'OLD' and why in (cor.SAFERB_OLD, cor.REC_AGG_OLD):
             # finished, only its SAFER B runs are stale: show what it has
             d, t, cur = progress(name, text, n_arms)
             partial.append((name, p, text, n_arms))
-            waiting.append((name, 'RERUN', 'SAFER B runs from the earlier greedy map '
-                            'will run again (the other arms are kept)'))
+            waiting.append((name, 'RERUN', why.replace('(only its runs run again)', '')
+                            + 'will run again (the other arms are kept)'))
         elif v == 'OLD':
             waiting.append((name, 'OLD', why + ' - the block will run it again'))
         elif cor.is_live(p):

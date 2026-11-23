@@ -708,6 +708,7 @@ def _ckpt_meta(args, arm, seed=None):
         'wmf': wmf_backbone.describe(), 'agg_epochs': args.agg_epochs,
         'receraser_partition': args.receraser_partition,
         'receraser_init': args.receraser_init, 'safer_b_map': SAFER_B_MAP,
+        **({'receraser_agg': 'authors-adagrad'} if arm == 'RECERASER' else {}),
         'early_stop': early_stop.describe_train(), 'val_ratio': args.val_ratio,
         'val_seed': args.val_seed, 'engine': fast_train.engine_name(),
     }

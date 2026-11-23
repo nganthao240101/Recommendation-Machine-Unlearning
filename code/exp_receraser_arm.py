@@ -326,7 +326,7 @@ class RecEraserArm:
                 es = emb.detach().view(-1, K, D)
                 es = torch.einsum('bkd,kde->bke', es, m.trans_W) + m.trans_B
                 return m._attention_aggregate(es, item=item)[0]
-            opt = torch.optim.Adagrad(agg_params, lr=lr, initial_accumulator_value=1.0)
+            opt = torch.optim.Adagrad(agg_params, lr=lr, initial_accumulator_value=1e-8)
             wmf_backbone.train_wmf(
                 lambda u: agg(m.user_embedding(u), False),
                 lambda: agg(m.item_embedding.weight, True),
@@ -341,7 +341,7 @@ class RecEraserArm:
             # gradient is clipped at 1.0
             m = self.model
             agg_params = [m.WA, m.BA, m.HA, m.WB, m.BB, m.HB, m.trans_W, m.trans_B]
-            opt = torch.optim.Adagrad(agg_params, lr=lr, initial_accumulator_value=1.0)
+            opt = torch.optim.Adagrad(agg_params, lr=lr, initial_accumulator_value=1e-8)
             samples = fast_train.draw_samples(train_data, n_items)
             skipped = [0]
 
@@ -500,7 +500,8 @@ def run_receraser_arm(train_items, test_data, n_users, n_items, n_shards,
     if init == 'wmf':
         arm.load_pretrained(user_emb, item_emb)
     print(f'    [RecEraser] init={init} (emb_dim={emb_dim}, K={n_shards}) '
-          f'attention=authors (WA/WB truncated normal, items on WB)')
+          f'attention=authors (WA/WB truncated normal, items on WB) '
+          f'aggregator=authors-adagrad (lr {lr}, accumulator 1e-8)')
 
     shard_data = [{} for _ in range(n_shards)]
     for u, items in train_items.items():
@@ -532,14 +533,14 @@ def run_receraser_arm(train_items, test_data, n_users, n_items, n_shards,
                                 lr=lr, n_epochs=epochs)
         if es_on:
             es = _agg_stopper(arm, train_items, n_users, n_items, device)
-            arm.train_aggregator(train_items, n_users, n_items, batch_size=batch_size,
+            arm.train_aggregator(train_items, n_users, n_items, lr=lr, batch_size=batch_size,
                                  n_epochs=early_stop.CFG['agg_max_epochs'], epoch_end=es)
             agg_ep = es.finish()
             print("    [RecEraser] early stop: shard epochs "
                   + ", ".join(f"s{s}={shard_epochs[s]}" for s in sorted(shard_epochs))
                   + f", aggregator epoch {agg_ep}")
         else:
-            arm.train_aggregator(train_items, n_users, n_items, batch_size=batch_size,
+            arm.train_aggregator(train_items, n_users, n_items, lr=lr, batch_size=batch_size,
                                  n_epochs=agg_epochs)
         train_time = time.time() - t0
         if cache is not None:
@@ -596,7 +597,7 @@ def run_receraser_arm(train_items, test_data, n_users, n_items, n_shards,
     # user's embedding, including the deleted ones
     if early_stop.unlearn_on():
         es = _agg_stopper(arm, retained, n_users, n_items, device)
-        agg_time = arm.train_aggregator(retained, n_users, n_items, batch_size=batch_size,
+        agg_time = arm.train_aggregator(retained, n_users, n_items, lr=lr, batch_size=batch_size,
                                         n_epochs=early_stop.CFG['agg_max_epochs'],
                                         epoch_end=es)
         unl_best['agg'] = es.finish()
@@ -604,7 +605,7 @@ def run_receraser_arm(train_items, test_data, n_users, n_items, n_shards,
         agg_run = es.last_epoch
     else:
         agg_run = agg_ep if es_on else agg_epochs
-        agg_time = arm.train_aggregator(retained, n_users, n_items,
+        agg_time = arm.train_aggregator(retained, n_users, n_items, lr=lr,
                                         batch_size=batch_size, n_epochs=agg_run)
     unlearn_time = time.time() - t0
     parallel_time = max(per_shard_time.values()) if per_shard_time else 0.0

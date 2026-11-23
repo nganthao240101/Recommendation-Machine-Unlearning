@@ -703,7 +703,11 @@ def train_aggregator(model, train_data, n_users, n_items, device, batch_size=512
     # attention (WA/BA/HA/WB/BB/HB) + transformation (trans_W/trans_B)
     agg_params = [model.WA, model.BA, model.HA, model.WB, model.BB, model.HB,
                   model.trans_W, model.trans_B]
-    optimizer = torch.optim.Adagrad(agg_params, lr=lr, initial_accumulator_value=1.0)
+    # the authors' optimiser (RecEraser_BPR.py train_agg_model): Adagrad with the
+    # model's learning rate and initial accumulator 1e-8; the earlier port used
+    # lr 0.005 and accumulator 1.0, steps thousands of times smaller, and the
+    # attention never moved from uniform
+    optimizer = torch.optim.Adagrad(agg_params, lr=lr, initial_accumulator_value=1e-8)
     n_nan_skipped = 0
 
     # Create samples from full training data
