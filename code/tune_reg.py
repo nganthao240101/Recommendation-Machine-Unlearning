@@ -6,7 +6,8 @@ For every (reg, lr, dim) and every method in --arms: train the K shards of the
 method with early stopping (Recall@20 every --eval_every epochs, --patience
 evaluations), keep each shard's best validation Recall@20 and its epoch;
 score of a method = validation Recall@20 over all its validation users (each
-user answered by its own shard: hard routing, as in the results).
+user answered by its own shard: hard routing, as in the results; SISA_FULL:
+R slices trained incrementally, the K models averaged, as in the results).
 
 Printed:
   the full table;
@@ -52,7 +53,8 @@ from partition_variants import build_signature as pv_build_signature   # noqa: E
 from method_4_ours import ShardModels, train_shard_model        # noqa: E402
 
 LABEL = {'PROPOSED': 'SAFER A', 'PROPOSED_BAL': 'SAFER B', 'SAFER_P': 'SAFER-P',
-         'SAFER_PI': 'SAFER-PI', 'RANDOM_PERM': 'Random', 'RANDOM_EMB': 'RandomEmb'}
+         'SAFER_PI': 'SAFER-PI', 'RANDOM_PERM': 'Random', 'RANDOM_EMB': 'RandomEmb',
+         'SISA_FULL': 'SISA'}
 LEGACY_SEED = 42           # the partition seed of exp_partition_quality.py
 
 
@@ -70,16 +72,53 @@ def build_umap(arm, fit, n_users, n_items, K, sig_dim, seed):
         return partition_pca_tree(fit, n_users, n_items, K, sig)
     if arm == 'RANDOM_EMB':
         return partition_random_embedding(fit, n_users, n_items, K, sig_dim, seed)
-    if arm == 'RANDOM_PERM':
+    if arm in ('RANDOM_PERM', 'SISA_FULL'):
         return pv_random_perm(n_users, K, seed)
     raise SystemExit(f'unknown arm {arm}')
+
+
+def sisa_cell(args, shard_data, fit, val, n_users, n_items, K, dim, lr, device):
+    """SISA as in the experiment (sisa_full.py): R slices per shard, every
+    stage trained incrementally with early stopping on its own users'
+    validation items; the K final models are AVERAGED (mean aggregation) and
+    the aggregate is scored on every validation user.
+    -> (validation Recall@20, last-stage best epoch of every shard)"""
+    import sisa_full
+    sm = ShardModels(n_users, n_items, dim, K)
+    eps = []
+    for sid in range(K):
+        set_all_seeds(args.seed)
+        m = sm.create_model(sid, device)
+        opt = torch.optim.Adagrad(m.parameters(), lr=lr, initial_accumulator_value=1e-8)
+        sl = sisa_full.slices_of(shard_data[sid], args.sisa_slices, args.seed, sid)
+        best = 0
+        for r in range(args.sisa_slices):
+            keep = set(u for x in sl[:r + 1] for u in x)
+            data = {u: shard_data[sid][u] for u in keep if u in shard_data[sid]}
+            _, best, _, _ = sisa_full._stage(m, opt, data, n_items, device,
+                                             args.batch_size, lr, 0,
+                                             args.sisa_slices, True)
+        eps.append(best)
+    live = [sm.get_model(s) for s in range(K) if sm.get_model(s) is not None]
+
+    def score_block(ut):
+        sc = torch.zeros((len(ut), n_items), device=device)
+        for m in live:
+            sc += m.user_embedding.weight[ut] @ m.item_embedding.weight.T
+        return sc / K
+    users = sorted(u for u in val if val[u])
+    with torch.no_grad():
+        r20 = fast_train.evaluate_topk(score_block, users, fit, val, n_items, device,
+                                       Ks=(early_stop.CFG['k'],))['recall'][0]
+    return float(r20), eps
 
 
 def cell_key(args, arm, reg, lr, dim):
     return '|'.join(str(x) for x in (args.dataset, arm, f'{reg:g}', f'{lr:g}', dim,
                                      args.n_shards, args.sig_dim, args.batch_size,
                                      args.val_ratio, args.val_seed, args.max_epochs,
-                                     args.eval_every, args.patience, args.seed))
+                                     args.eval_every, args.patience, args.seed)
+                   + ((f'R{args.sisa_slices}',) if arm == 'SISA_FULL' else ()))
 
 
 def load_cache(path):
@@ -104,7 +143,9 @@ def main():
                     help='embedding sizes to try (default: --emb_dim only)')
     ap.add_argument('--arms', default='PROPOSED,RANDOM_PERM',
                     help='any of PROPOSED, PROPOSED_BAL, SAFER_P, SAFER_PI, '
-                         'RANDOM_PERM, RANDOM_EMB')
+                         'RANDOM_PERM, RANDOM_EMB, SISA_FULL')
+    ap.add_argument('--sisa_slices', type=int, default=5,
+                    help='R, the slices per shard of SISA_FULL')
     ap.add_argument('--cache', default=None,
                     help='JSON-lines file of finished cells (default '
                          'logs/tunegrid_<dataset>.jsonl)')
@@ -158,6 +199,14 @@ def main():
             key = cell_key(args, arm, reg, lr, dim)
             if key in done:
                 res[arm] = (done[key]['val_r20'], done[key]['epochs'])
+                continue
+            if arm == 'SISA_FULL':
+                res[arm] = sisa_cell(args, shards[arm], fit, val, n_users, n_items,
+                                     K, dim, lr, device)
+                with open(cache, 'a', encoding='utf-8') as f:
+                    f.write(json.dumps({'key': key, 'arm': arm, 'reg': reg, 'lr': lr,
+                                        'dim': dim, 'val_r20': res[arm][0],
+                                        'epochs': res[arm][1]}) + '\n')
                 continue
             num, den, eps = 0.0, 0, []
             for sid in range(K):

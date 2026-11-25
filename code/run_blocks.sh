@@ -645,13 +645,13 @@ block_regauto () {
 # dừng giữa chừng không mất, start lại thì chạy tiếp ô còn thiếu.
 # In ra: BEST <arm> (cấu hình tốt nhất của từng phương pháp) và RECOMMENDED
 # (một cấu hình chung cho mọi phương pháp). Không tự chạy test.
-#   TG_DATASET=yelp2018  TG_ARMS=SAFER_P,SAFER_PI,RANDOM_PERM,PROPOSED_BAL
+#   TG_DATASET=yelp2018  TG_ARMS=SAFER_P,SAFER_PI,PROPOSED,PROPOSED_BAL,RANDOM_PERM,SISA_FULL
 #   TG_REGS="0 0.001 0.003 0.01 0.03"  TG_LRS="0.02 0.01 0.005"  TG_DIMS="32 64 128"
 #   TG_EVERY=5 TG_PATIENCE=15 (cùng giao thức early stopping với lần chạy chính)
 block_ytune () {
   export RECUNLEARN_ENGINE="${RECUNLEARN_ENGINE:-gpu}"
   local ds="${TG_DATASET:-yelp2018}" s1 s2 r l
-  local arms="${TG_ARMS:-SAFER_P,SAFER_PI,RANDOM_PERM,PROPOSED_BAL}"
+  local arms="${TG_ARMS:-SAFER_P,SAFER_PI,PROPOSED,PROPOSED_BAL,RANDOM_PERM,SISA_FULL}"
   local common="--dataset $ds --arms $arms --eval_every ${TG_EVERY:-5} --patience ${TG_PATIENCE:-15}"
   s1="logs/tunegrid_$(short $ds)_s1.out"; s2="logs/tunegrid_$(short $ds)_s2.out"
   banner "YTUNE 1/2: $ds, reg x lr (dim 64), arms $arms - validation"
