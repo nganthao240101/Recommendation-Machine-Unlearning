@@ -19,7 +19,7 @@
 cd "$(dirname "$0")/.." || exit 1
 
 wait_free () {
-  while pgrep -f "run_blocks\.sh (regauto|esauto|yone|yseeds|compare|patience|kyelp|epochs|full|fullwmf|main|modes|single|all)$" >/dev/null; do
+  while pgrep -f "run_blocks\.sh (regauto|ytune|esauto|yone|yseeds|compare|patience|kyelp|epochs|full|fullwmf|main|modes|single|all)$" >/dev/null; do
     sleep 120
   done
 }

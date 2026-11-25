@@ -637,6 +637,38 @@ block_regauto () {
   REG="$r" LR="$l" block_esauto
 }
 
+# ------------------------------------------------------------------ ytune
+# Dò lại tham số TRÊN VALIDATION (không đọc test), có cả SAFER-P / SAFER-PI:
+#   bước 1: reg x lr ở dim 64, cho mọi arm trong TG_ARMS
+#   bước 2: dim (TG_DIMS) tại cấu hình chung tốt nhất của bước 1
+# Mỗi ô (arm, reg, lr, dim) xong là ghi ngay vào logs/tunegrid_<ds>.jsonl:
+# dừng giữa chừng không mất, start lại thì chạy tiếp ô còn thiếu.
+# In ra: BEST <arm> (cấu hình tốt nhất của từng phương pháp) và RECOMMENDED
+# (một cấu hình chung cho mọi phương pháp). Không tự chạy test.
+#   TG_DATASET=yelp2018  TG_ARMS=SAFER_P,SAFER_PI,RANDOM_PERM,PROPOSED_BAL
+#   TG_REGS="0 0.001 0.003 0.01 0.03"  TG_LRS="0.02 0.01 0.005"  TG_DIMS="32 64 128"
+#   TG_EVERY=5 TG_PATIENCE=15 (cùng giao thức early stopping với lần chạy chính)
+block_ytune () {
+  export RECUNLEARN_ENGINE="${RECUNLEARN_ENGINE:-gpu}"
+  local ds="${TG_DATASET:-yelp2018}" s1 s2 r l
+  local arms="${TG_ARMS:-SAFER_P,SAFER_PI,RANDOM_PERM,PROPOSED_BAL}"
+  local common="--dataset $ds --arms $arms --eval_every ${TG_EVERY:-5} --patience ${TG_PATIENCE:-15}"
+  s1="logs/tunegrid_$(short $ds)_s1.out"; s2="logs/tunegrid_$(short $ds)_s2.out"
+  banner "YTUNE 1/2: $ds, reg x lr (dim 64), arms $arms - validation"
+  python code/tune_reg.py $common --regs "${TG_REGS:-0 0.001 0.003 0.01 0.03}" \
+    --lrs "${TG_LRS:-0.02 0.01 0.005}" --dims 64 2>&1 | tee "$s1" \
+    | grep -E "^  reg=|^  BEST|^RECOMMENDED|^total|Error|error"
+  r=$(grep -o "^RECOMMENDED reg=[0-9.e-]*" "$s1" | tail -1 | cut -d= -f2)
+  l=$(grep -o "^RECOMMENDED reg=[0-9.e-]* lr=[0-9.e-]*" "$s1" | tail -1 | sed 's/.*lr=//')
+  if [ -z "$r" ] || [ -z "$l" ]; then
+    echo "!! $s1 không có RECOMMENDED -> dừng (xem log)"; return 1
+  fi
+  banner "YTUNE 2/2: $ds, dim ${TG_DIMS:-32 64 128} tại reg=$r lr=$l - validation"
+  python code/tune_reg.py $common --regs "$r" --lrs "$l" --dims "${TG_DIMS:-32 64 128}" \
+    2>&1 | tee "$s2" | grep -E "^  reg=|^  BEST|^RECOMMENDED|^total|Error|error"
+  banner "YTUNE XONG - bảng đầy đủ: $s1 và $s2"
+}
+
 # ------------------------------------------------------------------ compare
 # So sánh yelp2018 với ml-1m trên cùng các thí nghiệm: yelp2018 trước, rồi
 # ml-1m (CMP_DATASETS="ml-1m yelp2018" để đảo): main (1% random), most, fewest, single. Không chạy shards/dims/
@@ -670,7 +702,7 @@ block_status () {
   python code/clean_old_results.py --status
   echo ""
   echo "  Job dang chay:"
-  ps -ww -eo pid,etime,args | grep -E "exp_partition_quality|exp_single_request|run_blocks\.sh (main|modes|single|shards|dims|recpart|all|full|fullwmf|compare|epochs|kyelp|yseeds|yone|ablate|patience|esauto|regauto)" \
+  ps -ww -eo pid,etime,args | grep -E "exp_partition_quality|exp_single_request|run_blocks\.sh (main|modes|single|shards|dims|recpart|all|full|fullwmf|compare|epochs|kyelp|yseeds|yone|ablate|patience|esauto|regauto|ytune)" \
     | grep -v grep | sed 's/^/    /' || echo "    (khong co job nao)"
 }
 
@@ -771,8 +803,8 @@ block_smoke () {
 # tiếp. Lúc đó all bỏ qua log đã xong, chạy tiếp log dở từ run còn thiếu.
 block_start () {
   local blk="${1:-all}"
-  case "$blk" in all|full|fullwmf|compare|epochs|kyelp|yseeds|yone|ablate|patience|esauto|regauto|main|modes|single|shards|dims|recpart) ;;
-    *) echo "!! start chỉ nhận: all | full | fullwmf | compare | epochs | kyelp | yseeds | yone | ablate | patience | esauto | regauto | main | modes | single | shards | dims | recpart"; exit 1 ;;
+  case "$blk" in all|full|fullwmf|compare|epochs|kyelp|yseeds|yone|ablate|patience|esauto|regauto|ytune|main|modes|single|shards|dims|recpart) ;;
+    *) echo "!! start chỉ nhận: all | full | fullwmf | compare | epochs | kyelp | yseeds | yone | ablate | patience | esauto | regauto | ytune | main | modes | single | shards | dims | recpart"; exit 1 ;;
   esac
   if [ -f "$QUEUEFILE" ] && kill -0 "$(cat "$QUEUEFILE")" 2>/dev/null; then
     echo "!! Đã có một chuỗi đang xếp hàng (PID $(cat "$QUEUEFILE")). Không cần start thêm."; exit 1
@@ -911,7 +943,7 @@ block_results () {
 }
 
 case "${1:-}" in
-  main|modes|single|shards|dims|recpart|all|full|fullwmf|compare|epochs|kyelp|yseeds|yone|ablate|patience|esauto|regauto) take_lock ;;
+  main|modes|single|shards|dims|recpart|all|full|fullwmf|compare|epochs|kyelp|yseeds|yone|ablate|patience|esauto|regauto|ytune) take_lock ;;
 esac
 
 case "${1:-}" in
@@ -934,6 +966,7 @@ case "${1:-}" in
   ablate)  block_ablate ;;
   esauto)  block_esauto ;;
   regauto) block_regauto ;;
+  ytune)   block_ytune ;;
   patience) block_patience ;;
   paired)  shift; block_paired "$@" ;;
   epcompare) python code/compare_epochs.py --dataset "$(short "${EP_DATASET:-yelp2018}")" ;;
