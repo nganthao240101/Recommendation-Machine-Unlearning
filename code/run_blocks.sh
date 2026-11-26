@@ -70,7 +70,9 @@ QUEUEFILE=logs/.queue.pid
 SEEDS="0,1,2,3,4"
 ARMS="PROPOSED,PROPOSED_BAL,SISA,RANDOM_PERM,RANDOM_EMB,RECERASER,GLOBAL"
 # cấu hình gốc; mỗi khối đè lên đúng 1 yếu tố
-K=8; DIM=64; SIG=64; MODE=random
+K=8; DIM="${DIM:-64}"; SIG=64; MODE=random
+# DIM khác 64 (DIM=128 ...): log yone / yseeds có tên mode_<mode>_dim<D>_<ds>...
+dimtag () { [ "$DIM" != 64 ] && printf "_dim%s" "$DIM"; }
 
 # Backbone mà mọi arm train: bprmf (mặc định) hoặc wmf (WMF của tác giả,
 # xem code/wmf_backbone.py). Log WMF có đuôi _wmf, không đè log BPRMF.
@@ -460,7 +462,7 @@ block_kyelp () {
 #   YS_DATASET=ml-1m cho ml-1m (mặc định yelp2018)
 yseeds_log () {
   local d; d=$(short "${YS_DATASET:-yelp2018}")
-  case "$1" in random) echo "main_$d" ;; *) echo "mode_${1}_$d" ;; esac
+  case "$1" in random) echo "main$(dimtag)_$d" ;; *) echo "mode_${1}$(dimtag)_$d" ;; esac
 }
 
 block_yseeds () {
@@ -529,7 +531,7 @@ block_yone () {
   local arms="${YO_ARMS:-PROPOSED,RANDOM_EMB,RANDOM_PERM,SISA,PROPOSED_BAL}"
   banner "YONE: $ds, 1 model/arm (lưu), unlearn 5 lần, mode ${YO_MODES:-single most fewest}, arms $arms"
   for m in ${YO_MODES:-single most fewest}; do
-    TRAIN_SEED=0 pq "mode_${m}_$(short $ds)" "$ds" mode=$m arms="$arms"
+    TRAIN_SEED=0 pq "mode_${m}$(dimtag)_$(short $ds)" "$ds" mode=$m arms="$arms"
   done
   banner "YONE XONG - xem: bash code/run_blocks.sh results"
 }
